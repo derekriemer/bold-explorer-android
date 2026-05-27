@@ -63,6 +63,25 @@ else
     echo "[ok] ANDROID_HOME already in $SHELL_RC."
 fi
 
+# ── ADB wireless / Tailscale setup ────────────────────────────────────────
+# You do NOT need a USB cable for day-to-day installs. If your Android device
+# and this machine are both on Tailscale, ADB wireless works over the VPN.
+#
+# One-time pairing (do this once from any network):
+#   On the device: Settings → Developer options → Wireless debugging → Pair device with pairing code
+#   Then on this machine:
+#     adb pair <device-tailscale-ip>:<pairing-port>   # port shown on device screen
+#   Enter the 6-digit code shown on the device.
+#
+# After pairing, connect any time:
+#   adb connect <device-tailscale-ip>:<debug-port>    # port shown under "Wireless debugging"
+#   adb devices                                        # confirm it shows up
+#
+# Then `make install` works exactly the same as USB.
+#
+# Tip: put this alias in your ~/.bashrc:
+#   alias adb-phone='adb connect <your-device-tailscale-ip>:<port>'
+
 # ── Verify ─────────────────────────────────────────────────────────────────
 echo ""
 echo "==> Running Phase 1 gate: ./gradlew :shared:jvmTest"
@@ -72,4 +91,10 @@ echo ""
 echo "==> Setup complete. Common commands:"
 echo "    make test-shared   — run shared module tests"
 echo "    make assemble      — build debug APK"
-echo "    make install       — push APK to connected/emulated device"
+echo "    make install       — push APK to device (USB or ADB-over-Tailscale)"
+echo ""
+echo "==> ADB over Tailscale (no USB needed):"
+echo "    On phone: Developer Options → Wireless debugging → Pair device with pairing code"
+echo "    adb pair <phone-tailscale-ip>:<pairing-port>"
+echo "    adb connect <phone-tailscale-ip>:<debug-port>"
+echo "    make install"

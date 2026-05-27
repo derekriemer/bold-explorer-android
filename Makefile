@@ -40,10 +40,32 @@ clean:
 deps:
 	$(GW) dependencies --configuration commonMainImplementation
 
+# ── ADB helpers (wireless / Tailscale) ─────────────────────────────────────
+# Set PHONE_IP and PHONE_PORT in your shell (or .bashrc) to use these:
+#   export PHONE_IP=100.x.y.z   # Tailscale IP of your Android device
+#   export PHONE_PORT=12345      # port shown under Wireless debugging on device
+
+.PHONY: adb-connect
+adb-connect:
+	adb connect $(PHONE_IP):$(PHONE_PORT)
+	adb devices
+
+.PHONY: adb-pair
+adb-pair:
+	@echo "Enter the IP:pairing-port shown on device, then the 6-digit code:"
+	adb pair $(PHONE_IP):$(PAIR_PORT)
+
+.PHONY: logcat
+logcat:
+	adb logcat -s BoldExplorer:* AndroidRuntime:E
+
 .PHONY: help
 help:
-	@echo "make test-shared   — run :shared:jvmTest (Phase 1 gate)"
-	@echo "make test          — run all unit tests"
-	@echo "make assemble      — build debug APK (needs ANDROID_HOME)"
-	@echo "make install       — install debug APK on connected device"
-	@echo "make clean         — clean all build outputs"
+	@echo "make test-shared       — run :shared:jvmTest (Phase 1 gate)"
+	@echo "make test              — run all unit tests"
+	@echo "make assemble          — build debug APK (needs ANDROID_HOME)"
+	@echo "make install           — install debug APK on connected device"
+	@echo "make clean             — clean all build outputs"
+	@echo "make adb-connect       — connect to phone via Tailscale (set PHONE_IP, PHONE_PORT)"
+	@echo "make adb-pair          — pair phone for first-time wireless ADB (set PHONE_IP, PAIR_PORT)"
+	@echo "make logcat            — tail app + crash logs"
