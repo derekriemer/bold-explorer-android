@@ -4,3 +4,10 @@ local.properties
 *.iml
 .idea/
 .DS_Store
+
+# Android SDK (installed by setup.sh — not committed)
+android-sdk/
+
+# Compiled outputs
+*.apk
+*.aab
