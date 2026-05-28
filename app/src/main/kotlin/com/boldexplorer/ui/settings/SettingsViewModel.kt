@@ -1,6 +1,8 @@
 package com.boldexplorer.ui.settings
 
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.boldexplorer.shared.repository.SettingsRepository
 import com.boldexplorer.shared.settings.AppSettings
 import com.boldexplorer.shared.settings.BearingDisplayMode
 import com.boldexplorer.shared.settings.CompassMode
@@ -9,28 +11,32 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-// In-memory settings for Phase 5. Phase 6 wires this to DataStore.
 @HiltViewModel
-class SettingsViewModel @Inject constructor() : ViewModel() {
+class SettingsViewModel @Inject constructor(
+    private val settingsRepo: SettingsRepository,
+) : ViewModel() {
 
     private val _settings = MutableStateFlow(AppSettings())
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
 
-    fun setUnits(units: Units) {
-        _settings.value = _settings.value.copy(units = units)
+    init {
+        viewModelScope.launch {
+            _settings.value = settingsRepo.load()
+        }
     }
 
-    fun setBearingMode(mode: BearingDisplayMode) {
-        _settings.value = _settings.value.copy(bearingDisplayMode = mode)
-    }
+    fun setUnits(units: Units) = update { it.copy(units = units) }
+    fun setBearingMode(mode: BearingDisplayMode) = update { it.copy(bearingDisplayMode = mode) }
+    fun setAudioCues(enabled: Boolean) = update { it.copy(audioCuesEnabled = enabled) }
+    fun setCompassMode(mode: CompassMode) = update { it.copy(compassMode = mode) }
 
-    fun setAudioCues(enabled: Boolean) {
-        _settings.value = _settings.value.copy(audioCuesEnabled = enabled)
-    }
-
-    fun setCompassMode(mode: CompassMode) {
-        _settings.value = _settings.value.copy(compassMode = mode)
+    private fun update(transform: (AppSettings) -> AppSettings) {
+        viewModelScope.launch {
+            _settings.value = transform(_settings.value)
+            settingsRepo.save(_settings.value)
+        }
     }
 }

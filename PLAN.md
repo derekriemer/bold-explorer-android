@@ -218,10 +218,10 @@ This app is built for and by a blind user. Every phase must meet these:
 - [x] All interactive elements: `contentDescription` semantics; live regions on announcements; 48dp targets
 - **Gate**: full UI navigation with TalkBack enabled, screen off
 
-### Phase 6 — Settings + GPX + Polish
-- [ ] `DataStoreSettingsRepository` with `SettingsMigration` framework
-- [ ] `GpxExporter` (full GPX 1.1 XML)
-- [ ] Debug/diagnostics screen
+### Phase 6 — Settings + GPX + Polish ✅ DONE
+- [x] `DataStoreSettingsRepository` with `SettingsMigration` framework — Preferences DataStore, versioned JSON, migrates from Vue app format
+- [x] `GpxExporter` — full GPX 1.1 XML (waypoints + trail tracks)
+- [x] Debug/diagnostics screen — GPS fix, compass (magnetic + true), accuracy beacon test, GPX export to Downloads
 - **Gate**: full trail walk, audio-only navigation, screen off
 
 ---

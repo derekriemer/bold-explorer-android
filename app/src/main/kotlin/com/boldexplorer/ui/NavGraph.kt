@@ -18,6 +18,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.boldexplorer.ui.collections.CollectionsScreen
+import com.boldexplorer.ui.debug.DebugScreen
 import com.boldexplorer.ui.gps.GpsScreen
 import com.boldexplorer.ui.settings.SettingsScreen
 import com.boldexplorer.ui.trails.TrailsScreen
@@ -29,6 +30,7 @@ private sealed class Screen(val route: String, val label: String) {
     object Trails : Screen("trails", "Trails")
     object Collections : Screen("collections", "Collections")
     object Settings : Screen("settings", "Settings")
+    object Debug : Screen("debug", "Debug")
 }
 
 @Composable
@@ -40,6 +42,7 @@ fun NavGraph() {
         Screen.Trails,
         Screen.Collections,
         Screen.Settings,
+        Screen.Debug,
     )
 
     MaterialTheme {
@@ -78,6 +81,7 @@ fun NavGraph() {
                 composable(Screen.Trails.route) { TrailsScreen(innerPadding) }
                 composable(Screen.Collections.route) { CollectionsScreen(innerPadding) }
                 composable(Screen.Settings.route) { SettingsScreen(innerPadding) }
+                composable(Screen.Debug.route) { DebugScreen(innerPadding) }
             }
         }
     }
