@@ -207,10 +207,15 @@ This app is built for and by a blind user. Every phase must meet these:
 - [x] `AudioModule` (Hilt) — provides AudioCueScheduler singleton
 - **Gate**: headphones — accuracy beacon frequency varies; stereo pan audible off-bearing; TTS names waypoints
 
-### Phase 5 — Compose UI
-- [ ] `NavGraph` with 5-tab `NavigationBar`
-- [ ] `GpsScreen`, `WaypointsScreen`, `TrailsScreen`, `CollectionsScreen`, `SettingsScreen`
-- [ ] Full TalkBack pass on all screens
+### Phase 5 — Compose UI ✅ DONE
+- [x] `NavGraph` with 5-tab `NavigationBar` (GPS, Waypoints, Trails, Collections, Settings)
+- [x] `GpsViewModel`: location, heading, bearing/distance, trail follower, alignment, audio start/stop
+- [x] `GpsScreen`: scope tabs, waypoint/trail pickers, telemetry card, alignment section, navigation button, mark-waypoint FAB, live region announcements
+- [x] `WaypointsScreen` + `WaypointsViewModel`: search, CRUD dialogs, attach to trail
+- [x] `TrailsScreen` + `TrailsViewModel`: CRUD, ordered waypoint list, move up/down, detach, attach existing
+- [x] `CollectionsScreen` + `CollectionsViewModel`: CRUD, add/remove waypoints + trails
+- [x] `SettingsScreen` + `SettingsViewModel`: units, bearing mode, audio cues, true north (in-memory; DataStore in Phase 6)
+- [x] All interactive elements: `contentDescription` semantics; live regions on announcements; 48dp targets
 - **Gate**: full UI navigation with TalkBack enabled, screen off
 
 ### Phase 6 — Settings + GPX + Polish
