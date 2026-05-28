@@ -191,20 +191,20 @@ This app is built for and by a blind user. Every phase must meet these:
 - [x] `WaypointRepositoryTest` — 13 tests: CRUD, attach/detach, setPosition reorder invariant, withDistanceFrom
 - **Gate**: `./gradlew :app:testDebugUnitTest` ✅ 13/13 passing
 
-### Phase 3 — Location + Compass
-- [ ] `FusedLocationProviderImpl`: accuracy/interval/distance gates as Flow pipeline
-- [ ] `LocationForegroundService`: bound + foreground, background accuracy relaxation
-- [ ] `SensorCompassProvider`: rotation vector + low-pass + declination
-- [ ] `LocationViewModel`
-- [ ] Runtime permissions (`ACCESS_FINE_LOCATION`, `ACCESS_BACKGROUND_LOCATION`, `POST_NOTIFICATIONS`)
+### Phase 3 — Location + Compass ✅ DONE
+- [x] `FusedLocationProviderImpl`: accuracy/interval/distance gates as Flow pipeline
+- [x] `LocationForegroundService`: foreground, background accuracy relaxation (50 m)
+- [x] `SensorCompassProvider`: rotation vector + low-pass filter + GeomagneticField declination
+- [x] `LocationViewModel`: StateFlow<LocationSample?>, StateFlow<HeadingReading?>, service control
+- [x] Runtime permissions declared: `ACCESS_FINE_LOCATION`, `ACCESS_BACKGROUND_LOCATION`, `POST_NOTIFICATIONS`
 - **Gate**: physical device — GPS updates, compass heading, background survives screen off
 
-### Phase 4 — Audio Engine
-- [ ] `AudioEngine`: AudioTrack PCM sine, accuracy→frequency, `setStereoVolume` pan
-- [ ] `TtsEngine`: TextToSpeech with queue management
-- [ ] `AudioCueScheduler`: wire location/bearing/alignment → `SharedFlow<AudioCueEvent>`
-- [ ] `AudioCuePlayer`: dispatch to engine + TTS, audio focus
-- [ ] `AudioModule` (Hilt)
+### Phase 4 — Audio Engine ✅ DONE
+- [x] `AudioEngine`: AudioTrack PCM sine, accuracy→frequency (0m=880Hz, 30m=220Hz), stereo pan
+- [x] `TtsEngine`: TextToSpeech with QUEUE_ADD, CompletableDeferred init guard
+- [x] `AudioCueScheduler`: wired via `AudioCuePlayer.start()` — accuracy/bearing/alignment → SharedFlow
+- [x] `AudioCuePlayer`: dispatches AccuracyBeacon/AlignmentPing → AudioEngine; WaypointApproach/TrailComplete → TtsEngine; AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
+- [x] `AudioModule` (Hilt) — provides AudioCueScheduler singleton
 - **Gate**: headphones — accuracy beacon frequency varies; stereo pan audible off-bearing; TTS names waypoints
 
 ### Phase 5 — Compose UI
