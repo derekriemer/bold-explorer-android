@@ -11,7 +11,7 @@
     <application
         android:name=".BoldExplorerApp"
         android:label="Bold Explorer"
-        android:theme="@style/Theme.AppCompat.DayNight.NoActionBar">
+        android:theme="@style/Theme.BoldExplorer">
 
         <activity
             android:name=".MainActivity"

@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.hilt)
     alias(libs.plugins.ksp)
     alias(libs.plugins.sqldelight)
+    alias(libs.plugins.compose.compiler)
 }
 
 android {
@@ -19,7 +20,6 @@ android {
     }
 
     buildFeatures { compose = true }
-    composeOptions { kotlinCompilerExtensionVersion = "1.5.7" }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

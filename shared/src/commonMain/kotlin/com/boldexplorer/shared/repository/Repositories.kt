@@ -1,6 +1,7 @@
 package com.boldexplorer.shared.repository
 
 import com.boldexplorer.shared.model.*
+import com.boldexplorer.shared.model.Collection as ExplorerCollection
 
 interface WaypointRepository {
     suspend fun getAll(): List<Waypoint>
@@ -26,8 +27,8 @@ interface TrailRepository {
 }
 
 interface CollectionRepository {
-    suspend fun getAll(): List<Collection>
-    suspend fun getById(id: Long): Collection?
+    suspend fun getAll(): List<ExplorerCollection>
+    suspend fun getById(id: Long): ExplorerCollection?
     suspend fun create(name: String, description: String?): Long
     suspend fun remove(id: Long)
     suspend fun waypointsForCollection(collectionId: Long): List<Waypoint>

@@ -1,0 +1,86 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working in this repository.
+
+## Commands
+
+```bash
+bash setup.sh                   # one-shot WSL/Linux setup — JDK 17, Android SDK, ADB
+make test-shared                # run :shared jvmTest (Phase 1 gate; no device needed)
+make test-shared-watch          # same, continuous mode
+make test                       # all unit tests (:shared:jvmTest + :app:testDebugUnitTest)
+make test-db                    # repo integration tests only (Phase 2 gate)
+make assemble                   # build debug APK (requires ANDROID_HOME)
+make install                    # push debug APK to connected device
+make logcat                     # tail app + crash logs (adb logcat -s BoldExplorer)
+make adb-connect                # connect via Tailscale (set PHONE_IP + PHONE_PORT in env)
+```
+
+Run a single test class:
+```bash
+./gradlew :shared:jvmTest --tests "com.boldexplorer.shared.geo.GeoMathTest"
+./gradlew :app:testDebugUnitTest --tests "*.repository.WaypointRepositoryTest"
+```
+
+## Architecture
+
+### Two-module KMP split
+
+`:shared` — pure Kotlin, zero Android deps. Targets `jvm` (for fast local tests) and `androidTarget`. All algorithms, state machines, domain models, and repository interfaces live here. Tests run on the JVM without an emulator.
+
+`:app` — Android-only. Consumes `:shared`. Contains all Android API usage: SQLDelight driver, FusedLocationProvider, SensorManager, AudioTrack, TextToSpeech, DataStore, Hilt DI, Jetpack Compose UI.
+
+### Original Vue/Capacitor source as reference
+
+`../bold-explorer/` (sibling directory) is the reference implementation. Port from it; never modify it. Key files:
+
+- `src/utils/geo.ts` → `shared/.../geo/GeoMath.kt`
+- `src/composables/useFollowTrail.ts` → `shared/.../navigation/TrailFollower.kt`
+- `src/composables/useBearingAlignment.ts` → `shared/.../navigation/BearingComputer.kt`
+- `src/data/repositories/waypoints.repo.ts` → `app/.../db/WaypointRepositoryImpl.kt` (Phase 2)
+- `src/stores/usePrefs.ts` → `shared/.../settings/SettingsMigration.kt` + `app/.../settings/DataStoreSettingsRepository.kt`
+- `src/db/migrations/provider.ts` → SQLDelight `.sq` files (Phase 2)
+
+### Data flow
+
+```
+GPS/Sensor hardware
+  └── FusedLocationProviderImpl / SensorCompassProvider  (:app, Phase 3)
+        └── LocationViewModel  (:app)
+              ├── TrailFollower.onLocationUpdate()  (:shared)
+              │     └── TrailFollowerEvent → AudioCueScheduler.emitWaypointApproach()
+              └── BearingComputer  (:shared)
+                    └── AudioCueScheduler (alignment ping loop)  (:shared)
+
+AudioCueScheduler.events: SharedFlow<AudioCueEvent>
+  └── AudioCuePlayer  (:app, Phase 4)
+        ├── AudioEngine (AudioTrack PCM sine)
+        └── TtsEngine (TextToSpeech)
+```
+
+### Key patterns
+
+**Repository interfaces in `:shared`, impls in `:app`**: `Repositories.kt` defines all five interfaces (`WaypointRepository`, `TrailRepository`, `CollectionRepository`, `AutoWaypointRepository`, `SettingsRepository`). Hilt binds the Android impls.
+
+**`AudioCueScheduler` is pure scheduling, not playback**: It decides what to emit and when via `SharedFlow<AudioCueEvent>`. `AudioCuePlayer` (:app) consumes the flow and drives `AudioTrack` + TTS. This split keeps iOS portability open.
+
+**`WaypointRepository.withDistanceFrom`**: Does a bbox SQL query (anti-meridian aware, via `computeBbox()`) then re-sorts in Kotlin with `haversineDistanceMeters`. No SQLite trig required.
+
+**`WaypointRepository.setPosition`**: Uses `shiftDown`/`shiftUp` SQL transactions to maintain gapless integer positions — port of the two-step reorder in `waypoints.repo.ts`.
+
+**`SettingsMigration`**: `PrefSpec<T>` + `migrateStoredValue()` — a pure stepwise migration chain. DataStore holds the raw strings; this class does version-detection and migration logic only.
+
+**SQLDelight database name**: `BoldExplorerDatabase`, package `com.boldexplorer.db`.
+
+### Accessibility constraints (non-negotiable)
+
+This app is built for a blind user. Audio cues are the primary interface.
+- Every icon-only element needs `Modifier.semantics { contentDescription = "..." }`
+- State transitions (waypoint reached, trail complete) must be announced via `TtsEngine`, not just reflected in UI state
+- Live regions: `Modifier.semantics { liveRegion = LiveRegionMode.Polite }` on announcement composables
+- Minimum 48dp touch targets
+- TalkBack pass required before any phase is considered complete
+
+### Version pins
+
+All dependency versions are in `gradle/libs.versions.toml`. Do not add version strings inline in `build.gradle.kts` files — add to the TOML and reference via `libs.*` accessors.
