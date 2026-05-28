@@ -1,0 +1,117 @@
+package com.boldexplorer.location
+
+import android.annotation.SuppressLint
+import android.content.Context
+import android.os.Looper
+import com.boldexplorer.shared.geo.LatLng
+import com.boldexplorer.shared.geo.haversineDistanceMeters
+import com.boldexplorer.shared.model.LocationSample
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.shareIn
+import javax.inject.Inject
+import javax.inject.Singleton
+
+@Singleton
+class FusedLocationProviderImpl @Inject constructor(
+    @ApplicationContext context: Context,
+) {
+    private val fusedClient = LocationServices.getFusedLocationProviderClient(context)
+    private val _backgroundMode = MutableStateFlow(false)
+
+    // Internal scope lives as long as the singleton (application lifetime).
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    // Port of locationStream.ts gating logic:
+    //   accuracy gate → interval gate → distance gate
+    // WhileSubscribed: upstream GPS runs only while there is at least one collector.
+    // The LocationForegroundService subscribes to keep GPS alive when screen is off.
+    @SuppressLint("MissingPermission")
+    val locationFlow: SharedFlow<LocationSample> = callbackFlow {
+        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, MIN_INTERVAL_MS)
+            .setMinUpdateDistanceMeters(0f)
+            .setMaxUpdateDelayMillis(MIN_INTERVAL_MS * 2)
+            .build()
+
+        val callback = object : LocationCallback() {
+            override fun onLocationResult(result: LocationResult) {
+                result.lastLocation?.let { trySend(it) }
+            }
+        }
+
+        fusedClient.requestLocationUpdates(request, callback, Looper.getMainLooper())
+        awaitClose { fusedClient.removeLocationUpdates(callback) }
+    }
+        .combine(_backgroundMode) { loc, bg ->
+            val limit = if (bg) BACKGROUND_ACCURACY_M else FOREGROUND_ACCURACY_M
+            // Accuracy is 0 when unavailable on some devices; treat <=0 as acceptable
+            if (loc.accuracy <= 0f || loc.accuracy <= limit) loc else null
+        }
+        .filterNotNull()
+        .map { loc ->
+            LocationSample(
+                lat = loc.latitude,
+                lon = loc.longitude,
+                accuracy = if (loc.hasAccuracy()) loc.accuracy.toDouble() else null,
+                altitude = if (loc.hasAltitude()) loc.altitude else null,
+                heading = if (loc.hasBearing()) loc.bearing.toDouble() else null,
+                speed = if (loc.hasSpeed()) loc.speed.toDouble() else null,
+                timestamp = loc.time,
+                provider = loc.provider ?: "fused",
+            )
+        }
+        // Interval + distance gate (stateful; safe because shareIn serialises the upstream)
+        .let { upstream ->
+            var lastEmitMs = 0L
+            var lastSample: LocationSample? = null
+            upstream.filter { sample ->
+                val now = System.currentTimeMillis()
+                if (now - lastEmitMs < MIN_INTERVAL_MS) return@filter false
+                val prev = lastSample
+                if (prev != null) {
+                    val dist = haversineDistanceMeters(
+                        LatLng(prev.lat, prev.lon),
+                        LatLng(sample.lat, sample.lon),
+                    )
+                    if (dist < MIN_DISTANCE_M) return@filter false
+                }
+                lastEmitMs = now
+                lastSample = sample
+                true
+            }
+        }
+        .shareIn(scope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), replay = 1)
+
+    /** Called by LocationForegroundService when transitioning to/from background. */
+    fun setBackgroundMode(enabled: Boolean) {
+        _backgroundMode.value = enabled
+    }
+
+    companion object {
+        /** Foreground GPS: require ≤15 m accuracy (same as Vue locationStream.ts default). */
+        private const val FOREGROUND_ACCURACY_M = 15f
+        /** Background GPS: relax to 50 m so we still emit best-effort fixes. */
+        private const val BACKGROUND_ACCURACY_M = 50f
+        private const val MIN_INTERVAL_MS = 1_000L
+        /** No distance gate by default; interval gate is sufficient. */
+        private const val MIN_DISTANCE_M = 0.0
+        /** Keep GPS alive for 5 s after last subscriber drops. */
+        private const val STOP_TIMEOUT_MS = 5_000L
+    }
+}
