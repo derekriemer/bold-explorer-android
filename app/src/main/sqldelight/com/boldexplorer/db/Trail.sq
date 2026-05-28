@@ -1,0 +1,24 @@
+CREATE TABLE trail (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT,
+    created_at INTEGER NOT NULL
+);
+
+getAll:
+SELECT * FROM trail;
+
+getById:
+SELECT * FROM trail WHERE id = :id;
+
+insert:
+INSERT INTO trail (name, description, created_at) VALUES (:name, :description, :createdAt);
+
+lastInsertRowId:
+SELECT last_insert_rowid();
+
+updateFull:
+UPDATE trail SET name = :name, description = :description WHERE id = :id;
+
+remove:
+DELETE FROM trail WHERE id = :id;

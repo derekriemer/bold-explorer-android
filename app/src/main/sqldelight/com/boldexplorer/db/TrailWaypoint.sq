@@ -1,0 +1,61 @@
+CREATE TABLE trail_waypoint (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    trail_id INTEGER NOT NULL REFERENCES trail(id),
+    waypoint_id INTEGER NOT NULL REFERENCES waypoint(id),
+    position INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX idx_trail_waypoint_trail ON trail_waypoint(trail_id);
+CREATE INDEX idx_trail_waypoint_wp ON trail_waypoint(waypoint_id);
+-- Prevents duplicate waypoints in a trail; position uniqueness maintained by app logic
+-- (no unique index on position — SQLite checks UNIQUE per-row during UPDATE, which
+-- makes multi-row shift queries fail before the final state is reached).
+CREATE UNIQUE INDEX uq_trail_waypoint_pair ON trail_waypoint(trail_id, waypoint_id);
+
+getByTrail:
+SELECT * FROM trail_waypoint WHERE trail_id = :trailId ORDER BY position;
+
+getPosition:
+SELECT position FROM trail_waypoint
+WHERE trail_id = :trailId AND waypoint_id = :waypointId;
+
+nextPosition:
+SELECT COALESCE(MAX(position), 0) + 1 AS next_pos FROM trail_waypoint WHERE trail_id = :trailId;
+
+insert:
+INSERT INTO trail_waypoint (trail_id, waypoint_id, position, created_at)
+VALUES (:trailId, :waypointId, :position, :createdAt);
+
+updatePosition:
+UPDATE trail_waypoint SET position = :position
+WHERE trail_id = :trailId AND waypoint_id = :waypointId;
+
+-- Move waypoints down when moving a waypoint forward (a < b): shift [a+1..b] down by 1
+shiftDown:
+UPDATE trail_waypoint SET position = position - 1
+WHERE trail_id = :trailId AND position > :fromPos AND position <= :toPos;
+
+-- Move waypoints up when moving a waypoint backward (a > b): shift [b..a-1] up by 1
+shiftUp:
+UPDATE trail_waypoint SET position = position + 1
+WHERE trail_id = :trailId AND position >= :toPos AND position < :fromPos;
+
+-- When inserting at a specific position, shift all at-or-after positions up by 1
+shiftUpFromPosition:
+UPDATE trail_waypoint SET position = position + 1
+WHERE trail_id = :trailId AND position >= :fromPos;
+
+-- After detaching a waypoint, collapse the gap
+shiftDownAfterPosition:
+UPDATE trail_waypoint SET position = position - 1
+WHERE trail_id = :trailId AND position > :removedPos;
+
+delete:
+DELETE FROM trail_waypoint WHERE trail_id = :trailId AND waypoint_id = :waypointId;
+
+deleteForWaypoint:
+DELETE FROM trail_waypoint WHERE waypoint_id = :waypointId;
+
+deleteForTrail:
+DELETE FROM trail_waypoint WHERE trail_id = :trailId;

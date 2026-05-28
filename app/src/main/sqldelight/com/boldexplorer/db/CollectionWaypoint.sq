@@ -1,0 +1,28 @@
+CREATE TABLE collection_waypoint (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    collection_id INTEGER NOT NULL REFERENCES collection(id),
+    waypoint_id INTEGER NOT NULL REFERENCES waypoint(id),
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX idx_collection_waypoint_collection ON collection_waypoint(collection_id);
+CREATE INDEX idx_collection_waypoint_wp ON collection_waypoint(waypoint_id);
+
+waypointsForCollection:
+SELECT w.* FROM waypoint AS w
+INNER JOIN collection_waypoint AS cw ON cw.waypoint_id = w.id
+WHERE cw.collection_id = :collectionId;
+
+insert:
+INSERT INTO collection_waypoint (collection_id, waypoint_id, created_at)
+VALUES (:collectionId, :waypointId, :createdAt);
+
+delete:
+DELETE FROM collection_waypoint
+WHERE collection_id = :collectionId AND waypoint_id = :waypointId;
+
+deleteForWaypoint:
+DELETE FROM collection_waypoint WHERE waypoint_id = :waypointId;
+
+deleteForCollection:
+DELETE FROM collection_waypoint WHERE collection_id = :collectionId;

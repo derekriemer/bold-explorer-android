@@ -26,6 +26,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+
 }
 
 sqldelight {
@@ -34,6 +35,20 @@ sqldelight {
             packageName.set("com.boldexplorer.db")
             schemaOutputDirectory.set(file("src/main/sqldelight/schema"))
         }
+    }
+}
+
+// SQLDelight 2.x doesn't wire its codegen into the KSP task automatically.
+// Add the generated source directory to the main source set so Hilt's KSP
+// can resolve BoldExplorerDatabase. The explicit dependsOn ensures ordering.
+android.sourceSets.getByName("main") {
+    java.srcDir("build/generated/sqldelight/code/BoldExplorerDatabase/debug")
+}
+
+afterEvaluate {
+    listOf("Debug", "Release").forEach { variant ->
+        tasks.findByName("ksp${variant}Kotlin")
+            ?.dependsOn("generate${variant}BoldExplorerDatabaseInterface")
     }
 }
 
@@ -74,4 +89,9 @@ dependencies {
     // Core
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
+
+    // Unit tests (JVM — no device needed)
+    testImplementation(libs.kotlin.test)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.sqldelight.sqlite.driver)
 }

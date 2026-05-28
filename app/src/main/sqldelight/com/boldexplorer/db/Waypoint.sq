@@ -1,0 +1,64 @@
+CREATE TABLE waypoint (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    lat REAL NOT NULL,
+    lon REAL NOT NULL,
+    elev_m REAL,
+    description TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX idx_waypoint_lat_lon ON waypoint(lat, lon);
+
+getAll:
+SELECT * FROM waypoint;
+
+getById:
+SELECT * FROM waypoint WHERE id = :id;
+
+insert:
+INSERT INTO waypoint (name, lat, lon, elev_m, description, created_at)
+VALUES (:name, :lat, :lon, :elevM, :description, :createdAt);
+
+lastInsertRowId:
+SELECT last_insert_rowid();
+
+updateFull:
+UPDATE waypoint
+SET name = :name,
+    lat = :lat,
+    lon = :lon,
+    elev_m = :elevM,
+    description = :description
+WHERE id = :id;
+
+remove:
+DELETE FROM waypoint WHERE id = :id;
+
+forTrail:
+SELECT w.* FROM waypoint AS w
+INNER JOIN trail_waypoint AS tw ON tw.waypoint_id = w.id
+WHERE tw.trail_id = :trailId
+ORDER BY tw.position;
+
+-- Candidates for withDistanceFrom: anti-meridian crossing case (OR on lon)
+waypointsInBboxCrossing:
+SELECT * FROM waypoint
+WHERE lat >= :latMin AND lat <= :latMax
+  AND (lon >= :lonMin OR lon <= :lonMax)
+ORDER BY abs(lat - :centerLat),
+         CASE WHEN abs(lon - :centerLon) > 180
+              THEN 360 - abs(lon - :centerLon)
+              ELSE abs(lon - :centerLon) END
+LIMIT :candidateLimit;
+
+-- Candidates for withDistanceFrom: normal case (AND on lon)
+waypointsInBboxNoCrossing:
+SELECT * FROM waypoint
+WHERE lat >= :latMin AND lat <= :latMax
+  AND lon >= :lonMin AND lon <= :lonMax
+ORDER BY abs(lat - :centerLat),
+         CASE WHEN abs(lon - :centerLon) > 180
+              THEN 360 - abs(lon - :centerLon)
+              ELSE abs(lon - :centerLon) END
+LIMIT :candidateLimit;

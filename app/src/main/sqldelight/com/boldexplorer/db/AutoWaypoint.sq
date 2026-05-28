@@ -1,0 +1,29 @@
+CREATE TABLE auto_waypoint (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    trail_id INTEGER NOT NULL REFERENCES trail(id),
+    name TEXT NOT NULL,
+    segment_index INTEGER NOT NULL,
+    offset_m REAL NOT NULL,
+    lat REAL NOT NULL,
+    lon REAL NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX idx_auto_waypoint_trail ON auto_waypoint(trail_id);
+CREATE INDEX idx_auto_waypoint_trail_segment ON auto_waypoint(trail_id, segment_index);
+
+forTrail:
+SELECT * FROM auto_waypoint WHERE trail_id = :trailId ORDER BY segment_index, offset_m;
+
+insert:
+INSERT INTO auto_waypoint (trail_id, name, segment_index, offset_m, lat, lon, created_at)
+VALUES (:trailId, :name, :segmentIndex, :offsetM, :lat, :lon, :createdAt);
+
+lastInsertRowId:
+SELECT last_insert_rowid();
+
+remove:
+DELETE FROM auto_waypoint WHERE id = :id;
+
+removeForTrail:
+DELETE FROM auto_waypoint WHERE trail_id = :trailId;

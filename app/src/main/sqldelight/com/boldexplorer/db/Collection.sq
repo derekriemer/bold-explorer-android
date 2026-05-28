@@ -1,0 +1,21 @@
+CREATE TABLE collection (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT,
+    created_at INTEGER NOT NULL
+);
+
+getAll:
+SELECT * FROM collection;
+
+getById:
+SELECT * FROM collection WHERE id = :id;
+
+insert:
+INSERT INTO collection (name, description, created_at) VALUES (:name, :description, :createdAt);
+
+lastInsertRowId:
+SELECT last_insert_rowid();
+
+remove:
+DELETE FROM collection WHERE id = :id;

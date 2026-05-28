@@ -183,12 +183,13 @@ This app is built for and by a blind user. Every phase must meet these:
 - [x] `GeoMathTest`, `TrailFollowerTest`, `SettingsMigrationTest`
 - **Gate**: `make test-shared` (requires JDK 17 — run `bash setup.sh` first)
 
-### Phase 2 — Database + Repositories
-- [ ] SQLDelight `.sq` files for all 7 tables (DDL matching migrations 001–005)
-- [ ] `WaypointRepositoryImpl`: `withDistanceFrom` (bbox query + Kotlin haversine sort), `setPosition` (shift transactions)
-- [ ] `TrailRepositoryImpl`, `CollectionRepositoryImpl`, `AutoWaypointRepositoryImpl`
-- [ ] Hilt `DatabaseModule`
-- **Gate**: `./gradlew :app:testDebugUnitTest` — repo integration tests + position-reorder invariant
+### Phase 2 — Database + Repositories ✅ DONE
+- [x] SQLDelight `.sq` files for all 7 tables (DDL matching migrations 001–005)
+- [x] `WaypointRepositoryImpl`: `withDistanceFrom` (bbox query + Kotlin haversine sort), `setPosition` (shift transactions)
+- [x] `TrailRepositoryImpl`, `CollectionRepositoryImpl`, `AutoWaypointRepositoryImpl`
+- [x] Hilt `DatabaseModule`
+- [x] `WaypointRepositoryTest` — 13 tests: CRUD, attach/detach, setPosition reorder invariant, withDistanceFrom
+- **Gate**: `./gradlew :app:testDebugUnitTest` ✅ 13/13 passing
 
 ### Phase 3 — Location + Compass
 - [ ] `FusedLocationProviderImpl`: accuracy/interval/distance gates as Flow pipeline
