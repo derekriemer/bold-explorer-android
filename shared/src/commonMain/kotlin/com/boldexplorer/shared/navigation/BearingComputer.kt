@@ -33,12 +33,9 @@ object BearingComputer {
         }
     }
 
-    // Returns -1 (left), 0 (aligned), or 1 (right).
-    fun computePan(relativeDeg: Double): Int = when {
-        relativeDeg > 0 -> 1
-        relativeDeg < 0 -> -1
-        else -> 0
-    }
+    // Maps relativeDeg to a stereo pan value: -90° → -1.0 (full left), +90° → +1.0 (full right).
+    fun computePan(relativeDeg: Double): Float =
+        (relativeDeg / 90.0).coerceIn(-1.0, 1.0).toFloat()
 
     fun differenceAbs(relativeDeg: Double): Double = abs(relativeDeg)
 }

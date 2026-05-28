@@ -41,13 +41,11 @@ class AudioEngine @Inject constructor() {
         scope.launch { playTone(freq, durationMs = 100, leftVol = 0.7f, rightVol = 0.7f) }
     }
 
-    fun playAlignmentPing(pan: Int, aligned: Boolean) {
+    fun playAlignmentPing(pan: Float, aligned: Boolean) {
         val freq = if (aligned) 660.0 else 440.0
-        val (left, right) = when (pan) {
-            -1 -> 1f to 0f   // bearing is to the left
-             1 -> 0f to 1f   // bearing is to the right
-            else -> 1f to 1f // on-bearing (center)
-        }
+        // Linear pan law: pan=-1 → full left, pan=0 → equal both, pan=+1 → full right.
+        val left = (1f - pan).coerceIn(0f, 1f)
+        val right = (1f + pan).coerceIn(0f, 1f)
         scope.launch { playTone(freq, durationMs = 80, leftVol = left, rightVol = right) }
     }
 

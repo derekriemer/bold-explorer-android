@@ -26,11 +26,15 @@ class AudioCueScheduler(val config: AudioCueConfig = AudioCueConfig()) {
     ) {
         if (!config.enabled) return
 
-        // Accuracy beacon: emit on every non-null accuracy update
+        // Accuracy beacon: emit on every non-null accuracy update.
+        // Suppressed while alignment is active — alignment pings are the only
+        // audio signal needed then; mixing in a centered beacon is confusing.
         if (config.accuracyBeaconEnabled) {
             scope.launch {
                 accuracyM.filterNotNull().collect { acc ->
-                    _events.emit(AudioCueEvent.AccuracyBeacon(acc))
+                    if (!alignmentActive.value) {
+                        _events.emit(AudioCueEvent.AccuracyBeacon(acc))
+                    }
                 }
             }
         }
@@ -41,7 +45,7 @@ class AudioCueScheduler(val config: AudioCueConfig = AudioCueConfig()) {
                 while (true) {
                     if (alignmentActive.value) {
                         val deg = relativeDeg.value
-                        if (deg != null) {
+                        if (deg != null && abs(deg) <= 90.0) {
                             val aligned = abs(deg) <= config.alignmentDeadbandDeg
                             val pan = BearingComputer.computePan(deg)
                             _events.emit(AudioCueEvent.AlignmentPing(pan, aligned))
