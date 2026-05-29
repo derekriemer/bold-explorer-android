@@ -49,12 +49,20 @@ class AudioCuePlayer @Inject constructor(
         accuracyM: StateFlow<Double?>,
         relativeDeg: StateFlow<Double?>,
         alignmentActive: StateFlow<Boolean>,
+        audioCuesEnabled: StateFlow<Boolean>,
     ) {
-        scheduler.start(scope, accuracyM, relativeDeg, alignmentActive)
+        if (playerJob != null) return
+
+        val schedulerJob = scheduler.start(scope, accuracyM, relativeDeg, alignmentActive, audioCuesEnabled)
         requestAudioFocus()
         playerJob = scheduler.events
             .onEach { event -> dispatch(event) }
             .launchIn(scope)
+            .also { job ->
+                job.invokeOnCompletion {
+                    schedulerJob?.cancel()
+                }
+            }
     }
 
     fun stop() {

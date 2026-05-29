@@ -44,8 +44,35 @@ class TrailFollowerTest {
         assertIs<TrailFollowerEvent.WaypointReached>(event)
         assertEquals(1, event.index)
         assertEquals("Middle", event.name)
+        assertEquals(com.boldexplorer.shared.model.Waypoint.KIND_WAYPOINT, event.kind)
+        assertEquals(3, event.total)
+        assert(event.distanceToNextM > 0.0)
         val state = f.state.value as TrailFollowerState.Active
         assertEquals(1, state.currentIndex)
+    }
+
+    @Test
+    fun waypointReached_includesDistanceAndBearing() {
+        // wp1 is at (0, 0), wp2 is ~10m north at (0.00009, 0)
+        val f = TrailFollower()
+        f.start(listOf(wp1, wp2), thresholdM = 15.0)
+        val event = f.onLocationUpdate(LatLng(0.0, 0.0)) as TrailFollowerEvent.WaypointReached
+        // Distance from (0,0) to wp2 (0.00009, 0) is ~10 m
+        assert(event.distanceToNextM in 5.0..20.0) { "expected ~10m, got ${event.distanceToNextM}" }
+        // Bearing from (0,0) heading north to (0.00009, 0) should be near 0° (north)
+        assert(event.absoluteBearingDeg < 5.0 || event.absoluteBearingDeg > 355.0) {
+            "expected ~0° (north), got ${event.absoluteBearingDeg}"
+        }
+    }
+
+    @Test
+    fun waypointReached_trackPointKindPropagates() {
+        val tp1 = TrailPoint(1, "Track 10:00:00", 0.0, 0.0, com.boldexplorer.shared.model.Waypoint.KIND_TRACK_POINT)
+        val tp2 = TrailPoint(2, "Track 10:00:10", 0.00009, 0.0, com.boldexplorer.shared.model.Waypoint.KIND_TRACK_POINT)
+        val f = TrailFollower()
+        f.start(listOf(tp1, tp2), thresholdM = 15.0)
+        val event = f.onLocationUpdate(LatLng(0.0, 0.0)) as TrailFollowerEvent.WaypointReached
+        assertEquals(com.boldexplorer.shared.model.Waypoint.KIND_TRACK_POINT, event.kind)
     }
 
     @Test

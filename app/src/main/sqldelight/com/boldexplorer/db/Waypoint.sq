@@ -5,20 +5,22 @@ CREATE TABLE waypoint (
     lon REAL NOT NULL,
     elev_m REAL,
     description TEXT,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'waypoint'
 );
 
 CREATE INDEX idx_waypoint_lat_lon ON waypoint(lat, lon);
 
+-- User-created waypoints only; track points excluded.
 getAll:
-SELECT * FROM waypoint;
+SELECT * FROM waypoint WHERE kind = 'waypoint';
 
 getById:
 SELECT * FROM waypoint WHERE id = :id;
 
 insert:
-INSERT INTO waypoint (name, lat, lon, elev_m, description, created_at)
-VALUES (:name, :lat, :lon, :elevM, :description, :createdAt);
+INSERT INTO waypoint (name, lat, lon, elev_m, description, created_at, kind)
+VALUES (:name, :lat, :lon, :elevM, :description, :createdAt, :kind);
 
 lastInsertRowId:
 SELECT last_insert_rowid();
@@ -35,16 +37,38 @@ WHERE id = :id;
 remove:
 DELETE FROM waypoint WHERE id = :id;
 
+-- All points for a trail in order (waypoints + track points); used for trail following.
 forTrail:
 SELECT w.* FROM waypoint AS w
 INNER JOIN trail_waypoint AS tw ON tw.waypoint_id = w.id
 WHERE tw.trail_id = :trailId
 ORDER BY tw.position;
 
+-- Named waypoints only (kind='waypoint') for a trail; used in trail editor UI.
+namedWaypointsForTrail:
+SELECT w.* FROM waypoint AS w
+INNER JOIN trail_waypoint AS tw ON tw.waypoint_id = w.id
+WHERE tw.trail_id = :trailId AND w.kind = 'waypoint'
+ORDER BY tw.position;
+
+-- Count of track points for a trail; cheap query for the summary line.
+trackPointCountForTrail:
+SELECT COUNT(*) FROM waypoint AS w
+INNER JOIN trail_waypoint AS tw ON tw.waypoint_id = w.id
+WHERE tw.trail_id = :trailId AND w.kind = 'track_point';
+
+-- Track points only for a trail; only fetched when user explicitly requests them.
+trackPointsForTrail:
+SELECT w.* FROM waypoint AS w
+INNER JOIN trail_waypoint AS tw ON tw.waypoint_id = w.id
+WHERE tw.trail_id = :trailId AND w.kind = 'track_point'
+ORDER BY tw.position;
+
 -- Candidates for withDistanceFrom: anti-meridian crossing case (OR on lon)
 waypointsInBboxCrossing:
 SELECT * FROM waypoint
-WHERE lat >= :latMin AND lat <= :latMax
+WHERE kind = 'waypoint'
+  AND lat >= :latMin AND lat <= :latMax
   AND (lon >= :lonMin OR lon <= :lonMax)
 ORDER BY abs(lat - :centerLat),
          CASE WHEN abs(lon - :centerLon) > 180
@@ -55,7 +79,8 @@ LIMIT :candidateLimit;
 -- Candidates for withDistanceFrom: normal case (AND on lon)
 waypointsInBboxNoCrossing:
 SELECT * FROM waypoint
-WHERE lat >= :latMin AND lat <= :latMax
+WHERE kind = 'waypoint'
+  AND lat >= :latMin AND lat <= :latMax
   AND lon >= :lonMin AND lon <= :lonMax
 ORDER BY abs(lat - :centerLat),
          CASE WHEN abs(lon - :centerLon) > 180

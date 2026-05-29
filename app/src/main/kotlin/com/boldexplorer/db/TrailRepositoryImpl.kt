@@ -1,14 +1,35 @@
 package com.boldexplorer.db
 
+import app.cash.sqldelight.coroutines.asFlow
+import app.cash.sqldelight.coroutines.mapToList
+import app.cash.sqldelight.coroutines.mapToOne
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.TrailWaypoint
 import com.boldexplorer.shared.model.Waypoint
 import com.boldexplorer.shared.repository.TrailRepository
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 
 class TrailRepositoryImpl @Inject constructor(
     private val db: BoldExplorerDatabase,
 ) : TrailRepository {
+
+    override fun observeAll(): Flow<List<Trail>> =
+        db.trailQueries.getAll().asFlow().mapToList(Dispatchers.IO).map { list -> list.map { it.toModel() } }
+
+    override fun observeWaypointsForTrail(trailId: Long): Flow<List<Waypoint>> =
+        db.waypointQueries.forTrail(trailId).asFlow().mapToList(Dispatchers.IO).map { list -> list.map { it.toModel() } }
+
+    override fun observeNamedWaypointsForTrail(trailId: Long): Flow<List<Waypoint>> =
+        db.waypointQueries.namedWaypointsForTrail(trailId).asFlow().mapToList(Dispatchers.IO).map { list -> list.map { it.toModel() } }
+
+    override fun observeTrackPointCountForTrail(trailId: Long): Flow<Long> =
+        db.waypointQueries.trackPointCountForTrail(trailId).asFlow().mapToOne(Dispatchers.IO)
+
+    override fun observeTrackPointsForTrail(trailId: Long): Flow<List<Waypoint>> =
+        db.waypointQueries.trackPointsForTrail(trailId).asFlow().mapToList(Dispatchers.IO).map { list -> list.map { it.toModel() } }
 
     override suspend fun getAll(): List<Trail> =
         db.trailQueries.getAll().executeAsList().map { it.toModel() }
@@ -65,6 +86,7 @@ private fun com.boldexplorer.db.Waypoint.toModel() = Waypoint(
     elevM = elev_m,
     description = description,
     createdAt = created_at,
+    kind = kind,
 )
 
 private fun com.boldexplorer.db.Trail_waypoint.toModel() = TrailWaypoint(

@@ -1,0 +1,3 @@
+-- Retroactively mark auto-recorded track points that were created before the kind column
+-- existed. They got kind='waypoint' from the migration default. Name pattern: "Track HH:mm:ss"
+UPDATE waypoint SET kind = 'track_point' WHERE name LIKE 'Track __:__:__';

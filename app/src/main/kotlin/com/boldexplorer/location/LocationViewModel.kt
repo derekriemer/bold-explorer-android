@@ -69,6 +69,8 @@ class LocationViewModel @Inject constructor(
     /** True if foreground location permission is granted. */
     fun hasForegroundLocationPermission(): Boolean =
         ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
 
     /** True if background location permission is granted (required for screen-off tracking). */

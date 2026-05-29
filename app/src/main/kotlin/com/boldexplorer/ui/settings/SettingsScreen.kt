@@ -8,16 +8,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -48,73 +50,57 @@ fun SettingsScreen(
         HorizontalDivider()
 
         // Units
-        SettingRow(label = "Units") {
-            TextButton(
+        SettingGroupLabel("Units")
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .selectableGroup(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioOption(
+                label = "Metric",
+                selected = settings.units == Units.METRIC,
                 onClick = { viewModel.setUnits(Units.METRIC) },
-                modifier = Modifier.semantics { contentDescription = "Use metric units" },
-            ) {
-                Text(
-                    "Metric",
-                    color = if (settings.units == Units.METRIC)
-                        MaterialTheme.colorScheme.primary
-                    else
-                        MaterialTheme.colorScheme.onSurface,
-                )
-            }
-            TextButton(
+                modifier = Modifier.weight(1f),
+            )
+            RadioOption(
+                label = "Imperial",
+                selected = settings.units == Units.IMPERIAL,
                 onClick = { viewModel.setUnits(Units.IMPERIAL) },
-                modifier = Modifier.semantics { contentDescription = "Use imperial units" },
-            ) {
-                Text(
-                    "Imperial",
-                    color = if (settings.units == Units.IMPERIAL)
-                        MaterialTheme.colorScheme.primary
-                    else
-                        MaterialTheme.colorScheme.onSurface,
-                )
-            }
+                modifier = Modifier.weight(1f),
+            )
         }
 
         HorizontalDivider()
 
         // Bearing display
-        SettingRow(label = "Bearing Display") {
-            TextButton(
+        SettingGroupLabel("Bearing Display")
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .selectableGroup(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioOption(
+                label = "Relative",
+                selected = settings.bearingDisplayMode == BearingDisplayMode.RELATIVE,
                 onClick = { viewModel.setBearingMode(BearingDisplayMode.RELATIVE) },
-                modifier = Modifier.semantics { contentDescription = "Show bearing as relative degrees" },
-            ) {
-                Text(
-                    "Relative",
-                    color = if (settings.bearingDisplayMode == BearingDisplayMode.RELATIVE)
-                        MaterialTheme.colorScheme.primary
-                    else
-                        MaterialTheme.colorScheme.onSurface,
-                )
-            }
-            TextButton(
+                modifier = Modifier.weight(1f),
+            )
+            RadioOption(
+                label = "Clock",
+                selected = settings.bearingDisplayMode == BearingDisplayMode.CLOCK,
                 onClick = { viewModel.setBearingMode(BearingDisplayMode.CLOCK) },
-                modifier = Modifier.semantics { contentDescription = "Show bearing as clock position" },
-            ) {
-                Text(
-                    "Clock",
-                    color = if (settings.bearingDisplayMode == BearingDisplayMode.CLOCK)
-                        MaterialTheme.colorScheme.primary
-                    else
-                        MaterialTheme.colorScheme.onSurface,
-                )
-            }
-            TextButton(
+                modifier = Modifier.weight(1f),
+            )
+            RadioOption(
+                label = "Absolute",
+                selected = settings.bearingDisplayMode == BearingDisplayMode.TRUE_NORTH,
                 onClick = { viewModel.setBearingMode(BearingDisplayMode.TRUE_NORTH) },
-                modifier = Modifier.semantics { contentDescription = "Show bearing as absolute degrees" },
-            ) {
-                Text(
-                    "Absolute",
-                    color = if (settings.bearingDisplayMode == BearingDisplayMode.TRUE_NORTH)
-                        MaterialTheme.colorScheme.primary
-                    else
-                        MaterialTheme.colorScheme.onSurface,
-                )
-            }
+                modifier = Modifier.weight(1f),
+            )
         }
 
         HorizontalDivider()
@@ -124,7 +110,7 @@ fun SettingsScreen(
             label = "Audio Cues",
             checked = settings.audioCuesEnabled,
             onCheckedChange = { viewModel.setAudioCues(it) },
-            contentDescription = if (settings.audioCuesEnabled) "Audio cues enabled" else "Audio cues disabled",
+            contentDescription = if (settings.audioCuesEnabled) "Audio cues, on" else "Audio cues, off",
         )
 
         HorizontalDivider()
@@ -135,7 +121,7 @@ fun SettingsScreen(
             checked = settings.compassMode == CompassMode.TRUE,
             onCheckedChange = { viewModel.setCompassMode(if (it) CompassMode.TRUE else CompassMode.MAGNETIC) },
             contentDescription = if (settings.compassMode == CompassMode.TRUE)
-                "True north enabled" else "True north disabled, using magnetic north",
+                "Use true north, on" else "Use true north, off, using magnetic north",
         )
 
         HorizontalDivider()
@@ -143,18 +129,40 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun SettingRow(
+private fun SettingGroupLabel(label: String) {
+    Text(
+        label,
+        style = MaterialTheme.typography.labelLarge,
+        modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
+private fun RadioOption(
     label: String,
-    content: @Composable () -> Unit,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = modifier
+            .selectable(
+                selected = selected,
+                onClick = onClick,
+                role = Role.RadioButton,
+            )
+            .padding(vertical = 8.dp)
+            .semantics {
+                contentDescription = if (selected) "$label, selected" else "$label, not selected"
+            },
     ) {
-        Text(label, modifier = Modifier.weight(1f))
-        content()
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+        )
     }
 }
 

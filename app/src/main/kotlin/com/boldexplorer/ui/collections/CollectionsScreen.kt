@@ -44,6 +44,7 @@ fun CollectionsScreen(
     val allWaypoints by viewModel.allWaypoints.collectAsStateWithLifecycle()
     val allTrails by viewModel.allTrails.collectAsStateWithLifecycle()
     val toast by viewModel.toast.collectAsStateWithLifecycle()
+    val exportStatus by viewModel.exportStatus.collectAsStateWithLifecycle()
 
     var expandedId by rememberSaveable { mutableStateOf<Long?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
@@ -57,6 +58,15 @@ fun CollectionsScreen(
             toastMessage = toast
             viewModel.clearToast()
             delay(2000)
+            toastMessage = null
+        }
+    }
+
+    LaunchedEffect(exportStatus) {
+        if (exportStatus != null) {
+            toastMessage = exportStatus
+            viewModel.clearExportStatus()
+            delay(3000)
             toastMessage = null
         }
     }
@@ -109,6 +119,7 @@ fun CollectionsScreen(
                             }
                         },
                         onDelete = { deleteTarget = coll },
+                        onExport = { viewModel.exportCollection(coll.id) },
                         onAddWaypoints = { addWpToCollection = coll.id },
                         onAddTrails = { addTrailToCollection = coll.id },
                         onRemoveWaypoint = { wpId -> viewModel.removeWaypoint(coll.id, wpId) },
@@ -182,6 +193,7 @@ private fun CollectionItem(
     expanded: Boolean,
     onToggle: () -> Unit,
     onDelete: () -> Unit,
+    onExport: () -> Unit,
     onAddWaypoints: () -> Unit,
     onAddTrails: () -> Unit,
     onRemoveWaypoint: (Long) -> Unit,
@@ -205,6 +217,10 @@ private fun CollectionItem(
                     onClick = onDelete,
                     modifier = Modifier.semantics { contentDescription = "Delete collection ${collection.name}" },
                 ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                TextButton(
+                    onClick = onExport,
+                    modifier = Modifier.semantics { contentDescription = "Export collection ${collection.name} as G P X" },
+                ) { Text("Export GPX") }
             }
 
             if (expanded) {

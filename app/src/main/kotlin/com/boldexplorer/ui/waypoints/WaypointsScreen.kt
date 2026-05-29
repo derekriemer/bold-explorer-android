@@ -35,6 +35,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.Waypoint
+import com.boldexplorer.shared.navigation.BearingComputer
 import kotlinx.coroutines.delay
 
 @Composable
@@ -46,6 +47,7 @@ fun WaypointsScreen(
     val trails by viewModel.trails.collectAsStateWithLifecycle()
     val query by viewModel.query.collectAsStateWithLifecycle()
     val toast by viewModel.toast.collectAsStateWithLifecycle()
+    val settings by viewModel.settings.collectAsStateWithLifecycle()
 
     var expandedId by rememberSaveable { mutableStateOf<Long?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
@@ -110,14 +112,15 @@ fun WaypointsScreen(
             )
         } else {
             LazyColumn {
-                items(waypoints, key = { it.id }) { wp ->
+                items(waypoints, key = { it.waypoint.id }) { item ->
                     WaypointItem(
-                        waypoint = wp,
-                        expanded = expandedId == wp.id,
-                        onToggle = { expandedId = if (expandedId == wp.id) null else wp.id },
-                        onEdit = { editTarget = wp },
-                        onDelete = { deleteTarget = wp },
-                        onAttach = { attachTarget = wp },
+                        item = item,
+                        units = settings.units,
+                        expanded = expandedId == item.waypoint.id,
+                        onToggle = { expandedId = if (expandedId == item.waypoint.id) null else item.waypoint.id },
+                        onEdit = { editTarget = item.waypoint },
+                        onDelete = { deleteTarget = item.waypoint },
+                        onAttach = { attachTarget = item.waypoint },
                     )
                 }
             }
@@ -186,13 +189,15 @@ fun WaypointsScreen(
 
 @Composable
 private fun WaypointItem(
-    waypoint: Waypoint,
+    item: WaypointListItem,
+    units: com.boldexplorer.shared.settings.Units,
     expanded: Boolean,
     onToggle: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onAttach: () -> Unit,
 ) {
+    val waypoint = item.waypoint
     Card(
         onClick = onToggle,
         modifier = Modifier
@@ -203,6 +208,13 @@ private fun WaypointItem(
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             Text(waypoint.name, style = MaterialTheme.typography.titleMedium)
+            item.distanceM?.let {
+                Text(
+                    BearingComputer.formatDistance(it, units),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
 
             if (expanded) {
                 Spacer(Modifier.height(4.dp))

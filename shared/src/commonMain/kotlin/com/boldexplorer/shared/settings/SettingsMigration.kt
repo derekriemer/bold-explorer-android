@@ -50,7 +50,7 @@ private fun parseVersioned(raw: String): Pair<Int, Any?> {
     val trimmed = raw.trim()
     if (trimmed.startsWith("{")) {
         val vMatch = Regex(""""v"\s*:\s*(\d+)""").find(trimmed)
-        val valMatch = Regex(""""value"\s*:\s*(.+?)\s*}?\s*$""").find(trimmed)
+        val valMatch = Regex(""""value"\s*:\s*(.+?)\s*$""").find(trimmed)
         if (vMatch != null && valMatch != null) {
             val v = vMatch.groupValues[1].toIntOrNull() ?: 0
             val rawVal = valMatch.groupValues[1].trimEnd('}', ' ')

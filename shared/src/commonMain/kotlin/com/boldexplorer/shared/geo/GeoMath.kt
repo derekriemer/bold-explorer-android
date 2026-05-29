@@ -35,7 +35,7 @@ fun initialBearingDeg(a: LatLng, b: LatLng): Double {
 // Normalized signed delta from heading to bearing: range [-180, 180).
 // Positive = target is to the right of heading; negative = to the left.
 fun deltaAngle(heading: Double, bearing: Double): Double =
-    ((heading - bearing + 540) % 360) - 180
+    ((bearing - heading + 540) % 360) - 180
 
 fun computeBbox(center: LatLng, radiusM: Double = DEFAULT_BBOX_RADIUS_M): BboxResult {
     val degLat = radiusM / METERS_PER_DEG_LAT

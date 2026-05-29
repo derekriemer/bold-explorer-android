@@ -188,6 +188,28 @@ class WaypointRepositoryTest {
         assertEquals(1, results.size)
         assertEquals("InTrail", results.first().waypoint.name)
     }
+
+    @Test fun `withDistanceFrom handles anti-meridian crossing`() = runTest {
+        val r = repo()
+        r.create("East", 0.0, 179.95, null, null)
+        r.create("West", 0.0, -179.95, null, null)
+        r.create("Far", 0.0, 170.0, null, null)
+
+        val results = r.withDistanceFrom(0.0, 179.99).map { it.waypoint.name }
+
+        assertEquals(listOf("East", "West"), results)
+    }
+
+    @Test fun `withDistanceFrom near pole skips longitude filter and sorts by distance`() = runTest {
+        val r = repo()
+        r.create("Near", 89.99, 90.0, null, null)
+        r.create("AlsoNear", 89.99, -90.0, null, null)
+        r.create("Farther", 89.5, 0.0, null, null)
+
+        val results = r.withDistanceFrom(89.99, 0.0).map { it.waypoint.name }
+
+        assertTrue(results.take(2).containsAll(listOf("Near", "AlsoNear")))
+    }
 }
 
 private fun assertGaplessPositions(db: BoldExplorerDatabase, trailId: Long) {

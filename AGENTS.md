@@ -10,7 +10,7 @@ bash setup.sh                   # one-shot WSL/Linux setup — JDK 17, Android S
 make test-shared                # run :shared jvmTest (Phase 1 gate; no device needed)
 make test-shared-watch          # same, continuous mode
 make test                       # all unit tests (:shared:jvmTest + :app:testDebugUnitTest)
-make test-db                    # repo integration tests only (Phase 2 gate)
+make test-db                    # database repository tests only
 make assemble                   # build debug APK (requires ANDROID_HOME)
 make install                    # push debug APK to connected device
 make logcat                     # tail app + crash logs (adb logcat -s BoldExplorer)
@@ -20,7 +20,7 @@ make adb-connect                # connect via Tailscale (set PHONE_IP + PHONE_PO
 Run a single test class:
 ```bash
 ./gradlew :shared:jvmTest --tests "com.boldexplorer.shared.geo.GeoMathTest"
-./gradlew :app:testDebugUnitTest --tests "*.repository.WaypointRepositoryTest"
+./gradlew :app:testDebugUnitTest --tests "com.boldexplorer.db.WaypointRepositoryTest"
 ```
 
 ## Architecture
@@ -63,7 +63,7 @@ AudioCueScheduler.events: SharedFlow<AudioCueEvent>
 
 **Repository interfaces in `:shared`, impls in `:app`**: `Repositories.kt` defines all five interfaces (`WaypointRepository`, `TrailRepository`, `CollectionRepository`, `AutoWaypointRepository`, `SettingsRepository`). Hilt binds the Android impls.
 
-**`AudioCueScheduler` is pure scheduling, not playback**: It decides what to emit and when via `SharedFlow<AudioCueEvent>`. `AudioCuePlayer` (:app) consumes the flow and drives `AudioTrack` + TTS. This split keeps iOS portability open.
+**`AudioCueScheduler` is pure scheduling, not playback**: It decides what to emit and when via `SharedFlow<AudioCueEvent>`. `AudioCuePlayer` (:app) owns the active scheduler job, consumes the flow, and drives `AudioTrack` + TTS.
 
 **`WaypointRepository.withDistanceFrom`**: Does a bbox SQL query (anti-meridian aware, via `computeBbox()`) then re-sorts in Kotlin with `haversineDistanceMeters`. No SQLite trig required.
 
@@ -72,6 +72,19 @@ AudioCueScheduler.events: SharedFlow<AudioCueEvent>
 **`SettingsMigration`**: `PrefSpec<T>` + `migrateStoredValue()` — a pure stepwise migration chain. DataStore holds the raw strings; this class does version-detection and migration logic only.
 
 **SQLDelight database name**: `BoldExplorerDatabase`, package `com.boldexplorer.db`.
+
+### Current status
+
+Phases 1–6 are implemented. Treat new work as hardening or feature completion, not initial scaffolding. Prototype data migration from the old Vue/Capacitor app is not required.
+
+### Release readiness checklist
+
+- `make test` passes.
+- `make assemble` builds a debug APK.
+- Physical device pass: GPS fix, compass heading, background tracking with screen off.
+- Headphones pass: accuracy beacon pitch changes and alignment pan points left/right correctly.
+- TTS pass: waypoint reached and trail complete announcements are spoken.
+- TalkBack pass: all icon-only controls have labels, live announcements are polite, touch targets are usable.
 
 ### Accessibility constraints (non-negotiable)
 

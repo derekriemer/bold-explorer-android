@@ -1,5 +1,6 @@
 package com.boldexplorer.ui.trails
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -10,7 +11,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -29,7 +29,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -45,11 +47,15 @@ fun TrailsScreen(
     viewModel: TrailsViewModel = hiltViewModel(),
 ) {
     val trails by viewModel.trails.collectAsStateWithLifecycle()
-    val trailWaypoints by viewModel.trailWaypoints.collectAsStateWithLifecycle()
+    val namedWaypoints by viewModel.namedWaypoints.collectAsStateWithLifecycle()
+    val trackPointCounts by viewModel.trackPointCounts.collectAsStateWithLifecycle()
+    val trackPoints by viewModel.trackPoints.collectAsStateWithLifecycle()
+    val expandedIds by viewModel.expandedTrailIds.collectAsStateWithLifecycle()
+    val trackExpandedIds by viewModel.trackExpandedTrailIds.collectAsStateWithLifecycle()
     val allWaypoints by viewModel.allWaypoints.collectAsStateWithLifecycle()
     val toast by viewModel.toast.collectAsStateWithLifecycle()
+    val exportStatus by viewModel.exportStatus.collectAsStateWithLifecycle()
 
-    var expandedId by rememberSaveable { mutableStateOf<Long?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<Trail?>(null) }
     var deleteTarget by remember { mutableStateOf<Trail?>(null) }
@@ -62,6 +68,15 @@ fun TrailsScreen(
             toastMessage = toast
             viewModel.clearToast()
             delay(2000)
+            toastMessage = null
+        }
+    }
+
+    LaunchedEffect(exportStatus) {
+        if (exportStatus != null) {
+            toastMessage = exportStatus
+            viewModel.clearExportStatus()
+            delay(3000)
             toastMessage = null
         }
     }
@@ -98,23 +113,24 @@ fun TrailsScreen(
         } else {
             LazyColumn {
                 items(trails, key = { it.id }) { trail ->
-                    val wps = trailWaypoints[trail.id] ?: emptyList()
-                    val expanded = expandedId == trail.id
+                    val expanded = trail.id in expandedIds
+                    val trackExpanded = trail.id in trackExpandedIds
+                    val wps = namedWaypoints[trail.id] ?: emptyList()
+                    val trackCount = trackPointCounts[trail.id] ?: 0L
+                    val tps = trackPoints[trail.id] ?: emptyList()
 
                     TrailItem(
                         trail = trail,
-                        waypoints = wps,
+                        namedWaypoints = wps,
+                        trackPointCount = trackCount,
+                        trackPoints = tps,
                         expanded = expanded,
-                        onToggle = {
-                            if (!expanded) {
-                                expandedId = trail.id
-                                viewModel.loadWaypoints(trail.id)
-                            } else {
-                                expandedId = null
-                            }
-                        },
+                        trackExpanded = trackExpanded,
+                        onToggle = { viewModel.toggleExpand(trail.id) },
+                        onToggleTrackPoints = { viewModel.toggleTrackExpand(trail.id) },
                         onRename = { renameTarget = trail },
                         onDelete = { deleteTarget = trail },
+                        onExport = { viewModel.exportTrail(trail.id) },
                         onAddWaypoint = { addWpToTrail = trail.id },
                         onAttachExisting = { attachWpToTrail = trail.id },
                         onDetach = { wpId -> viewModel.detachWaypoint(trail.id, wpId) },
@@ -184,7 +200,7 @@ fun TrailsScreen(
 
     // Attach existing waypoint to trail
     attachWpToTrail?.let { trailId ->
-        val existing = trailWaypoints[trailId]?.map { it.id }?.toSet() ?: emptySet()
+        val existing = namedWaypoints[trailId]?.map { it.id }?.toSet() ?: emptySet()
         val candidates = allWaypoints.filter { it.id !in existing }
         AttachExistingDialog(
             candidates = candidates,
@@ -200,11 +216,16 @@ fun TrailsScreen(
 @Composable
 private fun TrailItem(
     trail: Trail,
-    waypoints: List<Waypoint>,
+    namedWaypoints: List<Waypoint>,
+    trackPointCount: Long,
+    trackPoints: List<Waypoint>,
     expanded: Boolean,
+    trackExpanded: Boolean,
     onToggle: () -> Unit,
+    onToggleTrackPoints: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
+    onExport: () -> Unit,
     onAddWaypoint: () -> Unit,
     onAttachExisting: () -> Unit,
     onDetach: (waypointId: Long) -> Unit,
@@ -212,17 +233,21 @@ private fun TrailItem(
     onMoveDown: (index: Int, waypointId: Long) -> Unit,
 ) {
     Card(
-        onClick = onToggle,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp)
-            .semantics { contentDescription = "${trail.name} trail, ${if (expanded) "expanded" else "collapsed"}" },
+            .padding(horizontal = 16.dp, vertical = 4.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = if (expanded) 4.dp else 1.dp),
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
+            // Clickable header row — mergeDescendants scoped only to this row.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onToggle)
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = "${trail.name} trail, ${if (expanded) "expanded" else "collapsed"}"
+                    },
             ) {
                 Text(trail.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                 TextButton(
@@ -238,21 +263,37 @@ private fun TrailItem(
             if (expanded) {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
+                // ── Named waypoints section ───────────────────────────────────
+                Text(
+                    "Waypoints",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(
                         onClick = onAddWaypoint,
                         modifier = Modifier.semantics { contentDescription = "Add new waypoint to trail ${trail.name}" },
-                    ) { Text("Add Waypoint") }
+                    ) { Text("Add") }
                     TextButton(
                         onClick = onAttachExisting,
                         modifier = Modifier.semantics { contentDescription = "Attach existing waypoint to trail ${trail.name}" },
                     ) { Text("Attach Existing") }
+                    TextButton(
+                        onClick = onExport,
+                        modifier = Modifier.semantics { contentDescription = "Export trail ${trail.name} as G P X" },
+                    ) { Text("Export GPX") }
                 }
 
-                if (waypoints.isEmpty()) {
-                    Text("No waypoints", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (namedWaypoints.isEmpty()) {
+                    Text(
+                        "No waypoints",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 } else {
-                    waypoints.forEachIndexed { idx, wp ->
+                    namedWaypoints.forEachIndexed { idx, wp ->
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
@@ -271,7 +312,7 @@ private fun TrailItem(
                             ) { Text("Up") }
                             TextButton(
                                 onClick = { onMoveDown(idx, wp.id) },
-                                enabled = idx < waypoints.size - 1,
+                                enabled = idx < namedWaypoints.size - 1,
                                 modifier = Modifier.semantics { contentDescription = "Move ${wp.name} down" },
                             ) { Text("Down") }
                             TextButton(
@@ -281,6 +322,54 @@ private fun TrailItem(
                         }
                     }
                 }
+
+                // ── Track points section ──────────────────────────────────────
+                if (trackPointCount > 0) {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                    TextButton(
+                        onClick = onToggleTrackPoints,
+                        modifier = Modifier.semantics {
+                            contentDescription = if (trackExpanded)
+                                "Hide $trackPointCount track points for ${trail.name}"
+                            else
+                                "Show $trackPointCount track points for ${trail.name}"
+                        },
+                    ) {
+                        Text(
+                            if (trackExpanded) "Hide $trackPointCount track points"
+                            else "$trackPointCount track points — tap to show",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
+                    if (trackExpanded) {
+                        // Live region: announces count to TalkBack when list first appears.
+                        Text(
+                            "$trackPointCount track points:",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.semantics {
+                                liveRegion = LiveRegionMode.Polite
+                                contentDescription = "$trackPointCount track points for ${trail.name}"
+                            },
+                        )
+                        trackPoints.forEachIndexed { idx, tp ->
+                            Text(
+                                tp.name,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .padding(start = 8.dp, top = 1.dp)
+                                    .semantics {
+                                        contentDescription = "Track point ${idx + 1}: ${tp.name}"
+                                    },
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
             }
         }
     }

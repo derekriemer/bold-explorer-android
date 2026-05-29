@@ -1,8 +1,8 @@
-# Bold Explorer — Android KMP Rewrite
+# Bold Explorer — Android
 
-Native Android rewrite of the Bold Explorer trail navigation app, built for and by a blind user. The original Vue 3 + Ionic Capacitor app hit hard limits around audio reliability, GPS battery efficiency, and background location stability — all of which require native APIs.
+Native Android trail navigation app, built for and by a blind user. The original Vue 3 + Ionic Capacitor app was a prototype; this repo is the production Android implementation.
 
-The app uses **Kotlin Multiplatform** so that pure logic (algorithms, state machines, models, settings migration) lives in a `:shared` module that can target iOS later without re-porting the math.
+Pure logic (algorithms, state machines, models, settings migration, repository interfaces) lives in `:shared`; Android APIs and UI live in `:app`.
 
 Original Vue/Capacitor source lives at `../bold-explorer/` (sibling directory). TypeScript files there are the reference for algorithm parity — port from them, don't modify them.
 
@@ -40,12 +40,12 @@ bold-explorer-android/
 
 | Concern | Choice | Reason |
 |---|---|---|
-| Database | SQLDelight 2.x | KMP-native; iOS driver available later |
+| Database | SQLDelight 2.x | Typed SQLite access and generated query APIs |
 | DI | Hilt (Android-only) | Compile-time verification; `:shared` has zero DI deps |
 | Audio tones | AudioTrack (PCM float, stereo) | Full pan control via `setStereoVolume()`; sub-10ms latency |
 | Speech | Android TextToSpeech | Offline, queue-based |
 | Reactive | Coroutines + StateFlow/SharedFlow | Replaces RxJS |
-| Settings | Proto DataStore | Typed, coroutine-native |
+| Settings | Preferences DataStore | Coroutine-native persistence with shared migration parsing |
 | GPS | FusedLocationProviderClient | Battery-efficient; ports gating logic from `locationStream.ts` |
 | Compass | SensorManager TYPE_ROTATION_VECTOR + GeomagneticField | No third-party plugin |
 
@@ -53,7 +53,8 @@ bold-explorer-android/
 
 ```bash
 bash setup.sh           # install JDK 17, Android SDK, ADB (WSL/Linux)
-make test-shared        # run shared module tests (Phase 1 gate)
+make test-shared        # run shared module tests
+make test               # run shared + app JVM tests
 make assemble           # build debug APK
 make install            # push to device (USB or ADB-over-Tailscale)
 adb logcat -s BoldExplorer
@@ -75,10 +76,19 @@ This app is built for a blind user. Every phase must meet these before it is con
 | Phase | Description | Status |
 |---|---|---|
 | 1 | Shared algorithms, models, tests | Done |
-| 2 | SQLDelight database + repository impls | Pending |
-| 3 | FusedLocation + SensorCompass + foreground service | Pending |
-| 4 | AudioTrack engine, TTS, AudioCueScheduler wiring | Pending |
-| 5 | Jetpack Compose UI, NavGraph, TalkBack pass | Pending |
-| 6 | DataStore settings, GPX export, polish | Pending |
+| 2 | SQLDelight database + repository impls | Done |
+| 3 | FusedLocation + SensorCompass + foreground service | Done |
+| 4 | AudioTrack engine, TTS, AudioCueScheduler wiring | Done |
+| 5 | Jetpack Compose UI, NavGraph, TalkBack pass | Done |
+| 6 | DataStore settings, GPX export, polish | Done |
 
-See [PLAN.md](PLAN.md) for full architecture detail, audio design, GPS pipeline, SQLDelight schema, and phase gates.
+## Release Readiness Checklist
+
+- `make test` passes.
+- `make assemble` builds a debug APK.
+- Physical device pass: GPS fix, compass heading, background tracking with screen off.
+- Headphones pass: accuracy beacon changes pitch, alignment pan points left/right correctly.
+- TTS pass: waypoint reached and trail complete announcements are spoken.
+- TalkBack pass: all icon-only controls have labels, live announcements are polite, touch targets are usable.
+
+See [PLAN.md](PLAN.md) for architecture detail, audio design, GPS pipeline, SQLDelight schema, and hardening notes.

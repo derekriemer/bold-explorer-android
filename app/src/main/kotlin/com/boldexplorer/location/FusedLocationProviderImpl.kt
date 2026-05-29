@@ -1,8 +1,11 @@
 package com.boldexplorer.location
 
 import android.annotation.SuppressLint
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Looper
+import androidx.core.content.ContextCompat
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.haversineDistanceMeters
 import com.boldexplorer.shared.model.LocationSample
@@ -16,6 +19,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -30,7 +34,7 @@ import javax.inject.Singleton
 
 @Singleton
 class FusedLocationProviderImpl @Inject constructor(
-    @ApplicationContext context: Context,
+    @ApplicationContext private val context: Context,
 ) {
     private val fusedClient = LocationServices.getFusedLocationProviderClient(context)
     private val _backgroundMode = MutableStateFlow(false)
@@ -44,6 +48,10 @@ class FusedLocationProviderImpl @Inject constructor(
     // The LocationForegroundService subscribes to keep GPS alive when screen is off.
     @SuppressLint("MissingPermission")
     val locationFlow: SharedFlow<LocationSample> = callbackFlow {
+        while (!hasLocationPermission()) {
+            delay(PERMISSION_RECHECK_MS)
+        }
+
         val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, MIN_INTERVAL_MS)
             .setMinUpdateDistanceMeters(0f)
             .setMaxUpdateDelayMillis(MIN_INTERVAL_MS * 2)
@@ -103,6 +111,12 @@ class FusedLocationProviderImpl @Inject constructor(
         _backgroundMode.value = enabled
     }
 
+    private fun hasLocationPermission(): Boolean =
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+
     companion object {
         /** Foreground GPS: require ≤15 m accuracy (same as Vue locationStream.ts default). */
         private const val FOREGROUND_ACCURACY_M = 15f
@@ -113,5 +127,6 @@ class FusedLocationProviderImpl @Inject constructor(
         private const val MIN_DISTANCE_M = 0.0
         /** Keep GPS alive for 5 s after last subscriber drops. */
         private const val STOP_TIMEOUT_MS = 5_000L
+        private const val PERMISSION_RECHECK_MS = 500L
     }
 }

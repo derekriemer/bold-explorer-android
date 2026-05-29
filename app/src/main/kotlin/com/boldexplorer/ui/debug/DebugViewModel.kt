@@ -1,15 +1,12 @@
 package com.boldexplorer.ui.debug
 
-import android.content.ContentValues
 import android.content.Context
-import android.os.Build
-import android.os.Environment
-import android.provider.MediaStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.boldexplorer.audio.AudioEngine
 import com.boldexplorer.compass.SensorCompassProvider
 import com.boldexplorer.gpx.GpxExporter
+import com.boldexplorer.gpx.GpxFileWriter
 import com.boldexplorer.location.FusedLocationProviderImpl
 import com.boldexplorer.shared.model.HeadingReading
 import com.boldexplorer.shared.model.LocationSample
@@ -57,30 +54,13 @@ class DebugViewModel @Inject constructor(
             }
             val gpx = GpxExporter.exportWaypoints(waypoints)
             val filename = "bold_explorer_waypoints.gpx"
-            runCatching {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    val values = ContentValues().apply {
-                        put(MediaStore.Downloads.DISPLAY_NAME, filename)
-                        put(MediaStore.Downloads.MIME_TYPE, "application/gpx+xml")
-                        put(MediaStore.Downloads.IS_PENDING, 1)
-                    }
-                    val resolver = context.contentResolver
-                    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                        ?: error("could not create file in Downloads")
-                    resolver.openOutputStream(uri)!!.use { it.write(gpx.toByteArray()) }
-                    values.clear()
-                    values.put(MediaStore.Downloads.IS_PENDING, 0)
-                    resolver.update(uri, values, null, null)
-                } else {
-                    @Suppress("DEPRECATION")
-                    val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                    dir.mkdirs()
-                    java.io.File(dir, filename).writeText(gpx)
-                }
+            GpxFileWriter.writeToDownloads(context, filename, gpx)
+                .onSuccess {
                 _exportStatus.value = "Exported ${waypoints.size} waypoints → Downloads/$filename"
-            }.onFailure { e ->
-                _exportStatus.value = "Export failed: ${e.message}"
-            }
+                }
+                .onFailure { e ->
+                    _exportStatus.value = "Export failed: ${e.message}"
+                }
         }
     }
 }

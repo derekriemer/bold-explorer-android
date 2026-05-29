@@ -68,7 +68,7 @@ class GeoMathTest {
     @Test
     fun deltaAngle_rightOfHeading() {
         // Heading 0 (north), bearing 90 (east) → should be 90 to the right
-        assertEquals(90.0, deltaAngle(0.0, 270.0), 0.001)
+        assertEquals(90.0, deltaAngle(0.0, 90.0), 0.001)
     }
 
     @Test

@@ -1,14 +1,30 @@
 package com.boldexplorer.db
 
+import app.cash.sqldelight.coroutines.asFlow
+import app.cash.sqldelight.coroutines.mapToList
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.Waypoint
 import com.boldexplorer.shared.model.Collection as ExplorerCollection
 import com.boldexplorer.shared.repository.CollectionRepository
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 
 class CollectionRepositoryImpl @Inject constructor(
     private val db: BoldExplorerDatabase,
 ) : CollectionRepository {
+
+    override fun observeAll(): Flow<List<ExplorerCollection>> =
+        db.collectionQueries.getAll().asFlow().mapToList(Dispatchers.IO).map { list -> list.map { it.toModel() } }
+
+    override fun observeWaypointsForCollection(collectionId: Long): Flow<List<Waypoint>> =
+        db.collectionWaypointQueries.waypointsForCollection(collectionId)
+            .asFlow().mapToList(Dispatchers.IO).map { list -> list.map { it.toModel() } }
+
+    override fun observeTrailsForCollection(collectionId: Long): Flow<List<Trail>> =
+        db.collectionTrailQueries.trailsForCollection(collectionId)
+            .asFlow().mapToList(Dispatchers.IO).map { list -> list.map { it.toModel() } }
 
     override suspend fun getAll(): List<ExplorerCollection> =
         db.collectionQueries.getAll().executeAsList().map { it.toModel() }

@@ -2,6 +2,8 @@ package com.boldexplorer.shared.audio
 
 import com.boldexplorer.shared.navigation.BearingComputer
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -23,43 +25,48 @@ class AudioCueScheduler(val config: AudioCueConfig = AudioCueConfig()) {
         accuracyM: StateFlow<Double?>,
         relativeDeg: StateFlow<Double?>,
         alignmentActive: StateFlow<Boolean>,
-    ) {
-        if (!config.enabled) return
+        audioCuesEnabled: StateFlow<Boolean>,
+    ): Job? {
+        if (!config.enabled) return null
 
-        // Accuracy beacon: emit on every non-null accuracy update.
-        // Suppressed while alignment is active — alignment pings are the only
-        // audio signal needed then; mixing in a centered beacon is confusing.
-        if (config.accuracyBeaconEnabled) {
-            scope.launch {
-                accuracyM.filterNotNull().collect { acc ->
-                    if (!alignmentActive.value) {
-                        _events.emit(AudioCueEvent.AccuracyBeacon(acc))
+        return scope.launch {
+            coroutineScope {
+                // Accuracy beacon: emit on every non-null accuracy update.
+                // Suppressed while alignment is active — alignment pings are the only
+                // audio signal needed then; mixing in a centered beacon is confusing.
+                if (config.accuracyBeaconEnabled) {
+                    launch {
+                        accuracyM.filterNotNull().collect { acc ->
+                            if (audioCuesEnabled.value && !alignmentActive.value) {
+                                _events.emit(AudioCueEvent.AccuracyBeacon(acc))
+                            }
+                        }
                     }
                 }
-            }
-        }
 
-        // Alignment ping loop at configurable Hz; slows to 1/3 Hz when aligned
-        if (config.alignmentPingEnabled) {
-            scope.launch {
-                while (true) {
-                    if (alignmentActive.value) {
-                        val deg = relativeDeg.value
-                        if (deg != null && abs(deg) <= 90.0) {
-                            val aligned = abs(deg) <= config.alignmentDeadbandDeg
-                            val pan = BearingComputer.computePan(deg)
-                            _events.emit(AudioCueEvent.AlignmentPing(pan, aligned))
-                            val intervalMs = if (aligned) {
-                                (1000.0 / (config.alignmentPingHz / 3.0)).toLong()
+                // Alignment ping loop at configurable Hz; slows to 1/3 Hz when aligned.
+                if (config.alignmentPingEnabled) {
+                    launch {
+                        while (true) {
+                            if (audioCuesEnabled.value && alignmentActive.value) {
+                                val deg = relativeDeg.value
+                                if (deg != null && abs(deg) <= 90.0) {
+                                    val aligned = abs(deg) <= config.alignmentDeadbandDeg
+                                    val pan = BearingComputer.computePan(deg)
+                                    _events.emit(AudioCueEvent.AlignmentPing(pan, aligned))
+                                    val intervalMs = if (aligned) {
+                                        (1000.0 / (config.alignmentPingHz / 3.0)).toLong()
+                                    } else {
+                                        (1000.0 / config.alignmentPingHz).toLong()
+                                    }
+                                    delay(intervalMs)
+                                } else {
+                                    delay(500)
+                                }
                             } else {
-                                (1000.0 / config.alignmentPingHz).toLong()
+                                delay(200)
                             }
-                            delay(intervalMs)
-                        } else {
-                            delay(500)
                         }
-                    } else {
-                        delay(200)
                     }
                 }
             }
@@ -67,14 +74,14 @@ class AudioCueScheduler(val config: AudioCueConfig = AudioCueConfig()) {
     }
 
     // Called by GpsViewModel when TrailFollower emits a WaypointReached event.
-    suspend fun emitWaypointApproach(name: String) {
-        if (config.waypointApproachEnabled) {
+    suspend fun emitWaypointApproach(name: String, audioCuesEnabled: Boolean) {
+        if (config.waypointApproachEnabled && audioCuesEnabled) {
             _events.emit(AudioCueEvent.WaypointApproach(name))
         }
     }
 
-    suspend fun emitTrailComplete() {
-        if (config.waypointApproachEnabled) {
+    suspend fun emitTrailComplete(audioCuesEnabled: Boolean) {
+        if (config.waypointApproachEnabled && audioCuesEnabled) {
             _events.emit(AudioCueEvent.TrailComplete)
         }
     }

@@ -3,6 +3,7 @@ package com.boldexplorer.ui.gps
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -48,7 +49,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.boldexplorer.shared.navigation.BearingComputer
 import com.boldexplorer.shared.navigation.TrailFollowerState
-import com.boldexplorer.shared.settings.Units
 
 @Composable
 fun GpsScreen(
@@ -61,9 +61,12 @@ fun GpsScreen(
     val accuracyM by viewModel.accuracyM.collectAsStateWithLifecycle()
     val waypoints by viewModel.waypoints.collectAsStateWithLifecycle()
     val trails by viewModel.trails.collectAsStateWithLifecycle()
+    val collections by viewModel.collections.collectAsStateWithLifecycle()
     val selectedWaypointId by viewModel.selectedWaypointId.collectAsStateWithLifecycle()
     val selectedTrailId by viewModel.selectedTrailId.collectAsStateWithLifecycle()
+    val selectedCollectionId by viewModel.selectedCollectionId.collectAsStateWithLifecycle()
     val trailWaypoints by viewModel.trailWaypoints.collectAsStateWithLifecycle()
+    val collectionWaypoints by viewModel.collectionWaypoints.collectAsStateWithLifecycle()
     val trailFollowState by viewModel.trailFollowState.collectAsStateWithLifecycle()
     val targetName by viewModel.targetName.collectAsStateWithLifecycle()
     val bearingDeg by viewModel.bearingDeg.collectAsStateWithLifecycle()
@@ -74,10 +77,21 @@ fun GpsScreen(
     val alignmentRelativeDeg by viewModel.alignmentRelativeDeg.collectAsStateWithLifecycle()
     val announcement by viewModel.announcement.collectAsStateWithLifecycle()
     val navigationActive by viewModel.navigationActive.collectAsStateWithLifecycle()
+    val autoRecording by viewModel.autoRecording.collectAsStateWithLifecycle()
+    val autoRecordCount by viewModel.autoRecordCount.collectAsStateWithLifecycle()
+    val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val compassModeLabel by viewModel.compassModeLabel.collectAsStateWithLifecycle()
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { /* permissions handled; user can retry navigation */ }
+    ) { grants ->
+        if (
+            grants[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+            grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        ) {
+            viewModel.startNavigation()
+        }
+    }
 
     var showAlignmentDialog by remember { mutableStateOf(false) }
     var alignmentInput by remember { mutableStateOf("") }
@@ -139,14 +153,21 @@ fun GpsScreen(
                     selectedId = selectedTrailId,
                     trailWaypoints = trailWaypoints,
                     followState = trailFollowState,
+                    autoRecording = autoRecording,
+                    autoRecordCount = autoRecordCount,
                     onSelectTrail = { viewModel.selectTrail(it) },
                     onStartFollow = { viewModel.startFollowTrail() },
+                    onStartFollowReversed = { viewModel.startFollowTrailReversed() },
                     onStopFollow = { viewModel.stopFollowTrail() },
+                    onRecordNewTrail = { viewModel.recordNewTrail() },
+                    onStartAutoRecord = { viewModel.startAutoRecord() },
+                    onStopAutoRecord = { viewModel.stopAutoRecord() },
                 )
-                GpsScope.COLLECTION -> Text(
-                    "Collections navigation coming in a future update.",
-                    modifier = Modifier.padding(16.dp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                GpsScope.COLLECTION -> CollectionScopePanel(
+                    collections = collections,
+                    selectedId = selectedCollectionId,
+                    collectionWaypoints = collectionWaypoints,
+                    onSelectCollection = { viewModel.selectCollection(it) },
                 )
             }
 
@@ -175,25 +196,26 @@ fun GpsScreen(
                     val headingDegText = headingDeg?.let { "${"%.0f".format(it)}°" } ?: "—"
                     TelemetryRow(
                         label = "Heading",
-                        value = "$headingText ($headingDegText)",
-                        contentDesc = "Heading: $headingText $headingDegText",
+                        value = "$headingText ($headingDegText) · $compassModeLabel",
+                        contentDesc = "Heading: $headingText $headingDegText, $compassModeLabel",
                     )
 
-                    val bearingText = bearingDeg?.let {
-                        "${BearingComputer.toCardinal(it)} (${"%.0f".format(it)}°)"
-                    } ?: "—"
                     val bearingLabel = targetName?.let { "Bearing to $it" } ?: "Bearing"
-                    TelemetryRow(label = bearingLabel, value = bearingText, contentDesc = "$bearingLabel: $bearingText")
-
-                    val clockText = relativeDeg?.let { BearingComputer.toClock(it) } ?: "—"
-                    TelemetryRow(label = "Direction", value = clockText, contentDesc = "Direction to target: $clockText")
+                    val directionText = when (settings.bearingDisplayMode) {
+                        com.boldexplorer.shared.settings.BearingDisplayMode.RELATIVE,
+                        com.boldexplorer.shared.settings.BearingDisplayMode.CLOCK ->
+                            relativeDeg?.let { BearingComputer.toClock(it) } ?: "—"
+                        com.boldexplorer.shared.settings.BearingDisplayMode.TRUE_NORTH ->
+                            bearingDeg?.let { "${BearingComputer.toCardinal(it)} (${"%.0f".format(it)}°)" } ?: "—"
+                    }
+                    TelemetryRow(label = bearingLabel, value = directionText, contentDesc = "$bearingLabel: $directionText")
 
                     val distText = distanceM?.let {
-                        BearingComputer.formatDistance(it, Units.IMPERIAL)
+                        BearingComputer.formatDistance(it, settings.units)
                     } ?: "—"
                     TelemetryRow(label = "Distance", value = distText, contentDesc = "Distance to target: $distText")
 
-                    val accText = accuracyM?.let { "${"%.0f".format(it)} m" } ?: "—"
+                    val accText = accuracyM?.let { BearingComputer.formatDistance(it, settings.units) } ?: "—"
                     TelemetryRow(label = "GPS Accuracy", value = accText, contentDesc = "GPS accuracy: $accText")
 
                     location?.let { loc ->
@@ -266,7 +288,7 @@ fun GpsScreen(
                         permissionLauncher.launch(
                             arrayOf(
                                 Manifest.permission.ACCESS_FINE_LOCATION,
-                                Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+                                Manifest.permission.ACCESS_COARSE_LOCATION,
                             )
                         )
                     } else if (navigationActive) {
@@ -386,14 +408,84 @@ private fun WaypointScopePanel(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+private fun CollectionScopePanel(
+    collections: List<com.boldexplorer.shared.model.Collection>,
+    selectedId: Long?,
+    collectionWaypoints: List<com.boldexplorer.shared.model.Waypoint>,
+    onSelectCollection: (Long) -> Unit,
+) {
+    val selectedName = collections.find { it.id == selectedId }?.name ?: "Select collection"
+    var expanded by remember { mutableStateOf(false) }
+
+    Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+        ExposedDropdownMenuBox(
+            expanded = expanded,
+            onExpandedChange = { expanded = it },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            OutlinedTextField(
+                value = selectedName,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Collection") },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                modifier = Modifier
+                    .menuAnchor(androidx.compose.material3.MenuAnchorType.PrimaryNotEditable)
+                    .fillMaxWidth()
+                    .semantics { contentDescription = "Selected collection: $selectedName" },
+            )
+            ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                if (collections.isEmpty()) {
+                    DropdownMenuItem(
+                        text = { Text("No collections yet") },
+                        onClick = { expanded = false },
+                    )
+                } else {
+                    collections.forEach { collection ->
+                        DropdownMenuItem(
+                            text = { Text(collection.name) },
+                            onClick = { onSelectCollection(collection.id); expanded = false },
+                            modifier = Modifier.semantics { contentDescription = "Select collection ${collection.name}" },
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        val statusText = when {
+            selectedId == null -> "No collection selected"
+            collectionWaypoints.isEmpty() -> "Collection has no waypoints"
+            else -> "Target: ${collectionWaypoints.first().name}"
+        }
+        Text(
+            statusText,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.semantics {
+                liveRegion = LiveRegionMode.Polite
+                contentDescription = "Collection status: $statusText"
+            },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 private fun TrailScopePanel(
     trails: List<com.boldexplorer.shared.model.Trail>,
     selectedId: Long?,
     trailWaypoints: List<com.boldexplorer.shared.model.Waypoint>,
     followState: TrailFollowerState,
+    autoRecording: Boolean,
+    autoRecordCount: Int,
     onSelectTrail: (Long) -> Unit,
     onStartFollow: () -> Unit,
+    onStartFollowReversed: () -> Unit,
     onStopFollow: () -> Unit,
+    onRecordNewTrail: () -> Unit,
+    onStartAutoRecord: () -> Unit,
+    onStopAutoRecord: () -> Unit,
 ) {
     val selectedName = trails.find { it.id == selectedId }?.name ?: "Select trail"
     var expanded by remember { mutableStateOf(false) }
@@ -456,25 +548,74 @@ private fun TrailScopePanel(
 
         Spacer(Modifier.height(4.dp))
 
+        // Record new trail button (always shown)
+        Button(
+            onClick = onRecordNewTrail,
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics { contentDescription = "Create a new trail with current timestamp" },
+        ) { Text("Record New Trail") }
+
+        Spacer(Modifier.height(4.dp))
+
+        // Auto-record controls (only when a trail is selected)
+        if (selectedId != null) {
+            if (autoRecording) {
+                val statusText = "Auto-recording: $autoRecordCount points captured"
+                Text(
+                    statusText,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.semantics { contentDescription = statusText },
+                )
+                Button(
+                    onClick = onStopAutoRecord,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics { contentDescription = "Stop auto-recording GPS track" },
+                ) { Text("Stop Auto-Record") }
+            } else {
+                Button(
+                    onClick = onStartAutoRecord,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics { contentDescription = "Start auto-recording GPS track points every 10 meters" },
+                ) { Text("Start Auto-Record") }
+            }
+        }
+
+        Spacer(Modifier.height(4.dp))
+
+        val hasTrail = selectedId != null && trailWaypoints.isNotEmpty()
         if (followState is TrailFollowerState.Active) {
             Button(
                 onClick = onStopFollow,
-                enabled = selectedId != null && trailWaypoints.isNotEmpty(),
                 modifier = Modifier
                     .fillMaxWidth()
                     .semantics { contentDescription = "Stop trail navigation" },
-            ) { Text("Stop Trail Navigation") }
+            ) { Text("Stop Navigation") }
         } else {
-            Button(
-                onClick = onStartFollow,
-                enabled = selectedId != null && trailWaypoints.isNotEmpty(),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .semantics {
-                        contentDescription = if (selectedId == null) "Select a trail first"
-                        else "Start trail navigation"
-                    },
-            ) { Text("Start Trail Navigation") }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(
+                    onClick = onStartFollow,
+                    enabled = hasTrail,
+                    modifier = Modifier
+                        .weight(1f)
+                        .semantics {
+                            contentDescription = if (!hasTrail) "Select a trail first"
+                            else "Follow trail forward from nearest point"
+                        },
+                ) { Text("Follow") }
+                Button(
+                    onClick = onStartFollowReversed,
+                    enabled = hasTrail,
+                    modifier = Modifier
+                        .weight(1f)
+                        .semantics {
+                            contentDescription = if (!hasTrail) "Select a trail first"
+                            else "Follow trail in reverse from nearest point"
+                        },
+                ) { Text("Reverse") }
+            }
         }
     }
 }

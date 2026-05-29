@@ -12,10 +12,10 @@ test-shared:
 test-shared-watch:
 	$(GW) :shared:jvmTest --continuous
 
-# ── Phase 2 (coming) ───────────────────────────────────────────────────────
+# ── Database tests ─────────────────────────────────────────────────────────
 .PHONY: test-db
 test-db:
-	$(GW) :app:testDebugUnitTest --tests "*.repository.*"
+	$(GW) :app:testDebugUnitTest --tests "com.boldexplorer.db.*"
 
 # ── Full suite ─────────────────────────────────────────────────────────────
 .PHONY: test

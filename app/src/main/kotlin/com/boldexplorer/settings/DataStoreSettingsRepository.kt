@@ -18,7 +18,9 @@ import com.boldexplorer.shared.settings.UnitsPrefSpec
 import com.boldexplorer.shared.settings.migrateStoredValue
 import com.boldexplorer.shared.settings.serializeVersioned
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -35,8 +37,13 @@ class DataStoreSettingsRepository @Inject constructor(
     @ApplicationContext private val context: Context,
 ) : SettingsRepository {
 
-    override suspend fun load(): AppSettings {
-        val prefs = context.settingsDataStore.data.first()
+    override fun observeSettings(): Flow<AppSettings> =
+        context.settingsDataStore.data.map { prefs -> prefsToSettings(prefs) }
+
+    override suspend fun load(): AppSettings =
+        prefsToSettings(context.settingsDataStore.data.first())
+
+    private fun prefsToSettings(prefs: Preferences): AppSettings {
         val units = migrateStoredValue(UnitsPrefSpec, prefs[UNITS_KEY])
         val compass = migrateStoredValue(CompassPrefSpec, prefs[COMPASS_KEY])
         val bearing = migrateStoredValue(BearingDisplayPrefSpec, prefs[BEARING_KEY])

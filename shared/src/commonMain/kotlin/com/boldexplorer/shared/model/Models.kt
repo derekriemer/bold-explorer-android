@@ -8,7 +8,13 @@ data class Waypoint(
     val elevM: Double?,
     val description: String?,
     val createdAt: Long,
-)
+    val kind: String = KIND_WAYPOINT,
+) {
+    companion object {
+        const val KIND_WAYPOINT = "waypoint"
+        const val KIND_TRACK_POINT = "track_point"
+    }
+}
 
 data class Trail(
     val id: Long,

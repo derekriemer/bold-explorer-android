@@ -7,7 +7,7 @@ The current Vue 3 + Ionic Capacitor implementation hit fundamental walls:
 - **GPS**: Capacitor wraps `navigator.geolocation`, which is battery-hungry and doesn't expose raw FusedLocationProvider quality fixes
 - **Battery**: Background location via `@capacitor-community/background-geolocation` is fragile on Android
 
-This rewrites the app as a native Android app using Kotlin, with a Kotlin Multiplatform `:shared` module holding pure logic (algorithms, state machines, models) so iOS is viable later without re-porting the math.
+This rewrites the app as a native Android app using Kotlin. The `:shared` module holds pure logic (algorithms, state machines, models, repository interfaces) so Android code stays focused on platform APIs and UI.
 
 Original Vue/Capacitor source lives at `../bold-explorer/` (sibling directory). The TypeScript
 source files are the reference for algorithm parity — do not modify them; port from them.
@@ -50,7 +50,7 @@ bold-explorer-kmp/
 
 | Concern | Choice | Reason |
 |---|---|---|
-| Database | SQLDelight 2.x | KMP-native; iOS driver available later; no SQLite trig needed |
+| Database | SQLDelight 2.x | Typed SQLite access; no SQLite trig needed |
 | DI | Hilt (Android-only) | Compile-time verification; `@HiltViewModel`; `:shared` has zero DI deps |
 | Audio tones | AudioTrack (PCM float, stereo) | Full pan control via `setStereoVolume()`; sub-10ms for 1Hz ping |
 | Speech | Android TextToSpeech | Offline, queue-based |
@@ -78,8 +78,7 @@ Port of `../bold-explorer/src/composables/useFollowTrail.ts`:
 
 ### `audio/AudioCueScheduler.kt`
 Pure coroutine — decides WHAT to emit, WHEN. No playback.
-Android `AudioCuePlayer` (Phase 4) consumes the `SharedFlow<AudioCueEvent>`.
-iOS can plug in its own player without touching this class.
+Android `AudioCuePlayer` consumes the `SharedFlow<AudioCueEvent>` and owns the active scheduler job.
 
 ### `settings/SettingsMigration.kt`
 Port of the `PrefSpec / getOrInitWithMigrate` pattern from `../bold-explorer/src/stores/usePrefs.ts`.
@@ -235,6 +234,12 @@ make assemble                 # build debug APK
 make install                  # push to device (USB or ADB-over-Tailscale)
 adb logcat -s BoldExplorer    # filter app logs
 ```
+
+## Hardening Notes
+
+- Prototype data migration from the old Vue/Capacitor app is not required.
+- Device validation remains required for GPS, compass, background service, audio pan, TTS, and TalkBack behavior.
+- `make test` is the local JVM gate; `make assemble` is the build gate before installing to a device.
 
 ---
 
