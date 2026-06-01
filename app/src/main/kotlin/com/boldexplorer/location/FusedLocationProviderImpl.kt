@@ -8,6 +8,7 @@ import android.os.Looper
 import androidx.core.content.ContextCompat
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.haversineDistanceMeters
+import com.boldexplorer.shared.location.LocationProvider
 import com.boldexplorer.shared.model.LocationSample
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
@@ -35,7 +36,7 @@ import javax.inject.Singleton
 @Singleton
 class FusedLocationProviderImpl @Inject constructor(
     @ApplicationContext private val context: Context,
-) {
+) : LocationProvider {
     private val fusedClient = LocationServices.getFusedLocationProviderClient(context)
     private val _backgroundMode = MutableStateFlow(false)
 
@@ -47,13 +48,15 @@ class FusedLocationProviderImpl @Inject constructor(
     // WhileSubscribed: upstream GPS runs only while there is at least one collector.
     // The LocationForegroundService subscribes to keep GPS alive when screen is off.
     @SuppressLint("MissingPermission")
-    val locationFlow: SharedFlow<LocationSample> = callbackFlow {
+    override val locationFlow: SharedFlow<LocationSample> = callbackFlow {
         while (!hasLocationPermission()) {
             delay(PERMISSION_RECHECK_MS)
         }
 
         val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, MIN_INTERVAL_MS)
             .setMinUpdateDistanceMeters(0f)
+            .setWaitForAccurateLocation(true)
+            .setMinUpdateIntervalMillis(500L)
             .setMaxUpdateDelayMillis(MIN_INTERVAL_MS * 2)
             .build()
 
@@ -118,9 +121,9 @@ class FusedLocationProviderImpl @Inject constructor(
             PackageManager.PERMISSION_GRANTED
 
     companion object {
-        /** Foreground GPS: require ≤15 m accuracy (same as Vue locationStream.ts default). */
-        private const val FOREGROUND_ACCURACY_M = 15f
-        /** Background GPS: relax to 50 m so we still emit best-effort fixes. */
+        /** Foreground GPS: require ≤10 m accuracy (same as Vue locationStream.ts default). */
+        private const val FOREGROUND_ACCURACY_M = 10f
+        /** Background GPS: relax to 50 m — device GPS accuracy degrades significantly when backgrounded. */
         private const val BACKGROUND_ACCURACY_M = 50f
         private const val MIN_INTERVAL_MS = 1_000L
         /** No distance gate by default; interval gate is sufficient. */

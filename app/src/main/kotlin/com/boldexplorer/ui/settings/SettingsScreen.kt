@@ -96,7 +96,7 @@ fun SettingsScreen(
                 modifier = Modifier.weight(1f),
             )
             RadioOption(
-                label = "Absolute",
+                label = "Compass",
                 selected = settings.bearingDisplayMode == BearingDisplayMode.TRUE_NORTH,
                 onClick = { viewModel.setBearingMode(BearingDisplayMode.TRUE_NORTH) },
                 modifier = Modifier.weight(1f),

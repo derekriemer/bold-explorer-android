@@ -36,6 +36,12 @@ class AudioEngine @Inject constructor() {
         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
         .build()
 
+    fun playDirectionalBeacon(pan: Float, pitchHz: Double) {
+        val left = (1f - pan).coerceIn(0f, 1f)
+        val right = (1f + pan).coerceIn(0f, 1f)
+        scope.launch { playTone(pitchHz, durationMs = 100, leftVol = left, rightVol = right) }
+    }
+
     fun playAccuracyBeacon(accuracyM: Double) {
         val freq = mapAccuracyToFrequency(accuracyM)
         scope.launch { playTone(freq, durationMs = 100, leftVol = 0.7f, rightVol = 0.7f) }

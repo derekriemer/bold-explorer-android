@@ -9,8 +9,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.boldexplorer.audio.AudioCuePlayer
 import com.boldexplorer.compass.SensorCompassProvider
-import com.boldexplorer.location.FusedLocationProviderImpl
 import com.boldexplorer.location.LocationForegroundService
+import com.boldexplorer.shared.location.LocationProvider
 import com.boldexplorer.shared.audio.AudioCueScheduler
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.deltaAngle
@@ -18,6 +18,10 @@ import com.boldexplorer.shared.geo.haversineDistanceMeters
 import com.boldexplorer.shared.geo.initialBearingDeg
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.Waypoint
+import com.boldexplorer.shared.navigation.CollectionExplorer
+import com.boldexplorer.shared.navigation.CollectionExplorerEvent
+import com.boldexplorer.shared.navigation.CollectionExplorerState
+import com.boldexplorer.shared.navigation.CollectionPoint
 import com.boldexplorer.shared.navigation.TrailFollower
 import com.boldexplorer.shared.navigation.TrailFollowerEvent
 import com.boldexplorer.shared.navigation.TrailFollowerState
@@ -62,7 +66,7 @@ private data class TargetInputs(
 @HiltViewModel
 class GpsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val locationProvider: FusedLocationProviderImpl,
+    private val locationProvider: LocationProvider,
     private val compassProvider: SensorCompassProvider,
     private val waypointRepo: WaypointRepository,
     private val trailRepo: TrailRepository,
@@ -86,6 +90,7 @@ class GpsViewModel @Inject constructor(
     val location = locationProvider.locationFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
 
+    // Compass heading — always driven by the sensor, never GPS course.
     val headingDeg: StateFlow<Double?> = combine(
         compassProvider.headingFlow, settings,
     ) { reading, s ->
@@ -104,6 +109,26 @@ class GpsViewModel @Inject constructor(
             com.boldexplorer.shared.settings.CompassMode.MAGNETIC -> "Magnetic"
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), "Magnetic")
+
+    // Heading used for bearing-to-waypoint and clock/relative display.
+    // Prefers GPS course-over-ground when moving (reliable in a car, immune to magnetic
+    // interference), falls back to compass when stationary. GPS bearing is always true-north,
+    // which matches initialBearingDeg(); compass true-north is used when available for the
+    // same reason.
+    private val navHeadingDeg: StateFlow<Double?> = combine(
+        compassProvider.headingFlow, location, settings,
+    ) { reading, loc, s ->
+        val gpsCourse = loc?.heading
+        val speed = loc?.speed ?: 0.0
+        if (gpsCourse != null && speed >= GPS_HEADING_MIN_SPEED_MS) {
+            gpsCourse
+        } else {
+            when (s.compassMode) {
+                com.boldexplorer.shared.settings.CompassMode.TRUE -> reading.trueNorth ?: reading.magnetic
+                com.boldexplorer.shared.settings.CompassMode.MAGNETIC -> reading.magnetic
+            }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
 
     val accuracyM: StateFlow<Double?> = location
         .map { it?.accuracy }
@@ -150,10 +175,22 @@ class GpsViewModel @Inject constructor(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
+    private val collectionTrails: StateFlow<List<Trail>> = _selectedCollectionId
+        .flatMapLatest { id ->
+            if (id == null) flowOf(emptyList())
+            else collectionRepo.observeTrailsForCollection(id)
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
+
     // ── Trail follower ────────────────────────────────────────────────────────────
 
     private val trailFollower = TrailFollower()
     val trailFollowState: StateFlow<TrailFollowerState> = trailFollower.state
+
+    // ── Collection explorer ───────────────────────────────────────────────────────
+
+    private val collectionExplorer = CollectionExplorer()
+    val collectionExplorerState: StateFlow<CollectionExplorerState> = collectionExplorer.state
 
     // ── Derived navigation values ─────────────────────────────────────────────────
 
@@ -164,26 +201,33 @@ class GpsViewModel @Inject constructor(
     }
 
     val targetCoord: StateFlow<LatLng?> = combine(
-        targetInputs, trailFollowState,
-    ) { inputs, fs ->
+        targetInputs, trailFollowState, collectionExplorer.state,
+    ) { inputs, fs, explorer ->
         when (inputs.scope) {
             GpsScope.WAYPOINT -> inputs.waypoints.find { it.id == inputs.selectedWaypointId }?.let { LatLng(it.lat, it.lon) }
             GpsScope.TRAIL -> (fs as? TrailFollowerState.Active)
                 ?.waypoints?.getOrNull(fs.currentIndex)?.let { LatLng(it.lat, it.lon) }
                 ?: inputs.trailWaypoints.firstOrNull()?.let { LatLng(it.lat, it.lon) }
-            GpsScope.COLLECTION -> inputs.collectionWaypoints.firstOrNull()?.let { LatLng(it.lat, it.lon) }
+            GpsScope.COLLECTION -> (explorer as? CollectionExplorerState.Active)
+                ?.target?.waypoint?.let { LatLng(it.lat, it.lon) }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
 
     val targetName: StateFlow<String?> = combine(
-        targetInputs, trailFollowState,
-    ) { inputs, fs ->
+        targetInputs, trailFollowState, collectionExplorer.state,
+    ) { inputs, fs, explorer ->
         when (inputs.scope) {
             GpsScope.WAYPOINT -> inputs.waypoints.find { it.id == inputs.selectedWaypointId }?.name
             GpsScope.TRAIL -> (fs as? TrailFollowerState.Active)
                 ?.waypoints?.getOrNull(fs.currentIndex)?.name
                 ?: inputs.trailWaypoints.firstOrNull()?.name
-            GpsScope.COLLECTION -> inputs.collectionWaypoints.firstOrNull()?.name
+            GpsScope.COLLECTION -> (explorer as? CollectionExplorerState.Active)
+                ?.target?.let { p ->
+                    when (p) {
+                        is CollectionPoint.Standalone -> p.waypoint.name
+                        is CollectionPoint.TrailEnd -> "${p.trail.name} (${if (p.isStart) "start" else "end"})"
+                    }
+                }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
 
@@ -197,7 +241,10 @@ class GpsViewModel @Inject constructor(
         else haversineDistanceMeters(LatLng(loc.lat, loc.lon), target)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
 
-    val relativeDeg: StateFlow<Double?> = combine(headingDeg, bearingDeg) { heading, bearing ->
+    // Uses navHeadingDeg (GPS course when moving, compass when still) so clock/relative display
+    // stays accurate in a car. Absolute (TRUE_NORTH) mode ignores this entirely — it just shows
+    // bearingDeg directly from haversine math, no heading involved.
+    val relativeDeg: StateFlow<Double?> = combine(navHeadingDeg, bearingDeg) { heading, bearing ->
         if (heading == null || bearing == null) null
         else deltaAngle(heading, bearing)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
@@ -212,7 +259,7 @@ class GpsViewModel @Inject constructor(
 
     // When alignment is active, audio uses the alignment bearing; otherwise the waypoint bearing.
     val audioRelativeDeg: StateFlow<Double?> = combine(
-        headingDeg, _alignmentBearingDeg, _alignmentActive, relativeDeg,
+        navHeadingDeg, _alignmentBearingDeg, _alignmentActive, relativeDeg,
     ) { heading, alignBearing, alignActive, wpRelative ->
         if (alignActive && heading != null && alignBearing != null)
             deltaAngle(heading, alignBearing)
@@ -222,7 +269,7 @@ class GpsViewModel @Inject constructor(
 
     // Signed delta between current heading and alignment target.
     val alignmentRelativeDeg: StateFlow<Double?> = combine(
-        headingDeg, _alignmentBearingDeg, _alignmentActive,
+        navHeadingDeg, _alignmentBearingDeg, _alignmentActive,
     ) { heading, alignBearing, alignActive ->
         if (alignActive && heading != null && alignBearing != null)
             deltaAngle(heading, alignBearing)
@@ -262,7 +309,26 @@ class GpsViewModel @Inject constructor(
                 compassProvider.setLocation(s.lat, s.lon, s.altitude ?: 0.0)
             }
         }
-        // Drive TrailFollower on every GPS fix; surface events as announcements + audio.
+        // Reload collection explorer whenever the selected collection's waypoints or trails change.
+        viewModelScope.launch {
+            combine(collectionWaypoints, collectionTrails) { wps, trails -> wps to trails }
+                .collect { (wps, trails) ->
+                    if (_scope.value != GpsScope.COLLECTION || _selectedCollectionId.value == null) return@collect
+                    val standalones = wps.map { CollectionPoint.Standalone(it) }
+                    val trailEnds = trails.flatMap { trail ->
+                        val ordered = trailRepo.waypointsForTrail(trail.id)
+                        listOfNotNull(
+                            ordered.firstOrNull()?.let { CollectionPoint.TrailEnd(it, trail, isStart = true) },
+                            ordered.lastOrNull()?.takeIf { ordered.size > 1 }
+                                ?.let { CollectionPoint.TrailEnd(it, trail, isStart = false) },
+                        )
+                    }
+                    val currentExploreMode = (collectionExplorer.state.value as? CollectionExplorerState.Active)
+                        ?.exploreMode ?: false
+                    collectionExplorer.load(standalones + trailEnds, currentExploreMode)
+                }
+        }
+        // Drive TrailFollower and CollectionExplorer on every GPS fix; surface events as announcements + audio.
         // Also handle auto-recording.
         viewModelScope.launch {
             location.filterNotNull().collect { sample ->
@@ -294,6 +360,35 @@ class GpsViewModel @Inject constructor(
                     null -> Unit
                 }
 
+                // Drive CollectionExplorer when in collection scope.
+                if (_scope.value == GpsScope.COLLECTION) {
+                    when (val event = collectionExplorer.onLocationUpdate(LatLng(sample.lat, sample.lon))) {
+                        is CollectionExplorerEvent.PointReached -> {
+                            val name = when (val p = event.reached) {
+                                is CollectionPoint.Standalone -> p.waypoint.name
+                                is CollectionPoint.TrailEnd -> "${p.trail.name} (${if (p.isStart) "start" else "end"})"
+                            }
+                            val nextName = event.next?.let { p ->
+                                when (p) {
+                                    is CollectionPoint.Standalone -> p.waypoint.name
+                                    is CollectionPoint.TrailEnd -> "${p.trail.name} (${if (p.isStart) "start" else "end"})"
+                                }
+                            }
+                            val text = buildString {
+                                append("Reached $name.")
+                                if (nextName != null) append(" Next: $nextName.")
+                                else append(" No more unvisited points.")
+                            }
+                            _announcement.value = text
+                            launch { audioScheduler.emitWaypointApproach(text, audioCuesEnabled.value) }
+                        }
+                        is CollectionExplorerEvent.NearTrailEnd -> {
+                            // UI reacts to state change; no audio needed here.
+                        }
+                        null -> Unit
+                    }
+                }
+
                 // Auto-record: attach a GPS point to the active trail every AUTO_RECORD_DISTANCE_M.
                 if (_autoRecording.value) {
                     val trailId = _selectedTrailId.value ?: return@collect
@@ -322,7 +417,32 @@ class GpsViewModel @Inject constructor(
 
     fun selectTrail(id: Long) { _selectedTrailId.value = id }
 
-    fun selectCollection(id: Long) { _selectedCollectionId.value = id }
+    fun selectCollection(id: Long) {
+        _selectedCollectionId.value = id
+        collectionExplorer.stop() // will reload via collectionWaypoints/collectionTrails combine
+    }
+
+    fun selectCollectionPoint(point: CollectionPoint) { collectionExplorer.selectTarget(point) }
+    fun clearCollectionTarget() { collectionExplorer.clearTarget() }
+    fun clearCollectionVisited() { collectionExplorer.clearVisited() }
+    fun setCollectionExploreMode(enabled: Boolean) { collectionExplorer.setExploreMode(enabled) }
+    fun startFollowTrailFromCollectionEnd(trailEnd: CollectionPoint.TrailEnd) {
+        val reversed = !trailEnd.isStart
+        viewModelScope.launch {
+            val wps = trailRepo.waypointsForTrail(trailEnd.trail.id)
+            val ordered = if (reversed) wps.reversed() else wps
+            if (ordered.isEmpty()) return@launch
+            val points = ordered.map { TrailPoint(it.id, it.name, it.lat, it.lon, it.kind) }
+            val loc = location.value?.let { LatLng(it.lat, it.lon) }
+            _selectedTrailId.value = trailEnd.trail.id
+            setScope(GpsScope.TRAIL)
+            if (loc != null) trailFollower.startNearest(points, loc) else trailFollower.start(points)
+            _announcement.value = buildTrailStartAnnouncement(
+                "Following ${trailEnd.trail.name}${if (reversed) " in reverse" else ""}",
+                points, loc,
+            )
+        }
+    }
 
     // ── Trail following ───────────────────────────────────────────────────────────
 
@@ -488,24 +608,19 @@ class GpsViewModel @Inject constructor(
         _lastAutoRecordLoc = location.value?.let { LatLng(it.lat, it.lon) }
         _autoRecordCount.value = 0
         _autoRecording.value = true
+        startLocationService()  // keep process alive when screen is off
         _announcement.value = "Auto-recording started. Move to capture track points."
     }
 
     fun stopAutoRecord() {
         _autoRecording.value = false
         _lastAutoRecordLoc = null
+        if (!_navigationActive.value) stopLocationService()  // don't stop if also navigating
         _announcement.value = "Auto-recording stopped. ${_autoRecordCount.value} points recorded."
     }
 
-    private fun directionHint(relativeDeg: Double): String = when {
-        kotlin.math.abs(relativeDeg) < 20  -> "straight ahead"
-        relativeDeg in   20.0.. 60.0       -> "slight right"
-        relativeDeg in   60.0..120.0       -> "right"
-        relativeDeg in  120.0..180.0       -> "sharp right"
-        relativeDeg in  -60.0..-20.0       -> "slight left"
-        relativeDeg in -120.0..-60.0       -> "left"
-        else                               -> "sharp left"
-    }
+    private fun directionHint(relativeDeg: Double): String =
+        com.boldexplorer.shared.navigation.BearingComputer.toRelative(relativeDeg)
 
     private fun formatDistanceM(meters: Double, units: Units): String =
         if (units == Units.METRIC) {
@@ -524,5 +639,8 @@ class GpsViewModel @Inject constructor(
 
     companion object {
         private const val AUTO_RECORD_DISTANCE_M = 10.0
+        // Minimum speed (m/s) before GPS course-over-ground is trusted over the compass.
+        // ~1.5 m/s ≈ 3.4 mph — brisk walking / slow driving.
+        private const val GPS_HEADING_MIN_SPEED_MS = 1.5
     }
 }

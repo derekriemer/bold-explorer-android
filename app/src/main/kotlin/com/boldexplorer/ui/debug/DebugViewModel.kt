@@ -8,6 +8,7 @@ import com.boldexplorer.compass.SensorCompassProvider
 import com.boldexplorer.gpx.GpxExporter
 import com.boldexplorer.gpx.GpxFileWriter
 import com.boldexplorer.location.FusedLocationProviderImpl
+import com.boldexplorer.shared.audio.AudioCueScheduler
 import com.boldexplorer.shared.model.HeadingReading
 import com.boldexplorer.shared.model.LocationSample
 import com.boldexplorer.shared.repository.WaypointRepository
@@ -29,6 +30,7 @@ class DebugViewModel @Inject constructor(
     private val compassProvider: SensorCompassProvider,
     private val waypointRepo: WaypointRepository,
     private val audioEngine: AudioEngine,
+    private val scheduler: AudioCueScheduler,
 ) : ViewModel() {
 
     val location: StateFlow<LocationSample?> = locationProvider.locationFlow
@@ -40,6 +42,12 @@ class DebugViewModel @Inject constructor(
 
     private val _exportStatus = MutableStateFlow<String?>(null)
     val exportStatus: StateFlow<String?> = _exportStatus.asStateFlow()
+
+    val accuracyBeaconEnabled: StateFlow<Boolean> = scheduler.accuracyBeaconEnabled
+
+    fun setAccuracyBeaconEnabled(enabled: Boolean) {
+        scheduler.accuracyBeaconEnabled.value = enabled
+    }
 
     fun testAccuracyBeacon() {
         audioEngine.playAccuracyBeacon(location.value?.accuracy ?: 15.0)

@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -40,6 +41,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -48,6 +50,8 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.boldexplorer.shared.navigation.BearingComputer
+import com.boldexplorer.shared.navigation.CollectionExplorerState
+import com.boldexplorer.shared.navigation.CollectionPoint
 import com.boldexplorer.shared.navigation.TrailFollowerState
 
 @Composable
@@ -66,8 +70,8 @@ fun GpsScreen(
     val selectedTrailId by viewModel.selectedTrailId.collectAsStateWithLifecycle()
     val selectedCollectionId by viewModel.selectedCollectionId.collectAsStateWithLifecycle()
     val trailWaypoints by viewModel.trailWaypoints.collectAsStateWithLifecycle()
-    val collectionWaypoints by viewModel.collectionWaypoints.collectAsStateWithLifecycle()
     val trailFollowState by viewModel.trailFollowState.collectAsStateWithLifecycle()
+    val collectionExplorerState by viewModel.collectionExplorerState.collectAsStateWithLifecycle()
     val targetName by viewModel.targetName.collectAsStateWithLifecycle()
     val bearingDeg by viewModel.bearingDeg.collectAsStateWithLifecycle()
     val distanceM by viewModel.distanceM.collectAsStateWithLifecycle()
@@ -166,8 +170,14 @@ fun GpsScreen(
                 GpsScope.COLLECTION -> CollectionScopePanel(
                     collections = collections,
                     selectedId = selectedCollectionId,
-                    collectionWaypoints = collectionWaypoints,
+                    explorerState = collectionExplorerState,
+                    settings = settings,
                     onSelectCollection = { viewModel.selectCollection(it) },
+                    onSelectPoint = { viewModel.selectCollectionPoint(it) },
+                    onClearTarget = { viewModel.clearCollectionTarget() },
+                    onClearVisited = { viewModel.clearCollectionVisited() },
+                    onSetExploreMode = { viewModel.setCollectionExploreMode(it) },
+                    onFollowTrailEnd = { viewModel.startFollowTrailFromCollectionEnd(it) },
                 )
             }
 
@@ -202,7 +212,8 @@ fun GpsScreen(
 
                     val bearingLabel = targetName?.let { "Bearing to $it" } ?: "Bearing"
                     val directionText = when (settings.bearingDisplayMode) {
-                        com.boldexplorer.shared.settings.BearingDisplayMode.RELATIVE,
+                        com.boldexplorer.shared.settings.BearingDisplayMode.RELATIVE ->
+                            relativeDeg?.let { BearingComputer.toRelative(it) } ?: "—"
                         com.boldexplorer.shared.settings.BearingDisplayMode.CLOCK ->
                             relativeDeg?.let { BearingComputer.toClock(it) } ?: "—"
                         com.boldexplorer.shared.settings.BearingDisplayMode.TRUE_NORTH ->
@@ -347,7 +358,7 @@ private fun TelemetryRow(label: String, value: String, contentDesc: String) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp)
-            .semantics(mergeDescendants = true) { contentDescription = contentDesc },
+            .clearAndSetSemantics { contentDescription = contentDesc },
     ) {
         Text(
             "$label:",
@@ -411,16 +422,30 @@ private fun WaypointScopePanel(
 private fun CollectionScopePanel(
     collections: List<com.boldexplorer.shared.model.Collection>,
     selectedId: Long?,
-    collectionWaypoints: List<com.boldexplorer.shared.model.Waypoint>,
+    explorerState: CollectionExplorerState,
+    settings: com.boldexplorer.shared.settings.AppSettings,
     onSelectCollection: (Long) -> Unit,
+    onSelectPoint: (CollectionPoint) -> Unit,
+    onClearTarget: () -> Unit,
+    onClearVisited: () -> Unit,
+    onSetExploreMode: (Boolean) -> Unit,
+    onFollowTrailEnd: (CollectionPoint.TrailEnd) -> Unit,
 ) {
     val selectedName = collections.find { it.id == selectedId }?.name ?: "Select collection"
-    var expanded by remember { mutableStateOf(false) }
+    var collectionExpanded by remember { mutableStateOf(false) }
+    var pointExpanded by remember { mutableStateOf(false) }
+    val active = explorerState as? CollectionExplorerState.Active
+
+    fun pointLabel(point: CollectionPoint) = when (point) {
+        is CollectionPoint.Standalone -> point.waypoint.name
+        is CollectionPoint.TrailEnd -> "${point.trail.name} (${if (point.isStart) "start" else "end"})"
+    }
 
     Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+        // ── Collection picker ─────────────────────────────────────────────────────
         ExposedDropdownMenuBox(
-            expanded = expanded,
-            onExpandedChange = { expanded = it },
+            expanded = collectionExpanded,
+            onExpandedChange = { collectionExpanded = it },
             modifier = Modifier.fillMaxWidth(),
         ) {
             OutlinedTextField(
@@ -428,45 +453,141 @@ private fun CollectionScopePanel(
                 onValueChange = {},
                 readOnly = true,
                 label = { Text("Collection") },
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = collectionExpanded) },
                 modifier = Modifier
                     .menuAnchor(androidx.compose.material3.MenuAnchorType.PrimaryNotEditable)
                     .fillMaxWidth()
                     .semantics { contentDescription = "Selected collection: $selectedName" },
             )
-            ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            ExposedDropdownMenu(expanded = collectionExpanded, onDismissRequest = { collectionExpanded = false }) {
                 if (collections.isEmpty()) {
                     DropdownMenuItem(
                         text = { Text("No collections yet") },
-                        onClick = { expanded = false },
+                        onClick = { collectionExpanded = false },
                     )
                 } else {
                     collections.forEach { collection ->
                         DropdownMenuItem(
                             text = { Text(collection.name) },
-                            onClick = { onSelectCollection(collection.id); expanded = false },
-                            modifier = Modifier.semantics { contentDescription = "Select collection ${collection.name}" },
+                            onClick = { onSelectCollection(collection.id); collectionExpanded = false },
+                            modifier = Modifier.semantics {
+                                contentDescription = "Select collection ${collection.name}"
+                            },
                         )
                     }
                 }
             }
         }
 
+        if (active == null) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (selectedId == null) "No collection selected" else "Loading…",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.semantics {
+                    liveRegion = LiveRegionMode.Polite
+                    contentDescription = if (selectedId == null) "No collection selected" else "Loading collection"
+                },
+            )
+            return@Column
+        }
+
         Spacer(Modifier.height(8.dp))
 
-        val statusText = when {
-            selectedId == null -> "No collection selected"
-            collectionWaypoints.isEmpty() -> "Collection has no waypoints"
-            else -> "Target: ${collectionWaypoints.first().name}"
+        // ── Point picker (dropdown, sorted nearest-first) ─────────────────────────
+        if (active.points.isEmpty()) {
+            Text(
+                "Collection has no points",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.semantics { contentDescription = "Collection has no points" },
+            )
+            return@Column
         }
-        Text(
-            statusText,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.semantics {
-                liveRegion = LiveRegionMode.Polite
-                contentDescription = "Collection status: $statusText"
-            },
-        )
+
+        val targetLabel = active.target?.let { pointLabel(it) } ?: "Nearest (auto)"
+        ExposedDropdownMenuBox(
+            expanded = pointExpanded,
+            onExpandedChange = { pointExpanded = it },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            OutlinedTextField(
+                value = targetLabel,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Target") },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = pointExpanded) },
+                modifier = Modifier
+                    .menuAnchor(androidx.compose.material3.MenuAnchorType.PrimaryNotEditable)
+                    .fillMaxWidth()
+                    .semantics { contentDescription = "Current target: $targetLabel" },
+            )
+            ExposedDropdownMenu(expanded = pointExpanded, onDismissRequest = { pointExpanded = false }) {
+                DropdownMenuItem(
+                    text = { Text("Nearest (auto)") },
+                    onClick = { onClearTarget(); pointExpanded = false },
+                    modifier = Modifier.semantics { contentDescription = "Let system pick nearest point" },
+                )
+                active.points.forEach { point ->
+                    val label = pointLabel(point)
+                    val isVisited = point.id in active.visitedIds
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                label,
+                                color = if (isVisited)
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                                else
+                                    MaterialTheme.colorScheme.onSurface,
+                            )
+                        },
+                        onClick = { onSelectPoint(point); pointExpanded = false },
+                        modifier = Modifier.semantics {
+                            contentDescription = "$label${if (isVisited) ", visited" else ""}"
+                        },
+                    )
+                }
+            }
+        }
+
+        // ── Follow button (trail endpoints only, when within range) ───────────────
+        val currentTarget = active.target
+        if (currentTarget is CollectionPoint.TrailEnd && active.nearTrailEndM != null) {
+            Spacer(Modifier.height(4.dp))
+            androidx.compose.material3.Button(
+                onClick = { onFollowTrailEnd(currentTarget) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics {
+                        contentDescription = "Follow ${currentTarget.trail.name}" +
+                            if (currentTarget.isStart) "" else " in reverse"
+                    },
+            ) {
+                Text("Follow ${currentTarget.trail.name}")
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // ── Explore mode toggle + visited reset ───────────────────────────────────
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Explore mode", modifier = Modifier.weight(1f))
+            androidx.compose.material3.Switch(
+                checked = active.exploreMode,
+                onCheckedChange = onSetExploreMode,
+                modifier = Modifier.semantics {
+                    contentDescription = if (active.exploreMode) "Explore mode, on" else "Explore mode, off"
+                },
+            )
+        }
+        if (active.exploreMode && active.visitedIds.isNotEmpty()) {
+            androidx.compose.material3.TextButton(
+                onClick = onClearVisited,
+                modifier = Modifier.semantics { contentDescription = "Reset visited points" },
+            ) { Text("Reset visited (${active.visitedIds.size})") }
+        }
     }
 }
 

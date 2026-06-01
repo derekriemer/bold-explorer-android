@@ -42,7 +42,7 @@ class LocationForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> startTracking()
+            ACTION_START, null -> startTracking()  // null = restarted by Android after process kill
             ACTION_STOP -> {
                 stopTracking()
                 stopSelf()

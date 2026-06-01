@@ -73,6 +73,8 @@ class AudioCuePlayer @Inject constructor(
 
     private fun dispatch(event: AudioCueEvent) {
         when (event) {
+            is AudioCueEvent.DirectionalBeacon ->
+                audioEngine.playDirectionalBeacon(event.pan, event.pitchHz)
             is AudioCueEvent.AccuracyBeacon ->
                 audioEngine.playAccuracyBeacon(event.accuracyM)
             is AudioCueEvent.AlignmentPing ->
