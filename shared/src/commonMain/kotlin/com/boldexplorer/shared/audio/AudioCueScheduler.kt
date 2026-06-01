@@ -6,6 +6,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -20,6 +21,9 @@ class AudioCueScheduler(val config: AudioCueConfig = AudioCueConfig()) {
     private val _events = MutableSharedFlow<AudioCueEvent>(extraBufferCapacity = 16)
     val events: SharedFlow<AudioCueEvent> = _events.asSharedFlow()
 
+    // Toggled by the debug screen at runtime; off by default in production.
+    val accuracyBeaconEnabled = MutableStateFlow(false)
+
     fun start(
         scope: CoroutineScope,
         accuracyM: StateFlow<Double?>,
@@ -31,15 +35,31 @@ class AudioCueScheduler(val config: AudioCueConfig = AudioCueConfig()) {
 
         return scope.launch {
             coroutineScope {
-                // Accuracy beacon: emit on every non-null accuracy update.
-                // Suppressed while alignment is active — alignment pings are the only
-                // audio signal needed then; mixing in a centered beacon is confusing.
-                if (config.accuracyBeaconEnabled) {
+                // Directional beacon: timer-based, fires every directionalBeaconIntervalMs.
+                // Pan = sin(bearing): 0°→0.0, ±90°→±1.0, ±180°→0.0.
+                // Pitch = 220×2^(1+cos(bearing)): 0°→880 Hz (A5), ±90°→440 Hz (A4), ±180°→220 Hz (A3).
+                // Suppressed during alignment — alignment pings cover that mode.
+                if (config.directionalBeaconEnabled) {
                     launch {
-                        accuracyM.filterNotNull().collect { acc ->
+                        while (true) {
                             if (audioCuesEnabled.value && !alignmentActive.value) {
-                                _events.emit(AudioCueEvent.AccuracyBeacon(acc))
+                                val deg = relativeDeg.value
+                                if (deg != null) {
+                                    val pan = BearingComputer.computePan(deg)
+                                    val pitchHz = BearingComputer.computePitchHz(deg)
+                                    _events.emit(AudioCueEvent.DirectionalBeacon(pan, pitchHz))
+                                }
                             }
+                            delay(config.directionalBeaconIntervalMs)
+                        }
+                    }
+                }
+
+                // Debug-only accuracy beacon: reactive to GPS updates, gated by runtime toggle.
+                launch {
+                    accuracyM.filterNotNull().collect { acc ->
+                        if (audioCuesEnabled.value && !alignmentActive.value && accuracyBeaconEnabled.value) {
+                            _events.emit(AudioCueEvent.AccuracyBeacon(acc))
                         }
                     }
                 }
@@ -50,7 +70,7 @@ class AudioCueScheduler(val config: AudioCueConfig = AudioCueConfig()) {
                         while (true) {
                             if (audioCuesEnabled.value && alignmentActive.value) {
                                 val deg = relativeDeg.value
-                                if (deg != null && abs(deg) <= 90.0) {
+                                if (deg != null) {
                                     val aligned = abs(deg) <= config.alignmentDeadbandDeg
                                     val pan = BearingComputer.computePan(deg)
                                     _events.emit(AudioCueEvent.AlignmentPing(pan, aligned))

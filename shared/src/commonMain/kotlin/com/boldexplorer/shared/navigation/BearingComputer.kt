@@ -2,7 +2,11 @@ package com.boldexplorer.shared.navigation
 
 import com.boldexplorer.shared.settings.Units
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.pow
 import kotlin.math.roundToInt
+import kotlin.math.sin
+import kotlin.math.PI
 
 // Port of src/composables/useBearingDistance.ts pure functions.
 object BearingComputer {
@@ -15,6 +19,18 @@ object BearingComputer {
         val normalized = ((deg % 360) + 360) % 360
         val idx = ((normalized + 11.25) / 22.5).toInt() % 16
         return CARDINALS[idx]
+    }
+
+    // Fuzzy relative direction label for display and TTS.
+    // relativeDeg is signed: positive = right, negative = left.
+    fun toRelative(relativeDeg: Double): String = when {
+        abs(relativeDeg) < 20   -> "straight ahead"
+        relativeDeg in  20.0.. 60.0  -> "slight right"
+        relativeDeg in  60.0..120.0  -> "right"
+        relativeDeg in 120.0..180.0  -> "sharp right"
+        relativeDeg in -60.0..-20.0  -> "slight left"
+        relativeDeg in -120.0..-60.0 -> "left"
+        else                         -> "sharp left"
     }
 
     // relativeDeg is the signed delta in [-180, 180].
@@ -33,9 +49,17 @@ object BearingComputer {
         }
     }
 
-    // Maps relativeDeg to a stereo pan value: -90° → -1.0 (full left), +90° → +1.0 (full right).
+    // Maps relativeDeg to a stereo pan value via sin:
+    // 0°→0.0 (centre), ±90°→±1.0 (full R/L), ±180°→0.0 (behind, centre).
+    // sin is bounded to [-1, 1] so no coercion needed.
     fun computePan(relativeDeg: Double): Float =
-        (relativeDeg / 90.0).coerceIn(-1.0, 1.0).toFloat()
+        sin(relativeDeg * PI / 180.0).toFloat()
+
+    // Returns the beacon pitch in Hz — logarithmic / musical mapping:
+    // 0°→880 Hz (A5, ahead), ±90°→440 Hz (A4, side), ±180°→220 Hz (A3, behind).
+    // Each 90° step is exactly one octave — perceptually equal intervals.
+    fun computePitchHz(relativeDeg: Double): Double =
+        220.0 * 2.0.pow(1.0 + cos(relativeDeg * PI / 180.0))
 
     fun differenceAbs(relativeDeg: Double): Double = abs(relativeDeg)
 }
