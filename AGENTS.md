@@ -1,7 +1,7 @@
 # AGENTS.md
 
-This file provides guidance to AI coding agents working in this repository.
-Equivalent guidance for Claude Code specifically lives in `CLAUDE.md` — both files must be kept in sync when architecture or commands change.
+This file is the canonical guidance for all AI coding agents in this repository.
+`CLAUDE.md` defers to this file and adds only Claude Code–specific notes.
 
 ## Commands
 
@@ -95,6 +95,8 @@ This app is built for a blind user. Audio cues are the primary interface.
 - Minimum 48dp touch targets
 - TalkBack pass required before any phase is considered complete
 
+**`contentDescription` on containers overrides all child text** — when you set `contentDescription` in `Modifier.semantics { }` on a container (Card, Row, Box, etc.), TalkBack reads *only* that string and ignores every child `Text()` composable inside it. Always include every piece of visible information (name, distance, state) explicitly in the container's `contentDescription`. Never assume child text will be read automatically once a container-level description is set.
+
 ### Version pins
 
 All dependency versions are in `gradle/libs.versions.toml`. Do not add version strings inline in `build.gradle.kts` files — add to the TOML and reference via `libs.*` accessors.
@@ -114,4 +116,8 @@ Coordination points that require sequencing:
 - Repository interface changes in `shared/.../repository/Repositories.kt` must land before `:app` impls are written or modified.
 - New `AudioCueEvent` variants in `:shared` must land before `AudioCuePlayer` handling in `:app`.
 - SQLDelight schema changes (`.sq` files) must be followed by `./gradlew :app:generateBoldExplorerDatabaseInterface` before any Kotlin that references the generated queries.
-- When `AGENTS.md` or `CLAUDE.md` is updated, update both files to stay in sync.
+- When architecture or commands change, update only `AGENTS.md`. `CLAUDE.md` defers to it and needs no sync.
+
+## Rules
+
+- Use jujutsu over git when available. When possible use jujutsu commands if we are in a jujutsu repository.
