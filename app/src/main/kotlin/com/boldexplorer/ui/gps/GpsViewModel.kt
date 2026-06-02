@@ -111,24 +111,12 @@ class GpsViewModel @Inject constructor(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), "Magnetic")
 
     // Heading used for bearing-to-waypoint and clock/relative display.
-    // Prefers GPS course-over-ground when moving (reliable in a car, immune to magnetic
-    // interference), falls back to compass when stationary. GPS bearing is always true-north,
-    // which matches initialBearingDeg(); compass true-north is used when available for the
-    // same reason.
-    private val navHeadingDeg: StateFlow<Double?> = combine(
-        compassProvider.headingFlow, location, settings,
-    ) { reading, loc, s ->
-        val gpsCourse = loc?.heading
-        val speed = loc?.speed ?: 0.0
-        if (gpsCourse != null && speed >= GPS_HEADING_MIN_SPEED_MS) {
-            gpsCourse
-        } else {
-            when (s.compassMode) {
-                com.boldexplorer.shared.settings.CompassMode.TRUE -> reading.trueNorth ?: reading.magnetic
-                com.boldexplorer.shared.settings.CompassMode.MAGNETIC -> reading.magnetic
-            }
-        }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
+    // GPS course-over-ground only — null when stationary or no fix. Matches Vue useBearingDistance.
+    // No compass fallback: compass bearing is unreliable for targeting (phone orientation unknown,
+    // pocket mode). A future "wand" mode will expose compass-based pointing explicitly.
+    private val navHeadingDeg: StateFlow<Double?> = location
+        .map { it?.heading }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
 
     val accuracyM: StateFlow<Double?> = location
         .map { it?.accuracy }
@@ -640,7 +628,5 @@ class GpsViewModel @Inject constructor(
     companion object {
         private const val AUTO_RECORD_DISTANCE_M = 10.0
         // Minimum speed (m/s) before GPS course-over-ground is trusted over the compass.
-        // ~1.5 m/s ≈ 3.4 mph — brisk walking / slow driving.
-        private const val GPS_HEADING_MIN_SPEED_MS = 1.5
     }
 }
