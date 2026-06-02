@@ -5,6 +5,7 @@ data class AppSettings(
     val compassMode: CompassMode = CompassMode.MAGNETIC,
     val bearingDisplayMode: BearingDisplayMode = BearingDisplayMode.RELATIVE,
     val audioCuesEnabled: Boolean = true,
+    val duckAudioEnabled: Boolean = false,
 )
 
 enum class Units { METRIC, IMPERIAL }

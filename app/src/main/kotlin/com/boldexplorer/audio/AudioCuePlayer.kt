@@ -6,6 +6,7 @@ import android.media.AudioFocusRequest
 import android.media.AudioManager
 import com.boldexplorer.shared.audio.AudioCueEvent
 import com.boldexplorer.shared.audio.AudioCueScheduler
+import com.boldexplorer.shared.repository.SettingsRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -15,24 +16,29 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
  * Bridges [AudioCueScheduler] (pure scheduling) to Android playback.
  *
- * - [AudioCueEvent.AccuracyBeacon] → [AudioEngine] tone (frequency = GPS accuracy)
- * - [AudioCueEvent.AlignmentPing] → [AudioEngine] stereo-panned tone
+ * - [AudioCueEvent.DirectionalBeacon] / [AudioCueEvent.AccuracyBeacon] / [AudioCueEvent.AlignmentPing]
+ *   → [AudioEngine] streaming tone
  * - [AudioCueEvent.WaypointApproach] / [AudioCueEvent.TrailComplete] → [TtsEngine]
  *
- * Holds AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK so music apps duck rather than stop.
- * Call [start] when navigation begins and [stop] when it ends.
+ * Audio focus is requested per-tone only when [AppSettings.duckAudioEnabled] is true,
+ * so music is not held ducked between beacons. When duck is off, tones mix transparently.
+ *
+ * [AudioEngine.start] keeps the Bluetooth A2DP stream alive via a silence keepalive loop,
+ * preventing BT headphone dropout on the first frame of each tone.
  */
 @Singleton
 class AudioCuePlayer @Inject constructor(
     private val audioEngine: AudioEngine,
     private val ttsEngine: TtsEngine,
     private val scheduler: AudioCueScheduler,
+    private val settingsRepo: SettingsRepository,
     @ApplicationContext private val context: Context,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -53,8 +59,8 @@ class AudioCuePlayer @Inject constructor(
     ) {
         if (playerJob != null) return
 
+        audioEngine.start()
         val schedulerJob = scheduler.start(scope, accuracyM, relativeDeg, alignmentActive, audioCuesEnabled)
-        requestAudioFocus()
         playerJob = scheduler.events
             .onEach { event -> dispatch(event) }
             .launchIn(scope)
@@ -68,10 +74,13 @@ class AudioCuePlayer @Inject constructor(
     fun stop() {
         playerJob?.cancel()
         playerJob = null
+        audioEngine.stop()
         abandonAudioFocus()
     }
 
     private fun dispatch(event: AudioCueEvent) {
+        val duck = runBlocking { settingsRepo.load().duckAudioEnabled }
+        if (duck) requestAudioFocus()
         when (event) {
             is AudioCueEvent.DirectionalBeacon ->
                 audioEngine.playDirectionalBeacon(event.pan, event.pitchHz)
@@ -84,13 +93,16 @@ class AudioCuePlayer @Inject constructor(
             is AudioCueEvent.TrailComplete ->
                 scope.launch { ttsEngine.speak("Trail complete") }
         }
+        // Abandon focus immediately after tone dispatch so music unducks per-beep.
+        // TTS manages its own focus internally; we abandon ours regardless.
+        if (duck) abandonAudioFocus()
     }
 
     private fun requestAudioFocus() {
         val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
             .setAudioAttributes(focusAttributes)
-            .setAcceptsDelayedFocusGain(true)
-            .setOnAudioFocusChangeListener { /* DUCK: audio continues at reduced volume */ }
+            .setAcceptsDelayedFocusGain(false)
+            .setOnAudioFocusChangeListener { /* duck handled by system volume */ }
             .build()
         audioManager.requestAudioFocus(request)
         focusRequest = request

@@ -9,6 +9,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.boldexplorer.shared.repository.SettingsRepository
 import com.boldexplorer.shared.settings.AppSettings
 import com.boldexplorer.shared.settings.AudioCuesPrefSpec
+import com.boldexplorer.shared.settings.DuckAudioPrefSpec
 import com.boldexplorer.shared.settings.BearingDisplayMode
 import com.boldexplorer.shared.settings.BearingDisplayPrefSpec
 import com.boldexplorer.shared.settings.CompassMode
@@ -31,6 +32,7 @@ private val UNITS_KEY = stringPreferencesKey(UnitsPrefSpec.key)
 private val COMPASS_KEY = stringPreferencesKey(CompassPrefSpec.key)
 private val BEARING_KEY = stringPreferencesKey(BearingDisplayPrefSpec.key)
 private val AUDIO_KEY = stringPreferencesKey(AudioCuesPrefSpec.key)
+private val DUCK_KEY = stringPreferencesKey(DuckAudioPrefSpec.key)
 
 @Singleton
 class DataStoreSettingsRepository @Inject constructor(
@@ -48,6 +50,7 @@ class DataStoreSettingsRepository @Inject constructor(
         val compass = migrateStoredValue(CompassPrefSpec, prefs[COMPASS_KEY])
         val bearing = migrateStoredValue(BearingDisplayPrefSpec, prefs[BEARING_KEY])
         val audio = migrateStoredValue(AudioCuesPrefSpec, prefs[AUDIO_KEY])
+        val duck = migrateStoredValue(DuckAudioPrefSpec, prefs[DUCK_KEY])
         return AppSettings(
             units = if (units == "metric") Units.METRIC else Units.IMPERIAL,
             compassMode = if (compass == "true") CompassMode.TRUE else CompassMode.MAGNETIC,
@@ -57,6 +60,7 @@ class DataStoreSettingsRepository @Inject constructor(
                 else -> BearingDisplayMode.RELATIVE
             },
             audioCuesEnabled = audio,
+            duckAudioEnabled = duck,
         )
     }
 
@@ -81,6 +85,10 @@ class DataStoreSettingsRepository @Inject constructor(
             prefs[AUDIO_KEY] = serializeVersioned(
                 AudioCuesPrefSpec.currentVersion,
                 settings.audioCuesEnabled,
+            )
+            prefs[DUCK_KEY] = serializeVersioned(
+                DuckAudioPrefSpec.currentVersion,
+                settings.duckAudioEnabled,
             )
         }
     }
