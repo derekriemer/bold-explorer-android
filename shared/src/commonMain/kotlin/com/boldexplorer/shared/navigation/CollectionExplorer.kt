@@ -37,6 +37,7 @@ sealed class CollectionExplorerState {
         val visitedIds: List<Long>,                 // capped at VISITED_CAP; newest last
         val exploreMode: Boolean,
         val nearTrailEndM: Double?,                 // distance to target if it's a TrailEnd, else null
+        val proximityAnnouncedIds: Set<Long> = emptySet(), // points already proximity-announced this session
     ) : CollectionExplorerState()
 }
 
@@ -45,6 +46,8 @@ sealed class CollectionExplorerEvent {
     data class PointReached(val reached: CollectionPoint, val next: CollectionPoint?) : CollectionExplorerEvent()
     /** User is within TRAIL_APPROACH_M of a TrailEnd target — surface Follow button. */
     data class NearTrailEnd(val trailEnd: CollectionPoint.TrailEnd, val distanceM: Double) : CollectionExplorerEvent()
+    /** User passed within PROXIMITY_M of an unvisited non-target point. Fires once per point per session. */
+    data class NearbyPoint(val point: CollectionPoint, val distanceM: Double) : CollectionExplorerEvent()
 }
 
 class CollectionExplorer {
@@ -90,7 +93,7 @@ class CollectionExplorer {
     /** Reset visited queue (useful to re-tour in explore mode). */
     fun clearVisited() {
         val s = _state.value as? CollectionExplorerState.Active ?: return
-        _state.value = s.copy(visitedIds = emptyList(), target = null, nearTrailEndM = null)
+        _state.value = s.copy(visitedIds = emptyList(), target = null, nearTrailEndM = null, proximityAnnouncedIds = emptySet())
     }
 
     /**
@@ -125,10 +128,19 @@ class CollectionExplorer {
         if (target is CollectionPoint.TrailEnd) {
             val near = distToTarget <= TRAIL_APPROACH_M
             val nearTrailEndM: Double? = if (near) distToTarget else null
-            _state.value = s.copy(points = sorted, target = target, nearTrailEndM = nearTrailEndM)
-            return if (near && nearTrailEndM != s.nearTrailEndM) {
-                CollectionExplorerEvent.NearTrailEnd(target, distToTarget)
-            } else null
+            val nearby = proximityCheck(sorted, target, s, location)
+            _state.value = s.copy(
+                points = sorted,
+                target = target,
+                nearTrailEndM = nearTrailEndM,
+                proximityAnnouncedIds = if (nearby != null) s.proximityAnnouncedIds + nearby.id else s.proximityAnnouncedIds,
+            )
+            return when {
+                near && nearTrailEndM != s.nearTrailEndM -> CollectionExplorerEvent.NearTrailEnd(target, distToTarget)
+                nearby != null -> CollectionExplorerEvent.NearbyPoint(nearby,
+                    haversineDistanceMeters(location, LatLng(nearby.waypoint.lat, nearby.waypoint.lon)))
+                else -> null
+            }
         }
 
         // Standalone waypoint: check reach threshold.
@@ -152,13 +164,36 @@ class CollectionExplorer {
             return CollectionExplorerEvent.PointReached(target, nextTarget)
         }
 
-        _state.value = s.copy(points = sorted, target = target, nearTrailEndM = nearTrailEndM)
-        return null
+        // Proximity scan: announce unvisited non-target points within PROXIMITY_M once per session.
+        val nearby = proximityCheck(sorted, target, s, location)
+        _state.value = s.copy(
+            points = sorted,
+            target = target,
+            nearTrailEndM = nearTrailEndM,
+            proximityAnnouncedIds = if (nearby != null) s.proximityAnnouncedIds + nearby.id else s.proximityAnnouncedIds,
+        )
+        return if (nearby != null) {
+            val dist = haversineDistanceMeters(location, LatLng(nearby.waypoint.lat, nearby.waypoint.lon))
+            CollectionExplorerEvent.NearbyPoint(nearby, dist)
+        } else null
+    }
+
+    private fun proximityCheck(
+        sorted: List<CollectionPoint>,
+        target: CollectionPoint,
+        s: CollectionExplorerState.Active,
+        location: LatLng,
+    ): CollectionPoint? = sorted.firstOrNull { p ->
+        p.id != target.id &&
+        p.id !in s.visitedIds &&
+        p.id !in s.proximityAnnouncedIds &&
+        haversineDistanceMeters(location, LatLng(p.waypoint.lat, p.waypoint.lon)) <= PROXIMITY_M
     }
 
     companion object {
         const val REACH_THRESHOLD_M = 15.0
         const val TRAIL_APPROACH_M = 10.0
+        const val PROXIMITY_M = 30.0
         const val VISITED_CAP = 3
     }
 }

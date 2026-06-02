@@ -19,7 +19,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.boldexplorer.ui.collections.CollectionsScreen
 import com.boldexplorer.ui.debug.DebugScreen
-import com.boldexplorer.ui.gps.GpsScreen
+import com.boldexplorer.ui.gps.GpsRoute
 import com.boldexplorer.ui.settings.SettingsScreen
 import com.boldexplorer.ui.trails.TrailsScreen
 import com.boldexplorer.ui.waypoints.WaypointsScreen
@@ -76,7 +76,7 @@ fun NavGraph() {
             },
         ) { innerPadding ->
             NavHost(navController = navController, startDestination = Screen.Gps.route) {
-                composable(Screen.Gps.route) { GpsScreen(innerPadding) }
+                composable(Screen.Gps.route) { GpsRoute(innerPadding) }
                 composable(Screen.Waypoints.route) { WaypointsScreen(innerPadding) }
                 composable(Screen.Trails.route) { TrailsScreen(innerPadding) }
                 composable(Screen.Collections.route) { CollectionsScreen(innerPadding) }

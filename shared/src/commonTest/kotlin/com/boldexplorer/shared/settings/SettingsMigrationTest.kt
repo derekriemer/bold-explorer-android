@@ -61,6 +61,18 @@ class SettingsMigrationTest {
     }
 
     @Test
+    fun spokenGuidance_legacyFalseString_isFalse() {
+        val result = migrateStoredValue(SpokenGuidancePrefSpec, "false")
+        assertEquals(false, result)
+    }
+
+    @Test
+    fun beaconCues_legacyFalseString_isFalse() {
+        val result = migrateStoredValue(BeaconCuesPrefSpec, "false")
+        assertEquals(false, result)
+    }
+
+    @Test
     fun bearingDisplay_legacyClock() {
         val result = migrateStoredValue(BearingDisplayPrefSpec, "\"clock\"")
         assertEquals("clock", result)

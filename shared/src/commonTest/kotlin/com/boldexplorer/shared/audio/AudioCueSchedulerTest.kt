@@ -22,7 +22,7 @@ class AudioCueSchedulerTest {
             accuracyM = MutableStateFlow<Double?>(null),
             relativeDeg = MutableStateFlow<Double?>(null),
             alignmentActive = MutableStateFlow(false),
-            audioCuesEnabled = MutableStateFlow(true),
+            beaconCuesEnabled = MutableStateFlow(true),
         )
 
         assertNotNull(job)

@@ -133,6 +133,22 @@ val AudioCuesPrefSpec = PrefSpec(
     ),
 )
 
+val SpokenGuidancePrefSpec = PrefSpec(
+    key = "spoken_guidance",
+    currentVersion = 1,
+    default = true,
+    validate = { it is Boolean },
+    migrations = AudioCuesPrefSpec.migrations,
+)
+
+val BeaconCuesPrefSpec = PrefSpec(
+    key = "beacon_cues",
+    currentVersion = 1,
+    default = true,
+    validate = { it is Boolean },
+    migrations = AudioCuesPrefSpec.migrations,
+)
+
 val DuckAudioPrefSpec = PrefSpec(
     key = "duck_audio",
     currentVersion = 1,

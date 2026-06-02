@@ -19,7 +19,7 @@ import javax.inject.Inject
 /**
  * Keeps the process alive and GPS running when the screen is off.
  *
- * Start via ACTION_START; it switches FusedLocationProviderImpl to background mode
+ * Start via ACTION_START; it switches the active location provider to background mode
  * (50 m accuracy gate) and holds a subscription to keep the SharedFlow upstream active.
  * The ViewModel also subscribes to the same SharedFlow, so location updates continue
  * seamlessly when the user returns to the app.
@@ -30,7 +30,10 @@ import javax.inject.Inject
 class LocationForegroundService : Service() {
 
     @Inject
-    lateinit var locationProvider: FusedLocationProviderImpl
+    lateinit var locationProvider: LocationProviderRouter
+
+    @Inject
+    lateinit var backgroundSession: GpsBackgroundSession
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var locationJob: Job? = null
@@ -44,8 +47,10 @@ class LocationForegroundService : Service() {
         when (intent?.action) {
             ACTION_START, null -> startTracking()  // null = restarted by Android after process kill
             ACTION_STOP -> {
-                stopTracking()
-                stopSelf()
+                if (!backgroundSession.state.value.needsForegroundService) {
+                    stopTracking()
+                    stopSelf()
+                }
             }
         }
         return START_STICKY
@@ -67,14 +72,18 @@ class LocationForegroundService : Service() {
 
         // Subscribe to the shared flow so the GPS upstream stays active.
         // Actual location data is consumed by the ViewModel via the same SharedFlow.
-        locationJob = locationProvider.locationFlow
-            .launchIn(scope)
+        if (locationJob == null) {
+            locationJob = locationProvider.locationFlow
+                .launchIn(scope)
+        }
+        backgroundSession.onServiceStarted()
     }
 
     private fun stopTracking() {
         locationProvider.setBackgroundMode(false)
         locationJob?.cancel()
         locationJob = null
+        backgroundSession.onServiceStopped()
         stopForeground(STOP_FOREGROUND_REMOVE)
     }
 

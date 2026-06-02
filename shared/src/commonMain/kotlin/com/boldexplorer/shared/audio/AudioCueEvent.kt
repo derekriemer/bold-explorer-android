@@ -10,8 +10,10 @@ sealed class AudioCueEvent {
     // Enabled via the debug screen toggle, suppressed in production by default.
     data class AccuracyBeacon(val accuracyM: Double) : AudioCueEvent()
 
-    // Alignment ping at configurable Hz; pan in [-1.0, 1.0] (-1 = full left, +1 = full right).
-    data class AlignmentPing(val pan: Float, val aligned: Boolean) : AudioCueEvent()
+    // Alignment ping at configurable Hz.
+    // pan: [-1, 1] where negative = left ear (turn left), positive = right ear (turn right).
+    // pitchHz: continuous, 880 Hz when aligned → 220 Hz at 180° off; higher = closer.
+    data class AlignmentPing(val pan: Float, val pitchHz: Double) : AudioCueEvent()
 
     // TTS announcement when a waypoint is reached.
     data class WaypointApproach(val waypointName: String) : AudioCueEvent()

@@ -104,11 +104,10 @@ class AudioEngine @Inject constructor() {
         scope.launch { playTone(freq, durationMs = 100, leftVol = 0.7f, rightVol = 0.7f) }
     }
 
-    fun playAlignmentPing(pan: Float, aligned: Boolean) {
-        val freq = if (aligned) 660.0 else 440.0
+    fun playAlignmentPing(pan: Float, pitchHz: Double) {
         val left = (1f - pan).coerceIn(0f, 1f)
         val right = (1f + pan).coerceIn(0f, 1f)
-        scope.launch { playTone(freq, durationMs = 80, leftVol = left, rightVol = right) }
+        scope.launch { playTone(pitchHz, durationMs = 80, leftVol = left, rightVol = right) }
     }
 
     // 0 m (perfect fix) → 880 Hz; 30 m (degraded) → 220 Hz; clamped outside that range.

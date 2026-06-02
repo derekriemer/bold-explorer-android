@@ -21,7 +21,7 @@ object BearingComputer {
         return CARDINALS[idx]
     }
 
-    // Fuzzy relative direction label for display and TTS.
+    // Fuzzy relative direction label for display and TTS — trail/waypoint targeting.
     // relativeDeg is signed: positive = right, negative = left.
     fun toRelative(relativeDeg: Double): String = when {
         abs(relativeDeg) < 20   -> "straight ahead"
@@ -32,6 +32,24 @@ object BearingComputer {
         relativeDeg in -120.0..-60.0 -> "left"
         else                         -> "sharp left"
     }
+
+    // Alignment-mode direction label — always says left or right explicitly.
+    // Never says "straight ahead"; uses "aligned" only within the deadband.
+    // relativeDeg signed: positive = target is to the right, so turn right.
+    fun toAlignmentRelative(relativeDeg: Double, deadbandDeg: Double = 5.0): String {
+        val absDeg = abs(relativeDeg).toInt()
+        return when {
+            abs(relativeDeg) <= deadbandDeg -> "aligned"
+            relativeDeg > 0 -> "$absDeg degrees right"
+            else            -> "$absDeg degrees left"
+        }
+    }
+
+    // Alignment ping pitch: 880 Hz when perfectly aligned, falls to 220 Hz at ±180°.
+    // Uses the same cos-based octave mapping as computePitchHz so the ear gets
+    // a continuous "closing in" sensation — higher = closer to aligned.
+    fun computeAlignmentPitchHz(relativeDeg: Double): Double =
+        220.0 * 2.0.pow(1.0 + cos(relativeDeg * PI / 180.0))
 
     // relativeDeg is the signed delta in [-180, 180].
     // 0 = 12 o'clock, 90 = 3 o'clock, -90 = 9 o'clock, ±180 = 6 o'clock.

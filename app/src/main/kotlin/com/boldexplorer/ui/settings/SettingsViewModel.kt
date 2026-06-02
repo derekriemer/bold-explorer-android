@@ -24,7 +24,8 @@ class SettingsViewModel @Inject constructor(
 
     fun setUnits(units: Units) = save { it.copy(units = units) }
     fun setBearingMode(mode: BearingDisplayMode) = save { it.copy(bearingDisplayMode = mode) }
-    fun setAudioCues(enabled: Boolean) = save { it.copy(audioCuesEnabled = enabled) }
+    fun setSpokenGuidance(enabled: Boolean) = save { it.copy(spokenGuidanceEnabled = enabled) }
+    fun setBeaconCues(enabled: Boolean) = save { it.copy(beaconCuesEnabled = enabled) }
     fun setDuckAudio(enabled: Boolean) = save { it.copy(duckAudioEnabled = enabled) }
     fun setCompassMode(mode: CompassMode) = save { it.copy(compassMode = mode) }
 

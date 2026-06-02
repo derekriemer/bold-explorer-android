@@ -4,7 +4,8 @@ data class AppSettings(
     val units: Units = Units.IMPERIAL,
     val compassMode: CompassMode = CompassMode.MAGNETIC,
     val bearingDisplayMode: BearingDisplayMode = BearingDisplayMode.RELATIVE,
-    val audioCuesEnabled: Boolean = true,
+    val spokenGuidanceEnabled: Boolean = true,
+    val beaconCuesEnabled: Boolean = true,
     val duckAudioEnabled: Boolean = false,
 )
 

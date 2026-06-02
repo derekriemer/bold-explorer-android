@@ -39,6 +39,7 @@ class AudioCuePlayer @Inject constructor(
     private val ttsEngine: TtsEngine,
     private val scheduler: AudioCueScheduler,
     private val settingsRepo: SettingsRepository,
+    private val appForegroundState: AppForegroundState,
     @ApplicationContext private val context: Context,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -55,12 +56,12 @@ class AudioCuePlayer @Inject constructor(
         accuracyM: StateFlow<Double?>,
         relativeDeg: StateFlow<Double?>,
         alignmentActive: StateFlow<Boolean>,
-        audioCuesEnabled: StateFlow<Boolean>,
+        beaconCuesEnabled: StateFlow<Boolean>,
     ) {
         if (playerJob != null) return
 
         audioEngine.start()
-        val schedulerJob = scheduler.start(scope, accuracyM, relativeDeg, alignmentActive, audioCuesEnabled)
+        val schedulerJob = scheduler.start(scope, accuracyM, relativeDeg, alignmentActive, beaconCuesEnabled)
         playerJob = scheduler.events
             .onEach { event -> dispatch(event) }
             .launchIn(scope)
@@ -87,11 +88,13 @@ class AudioCuePlayer @Inject constructor(
             is AudioCueEvent.AccuracyBeacon ->
                 audioEngine.playAccuracyBeacon(event.accuracyM)
             is AudioCueEvent.AlignmentPing ->
-                audioEngine.playAlignmentPing(event.pan, event.aligned)
+                audioEngine.playAlignmentPing(event.pan, event.pitchHz)
             is AudioCueEvent.WaypointApproach ->
-                scope.launch { ttsEngine.speak("Next waypoint: ${event.waypointName}") }
+                if (!appForegroundState.isInForeground.value)
+                    scope.launch { ttsEngine.speak("Next waypoint: ${event.waypointName}") }
             is AudioCueEvent.TrailComplete ->
-                scope.launch { ttsEngine.speak("Trail complete") }
+                if (!appForegroundState.isInForeground.value)
+                    scope.launch { ttsEngine.speak("Trail complete") }
         }
         // Abandon focus immediately after tone dispatch so music unducks per-beep.
         // TTS manages its own focus internally; we abandon ours regardless.

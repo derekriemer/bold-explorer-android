@@ -9,11 +9,13 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.boldexplorer.shared.repository.SettingsRepository
 import com.boldexplorer.shared.settings.AppSettings
 import com.boldexplorer.shared.settings.AudioCuesPrefSpec
+import com.boldexplorer.shared.settings.BeaconCuesPrefSpec
 import com.boldexplorer.shared.settings.DuckAudioPrefSpec
 import com.boldexplorer.shared.settings.BearingDisplayMode
 import com.boldexplorer.shared.settings.BearingDisplayPrefSpec
 import com.boldexplorer.shared.settings.CompassMode
 import com.boldexplorer.shared.settings.CompassPrefSpec
+import com.boldexplorer.shared.settings.SpokenGuidancePrefSpec
 import com.boldexplorer.shared.settings.Units
 import com.boldexplorer.shared.settings.UnitsPrefSpec
 import com.boldexplorer.shared.settings.migrateStoredValue
@@ -32,6 +34,8 @@ private val UNITS_KEY = stringPreferencesKey(UnitsPrefSpec.key)
 private val COMPASS_KEY = stringPreferencesKey(CompassPrefSpec.key)
 private val BEARING_KEY = stringPreferencesKey(BearingDisplayPrefSpec.key)
 private val AUDIO_KEY = stringPreferencesKey(AudioCuesPrefSpec.key)
+private val SPOKEN_GUIDANCE_KEY = stringPreferencesKey(SpokenGuidancePrefSpec.key)
+private val BEACON_CUES_KEY = stringPreferencesKey(BeaconCuesPrefSpec.key)
 private val DUCK_KEY = stringPreferencesKey(DuckAudioPrefSpec.key)
 
 @Singleton
@@ -49,7 +53,9 @@ class DataStoreSettingsRepository @Inject constructor(
         val units = migrateStoredValue(UnitsPrefSpec, prefs[UNITS_KEY])
         val compass = migrateStoredValue(CompassPrefSpec, prefs[COMPASS_KEY])
         val bearing = migrateStoredValue(BearingDisplayPrefSpec, prefs[BEARING_KEY])
-        val audio = migrateStoredValue(AudioCuesPrefSpec, prefs[AUDIO_KEY])
+        val legacyAudio = prefs[AUDIO_KEY]
+        val spokenGuidance = migrateStoredValue(SpokenGuidancePrefSpec, prefs[SPOKEN_GUIDANCE_KEY] ?: legacyAudio)
+        val beaconCues = migrateStoredValue(BeaconCuesPrefSpec, prefs[BEACON_CUES_KEY] ?: legacyAudio)
         val duck = migrateStoredValue(DuckAudioPrefSpec, prefs[DUCK_KEY])
         return AppSettings(
             units = if (units == "metric") Units.METRIC else Units.IMPERIAL,
@@ -59,7 +65,8 @@ class DataStoreSettingsRepository @Inject constructor(
                 "true" -> BearingDisplayMode.TRUE_NORTH
                 else -> BearingDisplayMode.RELATIVE
             },
-            audioCuesEnabled = audio,
+            spokenGuidanceEnabled = spokenGuidance,
+            beaconCuesEnabled = beaconCues,
             duckAudioEnabled = duck,
         )
     }
@@ -82,9 +89,17 @@ class DataStoreSettingsRepository @Inject constructor(
                     else -> "relative"
                 },
             )
+            prefs[SPOKEN_GUIDANCE_KEY] = serializeVersioned(
+                SpokenGuidancePrefSpec.currentVersion,
+                settings.spokenGuidanceEnabled,
+            )
+            prefs[BEACON_CUES_KEY] = serializeVersioned(
+                BeaconCuesPrefSpec.currentVersion,
+                settings.beaconCuesEnabled,
+            )
             prefs[AUDIO_KEY] = serializeVersioned(
                 AudioCuesPrefSpec.currentVersion,
-                settings.audioCuesEnabled,
+                settings.spokenGuidanceEnabled && settings.beaconCuesEnabled,
             )
             prefs[DUCK_KEY] = serializeVersioned(
                 DuckAudioPrefSpec.currentVersion,

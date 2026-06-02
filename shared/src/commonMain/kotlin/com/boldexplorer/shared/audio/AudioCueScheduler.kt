@@ -29,7 +29,7 @@ class AudioCueScheduler(val config: AudioCueConfig = AudioCueConfig()) {
         accuracyM: StateFlow<Double?>,
         relativeDeg: StateFlow<Double?>,
         alignmentActive: StateFlow<Boolean>,
-        audioCuesEnabled: StateFlow<Boolean>,
+        beaconCuesEnabled: StateFlow<Boolean>,
     ): Job? {
         if (!config.enabled) return null
 
@@ -42,7 +42,7 @@ class AudioCueScheduler(val config: AudioCueConfig = AudioCueConfig()) {
                 if (config.directionalBeaconEnabled) {
                     launch {
                         while (true) {
-                            if (audioCuesEnabled.value && !alignmentActive.value) {
+                            if (beaconCuesEnabled.value && !alignmentActive.value) {
                                 val deg = relativeDeg.value
                                 if (deg != null) {
                                     val pan = BearingComputer.computePan(deg)
@@ -58,7 +58,7 @@ class AudioCueScheduler(val config: AudioCueConfig = AudioCueConfig()) {
                 // Debug-only accuracy beacon: reactive to GPS updates, gated by runtime toggle.
                 launch {
                     accuracyM.filterNotNull().collect { acc ->
-                        if (audioCuesEnabled.value && !alignmentActive.value && accuracyBeaconEnabled.value) {
+                        if (beaconCuesEnabled.value && !alignmentActive.value && accuracyBeaconEnabled.value) {
                             _events.emit(AudioCueEvent.AccuracyBeacon(acc))
                         }
                     }
@@ -68,12 +68,13 @@ class AudioCueScheduler(val config: AudioCueConfig = AudioCueConfig()) {
                 if (config.alignmentPingEnabled) {
                     launch {
                         while (true) {
-                            if (audioCuesEnabled.value && alignmentActive.value) {
+                            if (beaconCuesEnabled.value && alignmentActive.value) {
                                 val deg = relativeDeg.value
                                 if (deg != null) {
                                     val aligned = abs(deg) <= config.alignmentDeadbandDeg
                                     val pan = BearingComputer.computePan(deg)
-                                    _events.emit(AudioCueEvent.AlignmentPing(pan, aligned))
+                                    val pitchHz = BearingComputer.computeAlignmentPitchHz(deg)
+                                    _events.emit(AudioCueEvent.AlignmentPing(pan, pitchHz))
                                     val intervalMs = if (aligned) {
                                         (1000.0 / (config.alignmentPingHz / 3.0)).toLong()
                                     } else {
@@ -94,14 +95,14 @@ class AudioCueScheduler(val config: AudioCueConfig = AudioCueConfig()) {
     }
 
     // Called by GpsViewModel when TrailFollower emits a WaypointReached event.
-    suspend fun emitWaypointApproach(name: String, audioCuesEnabled: Boolean) {
-        if (config.waypointApproachEnabled && audioCuesEnabled) {
+    suspend fun emitWaypointApproach(name: String, spokenGuidanceEnabled: Boolean) {
+        if (config.waypointApproachEnabled && spokenGuidanceEnabled) {
             _events.emit(AudioCueEvent.WaypointApproach(name))
         }
     }
 
-    suspend fun emitTrailComplete(audioCuesEnabled: Boolean) {
-        if (config.waypointApproachEnabled && audioCuesEnabled) {
+    suspend fun emitTrailComplete(spokenGuidanceEnabled: Boolean) {
+        if (config.waypointApproachEnabled && spokenGuidanceEnabled) {
             _events.emit(AudioCueEvent.TrailComplete)
         }
     }

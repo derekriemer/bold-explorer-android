@@ -105,12 +105,21 @@ fun SettingsScreen(
 
         HorizontalDivider()
 
-        // Audio cues
         SwitchRow(
-            label = "Audio Cues",
-            checked = settings.audioCuesEnabled,
-            onCheckedChange = { viewModel.setAudioCues(it) },
-            contentDescription = if (settings.audioCuesEnabled) "Audio cues, on" else "Audio cues, off",
+            label = "Spoken Guidance",
+            checked = settings.spokenGuidanceEnabled,
+            onCheckedChange = { viewModel.setSpokenGuidance(it) },
+            contentDescription = if (settings.spokenGuidanceEnabled)
+                "Spoken guidance, on" else "Spoken guidance, off",
+        )
+
+        HorizontalDivider()
+
+        SwitchRow(
+            label = "Beacon Cues",
+            checked = settings.beaconCuesEnabled,
+            onCheckedChange = { viewModel.setBeaconCues(it) },
+            contentDescription = if (settings.beaconCuesEnabled) "Beacon cues, on" else "Beacon cues, off",
         )
 
         HorizontalDivider()
