@@ -1,6 +1,6 @@
 package com.boldexplorer.di
 
-import com.boldexplorer.location.FusedLocationProviderImpl
+import com.boldexplorer.location.LocationProviderRouter
 import com.boldexplorer.shared.location.LocationProvider
 import dagger.Binds
 import dagger.Module
@@ -13,5 +13,5 @@ import javax.inject.Singleton
 abstract class LocationModule {
     @Binds
     @Singleton
-    abstract fun bindLocationProvider(impl: FusedLocationProviderImpl): LocationProvider
+    abstract fun bindLocationProvider(impl: LocationProviderRouter): LocationProvider
 }

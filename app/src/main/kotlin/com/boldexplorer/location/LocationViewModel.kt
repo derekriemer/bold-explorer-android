@@ -8,6 +8,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.boldexplorer.compass.SensorCompassProvider
+import com.boldexplorer.shared.location.LocationProvider
 import com.boldexplorer.shared.model.HeadingReading
 import com.boldexplorer.shared.model.LocationSample
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -23,7 +24,7 @@ import javax.inject.Inject
 @HiltViewModel
 class LocationViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val locationProvider: FusedLocationProviderImpl,
+    private val locationProvider: LocationProvider,
     private val compassProvider: SensorCompassProvider,
 ) : ViewModel() {
 
