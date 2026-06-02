@@ -1,11 +1,16 @@
 package com.boldexplorer.ui.collections
 
 import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.boldexplorer.gpx.GpxExporter
+import com.boldexplorer.shared.gpx.GpxExporter
 import com.boldexplorer.gpx.GpxFileWriter
-import com.boldexplorer.gpx.GpxTrail
+import com.boldexplorer.gpx.GpxParser
+import com.boldexplorer.location.FusedLocationProviderImpl
+import com.boldexplorer.shared.geo.LatLng
+import com.boldexplorer.shared.geo.haversineDistanceMeters
+import com.boldexplorer.shared.gpx.GpxTrail
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.Waypoint
 import com.boldexplorer.shared.model.Collection as ExplorerCollection
@@ -38,13 +43,24 @@ class CollectionsViewModel @Inject constructor(
     private val collectionRepo: CollectionRepository,
     private val waypointRepo: WaypointRepository,
     private val trailRepo: TrailRepository,
+    locationProvider: FusedLocationProviderImpl,
 ) : ViewModel() {
+
+    // Eagerly so we always have a cached location when the add-waypoints dialog opens,
+    // even if the user navigates here without the GPS screen active.
+    private val location = locationProvider.locationFlow
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     val collections: StateFlow<List<ExplorerCollection>> = collectionRepo.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
-    val allWaypoints: StateFlow<List<Waypoint>> = waypointRepo.observeAll()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
+    val allWaypoints: StateFlow<List<Waypoint>> = combine(waypointRepo.observeAll(), location) { wps, loc ->
+        if (loc == null) wps
+        else {
+            val center = LatLng(loc.lat, loc.lon)
+            wps.sortedBy { haversineDistanceMeters(center, LatLng(it.lat, it.lon)) }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
     val allTrails: StateFlow<List<Trail>> = trailRepo.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
@@ -89,6 +105,13 @@ class CollectionsViewModel @Inject constructor(
         }
     }
 
+    fun rename(id: Long, name: String) {
+        viewModelScope.launch {
+            collectionRepo.rename(id, name)
+            _toast.value = "Collection renamed"
+        }
+    }
+
     fun delete(id: Long) {
         viewModelScope.launch {
             collectionRepo.remove(id)
@@ -97,10 +120,10 @@ class CollectionsViewModel @Inject constructor(
         }
     }
 
-    fun addWaypoint(collectionId: Long, waypointId: Long) {
+    fun addWaypoints(collectionId: Long, ids: Set<Long>) {
         viewModelScope.launch {
-            collectionRepo.attachWaypoint(collectionId, waypointId)
-            _toast.value = "Waypoint added"
+            ids.forEach { collectionRepo.attachWaypoint(collectionId, it) }
+            _toast.value = "${ids.size} waypoint${if (ids.size == 1) "" else "s"} added"
         }
     }
 
@@ -111,10 +134,10 @@ class CollectionsViewModel @Inject constructor(
         }
     }
 
-    fun addTrail(collectionId: Long, trailId: Long) {
+    fun addTrails(collectionId: Long, ids: Set<Long>) {
         viewModelScope.launch {
-            collectionRepo.attachTrail(collectionId, trailId)
-            _toast.value = "Trail added"
+            ids.forEach { collectionRepo.attachTrail(collectionId, it) }
+            _toast.value = "${ids.size} trail${if (ids.size == 1) "" else "s"} added"
         }
     }
 
@@ -143,4 +166,40 @@ class CollectionsViewModel @Inject constructor(
     }
 
     fun clearExportStatus() { _exportStatus.value = null }
+
+    fun importGpx(uri: Uri, fallbackName: String) {
+        viewModelScope.launch {
+            try {
+                val stream = context.contentResolver.openInputStream(uri) ?: run {
+                    _toast.value = "Could not open file"
+                    return@launch
+                }
+                val result = stream.use { GpxParser.parse(it) }
+                if (result.isEmpty) {
+                    _toast.value = "No waypoints or trails found in file"
+                    return@launch
+                }
+                val collectionName = result.collectionName ?: fallbackName
+                val collectionId = collectionRepo.create(collectionName, null)
+                loadContents(collectionId)
+
+                result.waypoints.forEach { p ->
+                    val wpId = waypointRepo.create(p.name, p.lat, p.lon, p.elevM, p.description)
+                    collectionRepo.attachWaypoint(collectionId, wpId)
+                }
+                result.trails.forEach { trail ->
+                    val trailId = trailRepo.create(trail.name, null)
+                    val kind = if (trail.isRoute) Waypoint.KIND_WAYPOINT else Waypoint.KIND_TRACK_POINT
+                    trail.points.forEach { p ->
+                        val wpId = waypointRepo.create(p.name, p.lat, p.lon, p.elevM, p.description, kind)
+                        waypointRepo.attach(trailId, wpId)
+                    }
+                    collectionRepo.attachTrail(collectionId, trailId)
+                }
+                _toast.value = "Imported \"$collectionName\" — ${result.summary}"
+            } catch (e: Exception) {
+                _toast.value = "Import failed: ${e.message}"
+            }
+        }
+    }
 }

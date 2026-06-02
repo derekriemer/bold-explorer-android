@@ -5,9 +5,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.boldexplorer.audio.AudioEngine
 import com.boldexplorer.compass.SensorCompassProvider
-import com.boldexplorer.gpx.GpxExporter
+import com.boldexplorer.shared.gpx.GpxExporter
 import com.boldexplorer.gpx.GpxFileWriter
-import com.boldexplorer.location.FusedLocationProviderImpl
+import com.boldexplorer.location.LocationProviderRouter
 import com.boldexplorer.shared.audio.AudioCueScheduler
 import com.boldexplorer.shared.model.HeadingReading
 import com.boldexplorer.shared.model.LocationSample
@@ -26,14 +26,14 @@ import javax.inject.Inject
 @HiltViewModel
 class DebugViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val locationProvider: FusedLocationProviderImpl,
+    private val locationRouter: LocationProviderRouter,
     private val compassProvider: SensorCompassProvider,
     private val waypointRepo: WaypointRepository,
     private val audioEngine: AudioEngine,
     private val scheduler: AudioCueScheduler,
 ) : ViewModel() {
 
-    val location: StateFlow<LocationSample?> = locationProvider.locationFlow
+    val location: StateFlow<LocationSample?> = locationRouter.locationFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
 
     val heading: StateFlow<HeadingReading?> = compassProvider.headingFlow
@@ -45,8 +45,14 @@ class DebugViewModel @Inject constructor(
 
     val accuracyBeaconEnabled: StateFlow<Boolean> = scheduler.accuracyBeaconEnabled
 
+    val useGnss: StateFlow<Boolean> = locationRouter.useGnss
+
     fun setAccuracyBeaconEnabled(enabled: Boolean) {
         scheduler.accuracyBeaconEnabled.value = enabled
+    }
+
+    fun setUseGnss(enabled: Boolean) {
+        locationRouter.setUseGnss(enabled)
     }
 
     fun testAccuracyBeacon() {

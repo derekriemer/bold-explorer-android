@@ -18,6 +18,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -34,6 +35,7 @@ fun DebugScreen(
     val heading by viewModel.heading.collectAsStateWithLifecycle()
     val exportStatus by viewModel.exportStatus.collectAsStateWithLifecycle()
     val accuracyBeaconEnabled by viewModel.accuracyBeaconEnabled.collectAsStateWithLifecycle()
+    val useGnss by viewModel.useGnss.collectAsStateWithLifecycle()
 
     Column(
         modifier = Modifier
@@ -56,6 +58,30 @@ fun DebugScreen(
                 DebugRow("Accuracy", location?.accuracy?.let { "${"%.1f".format(it)} m" } ?: "—")
                 DebugRow("Speed", location?.speed?.let { "${"%.1f".format(it)} m/s" } ?: "—")
                 DebugRow("Provider", location?.provider ?: "—")
+
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics(mergeDescendants = true) {
+                            contentDescription = "Raw GNSS provider ${if (useGnss) "on" else "off"}: bypasses sensor fusion for better outdoor accuracy"
+                        },
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Raw GNSS", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            if (useGnss) "GPS chip direct · better outdoors" else "Fused · better indoors / cold-start",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = useGnss,
+                        onCheckedChange = { viewModel.setUseGnss(it) },
+                    )
+                }
             }
         }
 
@@ -123,7 +149,7 @@ fun DebugScreen(
                     onClick = { viewModel.exportAllWaypoints() },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .semantics { contentDescription = "Export all waypoints to Downloads folder as G P X file" },
+                        .semantics { contentDescription = "Export all waypoints to Downloads folder as GPX file" },
                 ) {
                     Text("Export Waypoints GPX")
                 }

@@ -1,5 +1,7 @@
 package com.boldexplorer.ui.trails
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -39,7 +41,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.Waypoint
-import kotlinx.coroutines.delay
+import com.boldexplorer.ui.common.ToastMessage
+import com.boldexplorer.ui.common.useToast
 
 @Composable
 fun TrailsScreen(
@@ -56,30 +59,17 @@ fun TrailsScreen(
     val toast by viewModel.toast.collectAsStateWithLifecycle()
     val exportStatus by viewModel.exportStatus.collectAsStateWithLifecycle()
 
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let { viewModel.importGpx(it) }
+    }
+
     var showAddDialog by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<Trail?>(null) }
     var deleteTarget by remember { mutableStateOf<Trail?>(null) }
     var addWpToTrail by remember { mutableStateOf<Long?>(null) }
     var attachWpToTrail by remember { mutableStateOf<Long?>(null) }
-    var toastMessage by remember { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(toast) {
-        if (toast != null) {
-            toastMessage = toast
-            viewModel.clearToast()
-            delay(2000)
-            toastMessage = null
-        }
-    }
-
-    LaunchedEffect(exportStatus) {
-        if (exportStatus != null) {
-            toastMessage = exportStatus
-            viewModel.clearExportStatus()
-            delay(3000)
-            toastMessage = null
-        }
-    }
+    val toastMessage = useToast(toast, viewModel::clearToast)
+        ?: useToast(exportStatus, viewModel::clearExportStatus, durationMs = 3000L)
 
     Column(modifier = Modifier.padding(paddingValues)) {
         Row(
@@ -90,19 +80,16 @@ fun TrailsScreen(
         ) {
             Text("Trails", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
             TextButton(
+                onClick = { importLauncher.launch("*/*") },
+                modifier = Modifier.semantics { contentDescription = "Import GPX file" },
+            ) { Text("Import") }
+            TextButton(
                 onClick = { showAddDialog = true },
                 modifier = Modifier.semantics { contentDescription = "Add trail" },
             ) { Text("Add") }
         }
 
-        toastMessage?.let {
-            Text(
-                it,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(horizontal = 16.dp),
-            )
-        }
+        ToastMessage(toastMessage)
 
         if (trails.isEmpty()) {
             Text(
@@ -112,31 +99,60 @@ fun TrailsScreen(
             )
         } else {
             LazyColumn {
-                items(trails, key = { it.id }) { trail ->
+                for (trail in trails) {
                     val expanded = trail.id in expandedIds
                     val trackExpanded = trail.id in trackExpandedIds
                     val wps = namedWaypoints[trail.id] ?: emptyList()
                     val trackCount = trackPointCounts[trail.id] ?: 0L
                     val tps = trackPoints[trail.id] ?: emptyList()
 
-                    TrailItem(
-                        trail = trail,
-                        namedWaypoints = wps,
-                        trackPointCount = trackCount,
-                        trackPoints = tps,
-                        expanded = expanded,
-                        trackExpanded = trackExpanded,
-                        onToggle = { viewModel.toggleExpand(trail.id) },
-                        onToggleTrackPoints = { viewModel.toggleTrackExpand(trail.id) },
-                        onRename = { renameTarget = trail },
-                        onDelete = { deleteTarget = trail },
-                        onExport = { viewModel.exportTrail(trail.id) },
-                        onAddWaypoint = { addWpToTrail = trail.id },
-                        onAttachExisting = { attachWpToTrail = trail.id },
-                        onDetach = { wpId -> viewModel.detachWaypoint(trail.id, wpId) },
-                        onMoveUp = { idx, wpId -> viewModel.moveUp(trail.id, wpId, idx) },
-                        onMoveDown = { idx, wpId -> viewModel.moveDown(trail.id, wpId, idx, wps.size) },
-                    )
+                    item(key = "trail-${trail.id}") {
+                        TrailItem(
+                            trail = trail,
+                            namedWaypoints = wps,
+                            trackPointCount = trackCount,
+                            expanded = expanded,
+                            trackExpanded = trackExpanded,
+                            onToggle = { viewModel.toggleExpand(trail.id) },
+                            onToggleTrackPoints = { viewModel.toggleTrackExpand(trail.id) },
+                            onRename = { renameTarget = trail },
+                            onDelete = { deleteTarget = trail },
+                            onExport = { viewModel.exportTrail(trail.id) },
+                            onAddWaypoint = { addWpToTrail = trail.id },
+                            onAttachExisting = { attachWpToTrail = trail.id },
+                            onDetach = { wpId -> viewModel.detachWaypoint(trail.id, wpId) },
+                            onMoveUp = { idx, wpId -> viewModel.moveUp(trail.id, wpId, idx) },
+                            onMoveDown = { idx, wpId -> viewModel.moveDown(trail.id, wpId, idx, wps.size) },
+                        )
+                    }
+
+                    if (expanded && trackExpanded && tps.isNotEmpty()) {
+                        item(key = "trail-${trail.id}-tpheader") {
+                            Text(
+                                "$trackCount track points:",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .padding(horizontal = 24.dp, vertical = 2.dp)
+                                    .semantics {
+                                        liveRegion = LiveRegionMode.Polite
+                                        contentDescription = "$trackCount track points for ${trail.name}"
+                                    },
+                            )
+                        }
+                        tps.forEachIndexed { idx, tp ->
+                            item(key = "tp-${trail.id}-${tp.id}") {
+                                Text(
+                                    tp.name,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier
+                                        .padding(start = 32.dp, top = 1.dp, end = 16.dp, bottom = 1.dp)
+                                        .semantics { contentDescription = "Track point ${idx + 1}: ${tp.name}" },
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -162,7 +178,6 @@ fun TrailsScreen(
             confirmLabel = "Save",
             initial = trail.name,
             label = "Name",
-            contentDesc = "Trail name",
             onConfirm = { name ->
                 viewModel.rename(trail.id, name)
                 renameTarget = null
@@ -218,7 +233,6 @@ private fun TrailItem(
     trail: Trail,
     namedWaypoints: List<Waypoint>,
     trackPointCount: Long,
-    trackPoints: List<Waypoint>,
     expanded: Boolean,
     trackExpanded: Boolean,
     onToggle: () -> Unit,
@@ -282,7 +296,7 @@ private fun TrailItem(
                     ) { Text("Attach Existing") }
                     TextButton(
                         onClick = onExport,
-                        modifier = Modifier.semantics { contentDescription = "Export trail ${trail.name} as G P X" },
+                        modifier = Modifier.semantics { contentDescription = "Export trail ${trail.name} as GPX" },
                     ) { Text("Export GPX") }
                 }
 
@@ -343,30 +357,6 @@ private fun TrailItem(
                         )
                     }
 
-                    if (trackExpanded) {
-                        // Live region: announces count to TalkBack when list first appears.
-                        Text(
-                            "$trackPointCount track points:",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.semantics {
-                                liveRegion = LiveRegionMode.Polite
-                                contentDescription = "$trackPointCount track points for ${trail.name}"
-                            },
-                        )
-                        trackPoints.forEachIndexed { idx, tp ->
-                            Text(
-                                tp.name,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier
-                                    .padding(start = 8.dp, top = 1.dp)
-                                    .semantics {
-                                        contentDescription = "Track point ${idx + 1}: ${tp.name}"
-                                    },
-                            )
-                        }
-                    }
                 }
 
                 Spacer(modifier = Modifier.height(4.dp))
@@ -396,14 +386,14 @@ private fun NameDescDialog(
                     onValueChange = { name = it },
                     label = { Text("Name") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Trail name" },
+                    modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
                     value = desc,
                     onValueChange = { desc = it },
                     label = { Text("Description (optional)") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Trail description, optional" },
+                    modifier = Modifier.fillMaxWidth(),
                 )
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
@@ -424,7 +414,6 @@ private fun SingleFieldDialog(
     confirmLabel: String,
     initial: String,
     label: String,
-    contentDesc: String,
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -441,7 +430,7 @@ private fun SingleFieldDialog(
                     onValueChange = { value = it },
                     label = { Text(label) },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = contentDesc },
+                    modifier = Modifier.fillMaxWidth(),
                 )
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
@@ -472,10 +461,10 @@ private fun AddWaypointToTrailDialog(
         title = { Text("Add Waypoint") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Waypoint name" })
-                OutlinedTextField(value = lat, onValueChange = { lat = it }, label = { Text("Latitude") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Latitude" })
-                OutlinedTextField(value = lon, onValueChange = { lon = it }, label = { Text("Longitude") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Longitude" })
-                OutlinedTextField(value = elev, onValueChange = { elev = it }, label = { Text("Elevation m (optional)") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Elevation, optional" })
+                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = lat, onValueChange = { lat = it }, label = { Text("Latitude") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = lon, onValueChange = { lon = it }, label = { Text("Longitude") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = elev, onValueChange = { elev = it }, label = { Text("Elevation m (optional)") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },

@@ -1,5 +1,7 @@
 package com.boldexplorer.ui.waypoints
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -14,8 +16,16 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -27,17 +37,23 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.boldexplorer.shared.model.Collection as ExplorerCollection
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.Waypoint
 import com.boldexplorer.shared.navigation.BearingComputer
-import kotlinx.coroutines.delay
+import com.boldexplorer.ui.common.MultiSelectItemDialog
+import com.boldexplorer.ui.common.ToastMessage
+import com.boldexplorer.ui.common.useToast
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WaypointsScreen(
     paddingValues: PaddingValues,
@@ -45,7 +61,12 @@ fun WaypointsScreen(
 ) {
     val waypoints by viewModel.waypoints.collectAsStateWithLifecycle()
     val trails by viewModel.trails.collectAsStateWithLifecycle()
+    val collections by viewModel.collections.collectAsStateWithLifecycle()
+    val waypointCollectionIds by viewModel.waypointCollectionIds.collectAsStateWithLifecycle()
     val query by viewModel.query.collectAsStateWithLifecycle()
+    val sortMode by viewModel.sortMode.collectAsStateWithLifecycle()
+    val radiusFilterM by viewModel.radiusFilterM.collectAsStateWithLifecycle()
+    val collectionFilter by viewModel.collectionFilter.collectAsStateWithLifecycle()
     val toast by viewModel.toast.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
 
@@ -54,19 +75,19 @@ fun WaypointsScreen(
     var editTarget by remember { mutableStateOf<Waypoint?>(null) }
     var deleteTarget by remember { mutableStateOf<Waypoint?>(null) }
     var attachTarget by remember { mutableStateOf<Waypoint?>(null) }
-    var toastMessage by remember { mutableStateOf<String?>(null) }
+    var collectionTarget by remember { mutableStateOf<Waypoint?>(null) }
+    val toastMessage = useToast(toast, viewModel::clearToast)
 
-    LaunchedEffect(toast) {
-        if (toast != null) {
-            toastMessage = toast
-            viewModel.clearToast()
-            delay(2000)
-            toastMessage = null
-        }
+    LaunchedEffect(collectionTarget) {
+        collectionTarget?.let { viewModel.loadWaypointCollections(it.id) }
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let { viewModel.importGpx(it) }
     }
 
     Column(modifier = Modifier.padding(paddingValues)) {
-        // Header row
+        // ── Header ────────────────────────────────────────────────────────────────
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
@@ -75,22 +96,18 @@ fun WaypointsScreen(
         ) {
             Text("Waypoints", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
             TextButton(
+                onClick = { importLauncher.launch("*/*") },
+                modifier = Modifier.semantics { contentDescription = "Import GPX file" },
+            ) { Text("Import") }
+            TextButton(
                 onClick = { showAddDialog = true },
                 modifier = Modifier.semantics { contentDescription = "Add waypoint" },
             ) { Text("Add") }
         }
 
-        // Toast
-        toastMessage?.let {
-            Text(
-                it,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(horizontal = 16.dp),
-            )
-        }
+        ToastMessage(toastMessage)
 
-        // Search
+        // ── Search ────────────────────────────────────────────────────────────────
         OutlinedTextField(
             value = query,
             onValueChange = { viewModel.setQuery(it) },
@@ -98,15 +115,62 @@ fun WaypointsScreen(
             singleLine = true,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .semantics { contentDescription = "Search waypoints" },
+                .padding(horizontal = 16.dp),
         )
 
         Spacer(Modifier.height(8.dp))
 
+        // ── Sort ──────────────────────────────────────────────────────────────────
+        SingleChoiceSegmentedButtonRow(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+        ) {
+            SegmentedButton(
+                selected = sortMode == WaypointSortMode.DISTANCE,
+                onClick = { viewModel.setSortMode(WaypointSortMode.DISTANCE) },
+                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                modifier = Modifier.semantics { contentDescription = "Sort by distance" },
+            ) { Text("Distance") }
+            SegmentedButton(
+                selected = sortMode == WaypointSortMode.ALPHA,
+                onClick = { viewModel.setSortMode(WaypointSortMode.ALPHA) },
+                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                modifier = Modifier.semantics { contentDescription = "Sort A to Z" },
+            ) { Text("A–Z") }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // ── Radius + Collection filters ───────────────────────────────────────────
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            RadiusDropdown(
+                selected = radiusFilterM,
+                onSelect = { viewModel.setRadiusFilter(it) },
+                modifier = Modifier.weight(1f),
+            )
+            CollectionDropdown(
+                collections = collections,
+                selectedId = collectionFilter,
+                onSelect = { viewModel.setCollectionFilter(it) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // ── List ──────────────────────────────────────────────────────────────────
         if (waypoints.isEmpty()) {
             Text(
-                "No waypoints yet",
+                if (query.isNotBlank() || radiusFilterM != null || collectionFilter != null)
+                    "No waypoints match your filters"
+                else
+                    "No waypoints yet",
                 modifier = Modifier.padding(16.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -121,13 +185,14 @@ fun WaypointsScreen(
                         onEdit = { editTarget = item.waypoint },
                         onDelete = { deleteTarget = item.waypoint },
                         onAttach = { attachTarget = item.waypoint },
+                        onAddToCollection = { collectionTarget = item.waypoint },
                     )
                 }
             }
         }
     }
 
-    // Add dialog
+    // ── Add dialog ────────────────────────────────────────────────────────────────
     if (showAddDialog) {
         WaypointEditDialog(
             title = "Add Waypoint",
@@ -141,7 +206,7 @@ fun WaypointsScreen(
         )
     }
 
-    // Edit dialog
+    // ── Edit dialog ───────────────────────────────────────────────────────────────
     editTarget?.let { wp ->
         WaypointEditDialog(
             title = "Edit Waypoint",
@@ -155,7 +220,7 @@ fun WaypointsScreen(
         )
     }
 
-    // Delete confirm dialog
+    // ── Delete confirm ────────────────────────────────────────────────────────────
     deleteTarget?.let { wp ->
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
@@ -173,7 +238,7 @@ fun WaypointsScreen(
         )
     }
 
-    // Attach to trail dialog
+    // ── Attach to trail ───────────────────────────────────────────────────────────
     attachTarget?.let { wp ->
         AttachToTrailDialog(
             waypointName = wp.name,
@@ -185,7 +250,109 @@ fun WaypointsScreen(
             onDismiss = { attachTarget = null },
         )
     }
+
+    // ── Add to collection ─────────────────────────────────────────────────────────
+    collectionTarget?.let { wp ->
+        val candidates = collections.filterNot { it.id in waypointCollectionIds }
+        MultiSelectItemDialog(
+            title = "Add \"${wp.name}\" to Collections",
+            entries = candidates.map { it.id to it.name },
+            onConfirm = { ids ->
+                viewModel.addToCollections(wp.id, ids)
+                collectionTarget = null
+            },
+            onDismiss = { collectionTarget = null },
+            emptyMessage = "This waypoint is already in every collection.",
+        )
+    }
 }
+
+// ── Filter controls ───────────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RadiusDropdown(
+    selected: Double?,
+    onSelect: (Double?) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val label = RADIUS_OPTIONS.firstOrNull { it.second == selected }?.first ?: "Any distance"
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+        modifier = modifier,
+    ) {
+        OutlinedTextField(
+            value = label,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Radius") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+            modifier = Modifier
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                .fillMaxWidth()
+                .semantics { contentDescription = "Radius filter: $label" },
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            RADIUS_OPTIONS.forEach { (name, value) ->
+                DropdownMenuItem(
+                    text = { Text(name) },
+                    onClick = { onSelect(value); expanded = false },
+                    modifier = Modifier.semantics { contentDescription = name },
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CollectionDropdown(
+    collections: List<ExplorerCollection>,
+    selectedId: Long?,
+    onSelect: (Long?) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val label = if (selectedId == null) "All collections"
+    else collections.firstOrNull { it.id == selectedId }?.name ?: "All collections"
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+        modifier = modifier,
+    ) {
+        OutlinedTextField(
+            value = label,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Collection") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+            modifier = Modifier
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                .fillMaxWidth()
+                .semantics { contentDescription = "Collection filter: $label" },
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("All collections") },
+                onClick = { onSelect(null); expanded = false },
+                modifier = Modifier.semantics { contentDescription = "All collections" },
+            )
+            collections.forEach { col ->
+                DropdownMenuItem(
+                    text = { Text(col.name) },
+                    onClick = { onSelect(col.id); expanded = false },
+                    modifier = Modifier.semantics { contentDescription = col.name },
+                )
+            }
+        }
+    }
+}
+
+// ── Waypoint list item ────────────────────────────────────────────────────────────
 
 @Composable
 private fun WaypointItem(
@@ -196,6 +363,7 @@ private fun WaypointItem(
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onAttach: () -> Unit,
+    onAddToCollection: () -> Unit,
 ) {
     val waypoint = item.waypoint
     Card(
@@ -203,7 +371,10 @@ private fun WaypointItem(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp)
-            .semantics { contentDescription = "${waypoint.name}, ${if (expanded) "expanded" else "collapsed"}" },
+            .semantics {
+                val dist = item.distanceM?.let { ", ${BearingComputer.formatDistance(it, units)}" } ?: ""
+                contentDescription = "${waypoint.name}$dist, ${if (expanded) "expanded" else "collapsed"}"
+            },
         elevation = CardDefaults.cardElevation(defaultElevation = if (expanded) 4.dp else 1.dp),
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
@@ -235,6 +406,10 @@ private fun WaypointItem(
                         modifier = Modifier.semantics { contentDescription = "Attach ${waypoint.name} to trail" },
                     ) { Text("Attach to trail") }
                     TextButton(
+                        onClick = onAddToCollection,
+                        modifier = Modifier.semantics { contentDescription = "Add ${waypoint.name} to collection" },
+                    ) { Text("Add to collection") }
+                    TextButton(
                         onClick = onDelete,
                         modifier = Modifier.semantics { contentDescription = "Delete waypoint ${waypoint.name}" },
                     ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
@@ -243,6 +418,8 @@ private fun WaypointItem(
         }
     }
 }
+
+// ── Dialogs ───────────────────────────────────────────────────────────────────────
 
 @Composable
 private fun WaypointEditDialog(
@@ -268,7 +445,7 @@ private fun WaypointEditDialog(
                     onValueChange = { name = it },
                     label = { Text("Name") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Waypoint name" },
+                    modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
                     value = lat,
@@ -276,7 +453,7 @@ private fun WaypointEditDialog(
                     label = { Text("Latitude") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Latitude" },
+                    modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
                     value = lon,
@@ -284,7 +461,7 @@ private fun WaypointEditDialog(
                     label = { Text("Longitude") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Longitude" },
+                    modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
                     value = elev,
@@ -292,7 +469,7 @@ private fun WaypointEditDialog(
                     label = { Text("Elevation m (optional)") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Elevation in meters, optional" },
+                    modifier = Modifier.fillMaxWidth(),
                 )
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }

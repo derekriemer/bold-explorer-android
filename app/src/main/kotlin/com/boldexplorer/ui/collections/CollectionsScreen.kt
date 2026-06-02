@@ -1,5 +1,7 @@
 package com.boldexplorer.ui.collections
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -16,7 +18,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,7 +33,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.boldexplorer.shared.model.Collection as ExplorerCollection
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.Waypoint
-import kotlinx.coroutines.delay
+import com.boldexplorer.ui.common.MultiSelectItemDialog
+import com.boldexplorer.ui.common.ToastMessage
+import com.boldexplorer.ui.common.useToast
 
 @Composable
 fun CollectionsScreen(
@@ -46,30 +49,18 @@ fun CollectionsScreen(
     val toast by viewModel.toast.collectAsStateWithLifecycle()
     val exportStatus by viewModel.exportStatus.collectAsStateWithLifecycle()
 
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let { viewModel.importGpx(it, it.lastPathSegment?.removeSuffix(".gpx") ?: "Imported Collection") }
+    }
+
     var expandedId by rememberSaveable { mutableStateOf<Long?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
+    var renameTarget by remember { mutableStateOf<ExplorerCollection?>(null) }
     var deleteTarget by remember { mutableStateOf<ExplorerCollection?>(null) }
     var addWpToCollection by remember { mutableStateOf<Long?>(null) }
     var addTrailToCollection by remember { mutableStateOf<Long?>(null) }
-    var toastMessage by remember { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(toast) {
-        if (toast != null) {
-            toastMessage = toast
-            viewModel.clearToast()
-            delay(2000)
-            toastMessage = null
-        }
-    }
-
-    LaunchedEffect(exportStatus) {
-        if (exportStatus != null) {
-            toastMessage = exportStatus
-            viewModel.clearExportStatus()
-            delay(3000)
-            toastMessage = null
-        }
-    }
+    val toastMessage = useToast(toast, viewModel::clearToast)
+        ?: useToast(exportStatus, viewModel::clearExportStatus, durationMs = 3000L)
 
     Column(modifier = Modifier.padding(paddingValues)) {
         Row(
@@ -80,19 +71,16 @@ fun CollectionsScreen(
         ) {
             Text("Collections", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
             TextButton(
+                onClick = { importLauncher.launch("*/*") },
+                modifier = Modifier.semantics { contentDescription = "Import GPX file as collection" },
+            ) { Text("Import") }
+            TextButton(
                 onClick = { showAddDialog = true },
                 modifier = Modifier.semantics { contentDescription = "Add collection" },
             ) { Text("Add") }
         }
 
-        toastMessage?.let {
-            Text(
-                it,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(horizontal = 16.dp),
-            )
-        }
+        ToastMessage(toastMessage)
 
         if (collections.isEmpty()) {
             Text(
@@ -118,6 +106,7 @@ fun CollectionsScreen(
                                 expandedId = null
                             }
                         },
+                        onRename = { renameTarget = coll },
                         onDelete = { deleteTarget = coll },
                         onExport = { viewModel.exportCollection(coll.id) },
                         onAddWaypoints = { addWpToCollection = coll.id },
@@ -140,6 +129,34 @@ fun CollectionsScreen(
         )
     }
 
+    renameTarget?.let { coll ->
+        var nameInput by remember { mutableStateOf(coll.name) }
+        var error by remember { mutableStateOf<String?>(null) }
+        AlertDialog(
+            onDismissRequest = { renameTarget = null },
+            title = { Text("Rename Collection") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = nameInput,
+                        onValueChange = { nameInput = it; error = null },
+                        label = { Text("Name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (nameInput.isBlank()) error = "Name required"
+                    else { viewModel.rename(coll.id, nameInput.trim()); renameTarget = null }
+                }) { Text("Rename") }
+            },
+            dismissButton = { TextButton(onClick = { renameTarget = null }) { Text("Cancel") } },
+        )
+    }
+
     deleteTarget?.let { coll ->
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
@@ -158,11 +175,11 @@ fun CollectionsScreen(
     addWpToCollection?.let { collId ->
         val existing = contents[collId]?.waypoints?.map { it.id }?.toSet() ?: emptySet()
         val candidates = allWaypoints.filter { it.id !in existing }
-        SelectItemDialog(
+        MultiSelectItemDialog(
             title = "Add Waypoints",
-            items = candidates.map { it.id to it.name },
-            onSelect = { id ->
-                viewModel.addWaypoint(collId, id)
+            entries = candidates.map { it.id to it.name },
+            onConfirm = { ids ->
+                viewModel.addWaypoints(collId, ids)
                 addWpToCollection = null
             },
             onDismiss = { addWpToCollection = null },
@@ -173,11 +190,11 @@ fun CollectionsScreen(
     addTrailToCollection?.let { collId ->
         val existing = contents[collId]?.trails?.map { it.id }?.toSet() ?: emptySet()
         val candidates = allTrails.filter { it.id !in existing }
-        SelectItemDialog(
+        MultiSelectItemDialog(
             title = "Add Trails",
-            items = candidates.map { it.id to it.name },
-            onSelect = { id ->
-                viewModel.addTrail(collId, id)
+            entries = candidates.map { it.id to it.name },
+            onConfirm = { ids ->
+                viewModel.addTrails(collId, ids)
                 addTrailToCollection = null
             },
             onDismiss = { addTrailToCollection = null },
@@ -192,6 +209,7 @@ private fun CollectionItem(
     contents: CollectionContents?,
     expanded: Boolean,
     onToggle: () -> Unit,
+    onRename: () -> Unit,
     onDelete: () -> Unit,
     onExport: () -> Unit,
     onAddWaypoints: () -> Unit,
@@ -214,12 +232,16 @@ private fun CollectionItem(
             ) {
                 Text(collection.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                 TextButton(
+                    onClick = onRename,
+                    modifier = Modifier.semantics { contentDescription = "Rename collection ${collection.name}" },
+                ) { Text("Rename") }
+                TextButton(
                     onClick = onDelete,
                     modifier = Modifier.semantics { contentDescription = "Delete collection ${collection.name}" },
                 ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
                 TextButton(
                     onClick = onExport,
-                    modifier = Modifier.semantics { contentDescription = "Export collection ${collection.name} as G P X" },
+                    modifier = Modifier.semantics { contentDescription = "Export collection ${collection.name} as GPX" },
                 ) { Text("Export GPX") }
             }
 
@@ -298,14 +320,14 @@ private fun AddCollectionDialog(
                     onValueChange = { name = it },
                     label = { Text("Name") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Collection name" },
+                    modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
                     value = desc,
                     onValueChange = { desc = it },
                     label = { Text("Description (optional)") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Collection description, optional" },
+                    modifier = Modifier.fillMaxWidth(),
                 )
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
@@ -316,36 +338,6 @@ private fun AddCollectionDialog(
                 else onConfirm(name.trim(), desc.trim().ifBlank { null })
             }) { Text("Create") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
-}
-
-@Composable
-private fun SelectItemDialog(
-    title: String,
-    items: List<Pair<Long, String>>,
-    onSelect: (Long) -> Unit,
-    onDismiss: () -> Unit,
-    emptyMessage: String,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            if (items.isEmpty()) {
-                Text(emptyMessage)
-            } else {
-                Column {
-                    items.forEach { (id, name) ->
-                        TextButton(
-                            onClick = { onSelect(id) },
-                            modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Select $name" },
-                        ) { Text(name) }
-                    }
-                }
-            }
-        },
-        confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

@@ -1,10 +1,12 @@
 package com.boldexplorer.ui.trails
 
 import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.boldexplorer.gpx.GpxExporter
+import com.boldexplorer.shared.gpx.GpxExporter
 import com.boldexplorer.gpx.GpxFileWriter
+import com.boldexplorer.gpx.GpxParser
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.Waypoint
 import com.boldexplorer.shared.repository.TrailRepository
@@ -191,4 +193,34 @@ class TrailsViewModel @Inject constructor(
     }
 
     fun clearExportStatus() { _exportStatus.value = null }
+
+    fun importGpx(uri: Uri) {
+        viewModelScope.launch {
+            try {
+                val stream = context.contentResolver.openInputStream(uri) ?: run {
+                    _toast.value = "Could not open file"
+                    return@launch
+                }
+                val result = stream.use { GpxParser.parse(it) }
+                if (result.isEmpty) {
+                    _toast.value = "No waypoints or trails found in file"
+                    return@launch
+                }
+                result.waypoints.forEach { p ->
+                    waypointRepo.create(p.name, p.lat, p.lon, p.elevM, p.description)
+                }
+                result.trails.forEach { trail ->
+                    val trailId = trailRepo.create(trail.name, null)
+                    val kind = if (trail.isRoute) Waypoint.KIND_WAYPOINT else Waypoint.KIND_TRACK_POINT
+                    trail.points.forEach { p ->
+                        val wpId = waypointRepo.create(p.name, p.lat, p.lon, p.elevM, p.description, kind)
+                        waypointRepo.attach(trailId, wpId)
+                    }
+                }
+                _toast.value = "Imported ${result.summary}"
+            } catch (e: Exception) {
+                _toast.value = "Import failed: ${e.message}"
+            }
+        }
+    }
 }
