@@ -78,6 +78,18 @@ class GeoMathTest {
     }
 
     @Test
+    fun deltaAngle_signConvention_positiveIsClockwise() {
+        // Contract: positive = bearing is clockwise from heading (target to the right).
+        // BearingComputer.toRelative and any UI display of this delta must agree.
+        // If this formula is ever changed, BearingComputerTest.toRelative_consistentWithDeltaAngle
+        // will also fail, forcing both to be updated together.
+        assertTrue(deltaAngle(0.0, 90.0) > 0,   "East of North should be positive (right)")
+        assertTrue(deltaAngle(90.0, 0.0) < 0,   "North of East should be negative (left)")
+        assertTrue(deltaAngle(0.0, 270.0) < 0,  "West of North should be negative (left)")
+        assertTrue(deltaAngle(270.0, 0.0) > 0,  "North of West should be positive (right)")
+    }
+
+    @Test
     fun deltaAngle_behind() {
         // Heading 0, bearing 180 → ±180 (normalised to -180 by the formula)
         val d = deltaAngle(0.0, 180.0)
@@ -115,5 +127,131 @@ class GeoMathTest {
         if (bbox.needsLonFilter) {
             assertTrue(bbox.crossing, "should flag anti-meridian crossing")
         }
+    }
+
+    // ── segmentFraction ──────────────────────────────────────────────────────────
+
+    private val segA = LatLng(0.0, 0.0)
+    private val segB = LatLng(0.001, 0.0) // ~111 m north
+
+    @Test
+    fun segmentFraction_atA_isZero() {
+        assertClose(segmentFraction(segA, segA, segB), 0.0, tol = 0.01)
+    }
+
+    @Test
+    fun segmentFraction_atB_isOne() {
+        assertClose(segmentFraction(segB, segA, segB), 1.0, tol = 0.01)
+    }
+
+    @Test
+    fun segmentFraction_atMidpoint_isHalf() {
+        val mid = LatLng(0.0005, 0.0)
+        assertClose(segmentFraction(mid, segA, segB), 0.5, tol = 0.01)
+    }
+
+    @Test
+    fun segmentFraction_pastB_greaterThanOne() {
+        val past = LatLng(0.0012, 0.0)
+        assertTrue(segmentFraction(past, segA, segB) > 1.0)
+    }
+
+    @Test
+    fun segmentFraction_beforeA_negative() {
+        val before = LatLng(-0.0001, 0.0)
+        assertTrue(segmentFraction(before, segA, segB) < 0.0)
+    }
+
+    @Test
+    fun segmentFraction_degenerate_returnsZero() {
+        // a == b — no valid segment
+        assertClose(segmentFraction(segA, segA, segA), 0.0, tol = 0.01)
+    }
+
+    // ── distanceToSegmentMeters ──────────────────────────────────────────────────
+
+    // N-S segment: segA(0,0) → segB(0.001,0), ~111m long.
+
+    @Test
+    fun distanceToSegment_pointOnSegment_isNearZero() {
+        val mid = LatLng(0.0005, 0.0) // midpoint, exactly on segment
+        assertClose(distanceToSegmentMeters(mid, segA, segB), 0.0, tol = 0.5)
+    }
+
+    @Test
+    fun distanceToSegment_perpendicularToMidpoint() {
+        // Point 100m east of midpoint (0.0005, 0): lon ≈ 0.001° ≈ 111m at equator
+        val east = LatLng(0.0005, 0.001)
+        assertClose(distanceToSegmentMeters(east, segA, segB), 111.32, tol = 2.0, label = "perpendicular")
+    }
+
+    @Test
+    fun distanceToSegment_pastEnd_clampsToEndpoint() {
+        val past = LatLng(0.002, 0.0) // past segB
+        val expected = haversineDistanceMeters(past, segB)
+        assertClose(distanceToSegmentMeters(past, segA, segB), expected, tol = 0.1, label = "past end")
+    }
+
+    @Test
+    fun distanceToSegment_beforeStart_clampsToStartpoint() {
+        val before = LatLng(-0.001, 0.0) // before segA
+        val expected = haversineDistanceMeters(before, segA)
+        assertClose(distanceToSegmentMeters(before, segA, segB), expected, tol = 0.1, label = "before start")
+    }
+
+    @Test
+    fun distanceToSegment_degenerate_isPointDistance() {
+        // segStart == segEnd — degenerate segment; result should equal point-to-point distance.
+        val p = LatLng(0.001, 0.001)
+        val expected = haversineDistanceMeters(p, segA)
+        assertClose(distanceToSegmentMeters(p, segA, segA), expected, tol = 0.1, label = "degenerate")
+    }
+
+    // ── angleDifferenceDeg ───────────────────────────────────────────────────────
+
+    @Test
+    fun angleDifference_same_isZero() {
+        assertClose(angleDifferenceDeg(0.0, 0.0), 0.0, tol = 0.001)
+    }
+
+    @Test
+    fun angleDifference_opposite_is180() {
+        assertClose(angleDifferenceDeg(0.0, 180.0), 180.0, tol = 0.001)
+    }
+
+    @Test
+    fun angleDifference_wrapsAround() {
+        // 350° and 10° are 20° apart across the 0/360 boundary.
+        assertClose(angleDifferenceDeg(350.0, 10.0), 20.0, tol = 0.001)
+    }
+
+    @Test
+    fun angleDifference_rightAngle() {
+        assertClose(angleDifferenceDeg(90.0, 270.0), 180.0, tol = 0.001)
+    }
+
+    @Test
+    fun angleDifference_isSymmetric() {
+        val ab = angleDifferenceDeg(10.0, 350.0)
+        val ba = angleDifferenceDeg(350.0, 10.0)
+        assertClose(ab, ba, tol = 0.001, label = "symmetry")
+    }
+
+    // ── distance3DMeters ─────────────────────────────────────────────────────────
+
+    @Test
+    fun distance3D_noElevation_isHorizDist() {
+        assertClose(distance3DMeters(100.0, 0.0), 100.0, tol = 0.001)
+    }
+
+    @Test
+    fun distance3D_pythagorean3_4_5() {
+        assertClose(distance3DMeters(3.0, 4.0), 5.0, tol = 0.001)
+    }
+
+    @Test
+    fun distance3D_negativeElevDelta_stillPositive() {
+        // Sign of elevDelta should not matter — result is sqrt(x²+y²).
+        assertClose(distance3DMeters(3.0, -4.0), 5.0, tol = 0.001)
     }
 }

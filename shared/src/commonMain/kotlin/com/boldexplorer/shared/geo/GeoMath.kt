@@ -37,6 +37,46 @@ fun initialBearingDeg(a: LatLng, b: LatLng): Double {
 fun deltaAngle(heading: Double, bearing: Double): Double =
     ((bearing - heading + 540) % 360) - 180
 
+/**
+ * Scalar projection of [p] onto segment [a]→[b], in the unit space of the segment.
+ *
+ * Returns 0.0 when [p] projects onto [a], 1.0 onto [b], >1.0 past [b], <0.0 behind [a].
+ * Uses approximate flat-earth coordinates (scaled lon by cos(lat)); accurate for segments < ~1 km.
+ * Returns 0.0 for degenerate segments (a == b).
+ */
+fun segmentFraction(p: LatLng, a: LatLng, b: LatLng): Double {
+    val cosLat = cos((a.lat + b.lat) / 2.0 * DEG_TO_RAD)
+    val abLat = b.lat - a.lat
+    val abLon = (b.lon - a.lon) * cosLat
+    val apLat = p.lat - a.lat
+    val apLon = (p.lon - a.lon) * cosLat
+    val len2 = abLat * abLat + abLon * abLon
+    return if (len2 < 1e-12) 0.0 else (abLat * apLat + abLon * apLon) / len2
+}
+
+/**
+ * Perpendicular distance from [point] to the segment [segStart]→[segEnd].
+ * Clamps the projection to the segment endpoints, so points past the end return
+ * distance to the endpoint, not the extended line. Valid for segments < ~1 km.
+ */
+fun distanceToSegmentMeters(point: LatLng, segStart: LatLng, segEnd: LatLng): Double {
+    val t = segmentFraction(point, segStart, segEnd).coerceIn(0.0, 1.0)
+    val projLat = segStart.lat + t * (segEnd.lat - segStart.lat)
+    val projLon = segStart.lon + t * (segEnd.lon - segStart.lon)
+    return haversineDistanceMeters(point, LatLng(projLat, projLon))
+}
+
+/** Absolute angular difference between two bearings, in [0, 180]. */
+fun angleDifferenceDeg(a: Double, b: Double): Double = abs(deltaAngle(a, b))
+
+/**
+ * 3D distance combining a horizontal haversine distance and an elevation delta.
+ * Use when both horizontal and vertical displacements are meaningful (e.g. steep terrain).
+ * Sign of [elevDeltaM] does not matter — it is squared internally.
+ */
+fun distance3DMeters(horizDistM: Double, elevDeltaM: Double): Double =
+    sqrt(horizDistM * horizDistM + elevDeltaM * elevDeltaM)
+
 fun computeBbox(center: LatLng, radiusM: Double = DEFAULT_BBOX_RADIUS_M): BboxResult {
     val degLat = radiusM / METERS_PER_DEG_LAT
     val latMin = maxOf(-90.0, center.lat - degLat)
