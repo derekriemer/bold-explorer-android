@@ -11,7 +11,7 @@ CREATE INDEX idx_collection_waypoint_wp ON collection_waypoint(waypoint_id);
 waypointsForCollection:
 SELECT w.* FROM waypoint AS w
 INNER JOIN collection_waypoint AS cw ON cw.waypoint_id = w.id
-WHERE cw.collection_id = :collectionId;
+WHERE cw.collection_id = :collectionId AND w.kind = 'waypoint';
 
 insert:
 INSERT INTO collection_waypoint (collection_id, waypoint_id, created_at)
@@ -26,3 +26,8 @@ DELETE FROM collection_waypoint WHERE waypoint_id = :waypointId;
 
 deleteForCollection:
 DELETE FROM collection_waypoint WHERE collection_id = :collectionId;
+
+collectionsForWaypoint:
+SELECT c.* FROM collection AS c
+INNER JOIN collection_waypoint AS cw ON cw.collection_id = c.id
+WHERE cw.waypoint_id = :waypointId;

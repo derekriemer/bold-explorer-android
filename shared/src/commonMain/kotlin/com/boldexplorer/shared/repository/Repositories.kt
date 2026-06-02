@@ -46,9 +46,11 @@ interface CollectionRepository {
     suspend fun getAll(): List<ExplorerCollection>
     suspend fun getById(id: Long): ExplorerCollection?
     suspend fun create(name: String, description: String?): Long
+    suspend fun rename(id: Long, name: String)
     suspend fun remove(id: Long)
     suspend fun waypointsForCollection(collectionId: Long): List<Waypoint>
     suspend fun trailsForCollection(collectionId: Long): List<Trail>
+    suspend fun collectionsForWaypoint(waypointId: Long): List<ExplorerCollection>
     suspend fun attachWaypoint(collectionId: Long, waypointId: Long)
     suspend fun detachWaypoint(collectionId: Long, waypointId: Long)
     suspend fun attachTrail(collectionId: Long, trailId: Long)

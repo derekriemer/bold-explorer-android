@@ -41,6 +41,10 @@ class CollectionRepositoryImpl @Inject constructor(
         return newId
     }
 
+    override suspend fun rename(id: Long, name: String) {
+        db.collectionQueries.rename(name = name, id = id)
+    }
+
     override suspend fun remove(id: Long) {
         db.transaction {
             db.collectionWaypointQueries.deleteForCollection(id)
@@ -55,6 +59,10 @@ class CollectionRepositoryImpl @Inject constructor(
 
     override suspend fun trailsForCollection(collectionId: Long): List<Trail> =
         db.collectionTrailQueries.trailsForCollection(collectionId)
+            .executeAsList().map { it.toModel() }
+
+    override suspend fun collectionsForWaypoint(waypointId: Long): List<ExplorerCollection> =
+        db.collectionWaypointQueries.collectionsForWaypoint(waypointId)
             .executeAsList().map { it.toModel() }
 
     override suspend fun attachWaypoint(collectionId: Long, waypointId: Long) {

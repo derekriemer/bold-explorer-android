@@ -17,5 +17,8 @@ INSERT INTO collection (name, description, created_at) VALUES (:name, :descripti
 lastInsertRowId:
 SELECT last_insert_rowid();
 
+rename:
+UPDATE collection SET name = :name WHERE id = :id;
+
 remove:
 DELETE FROM collection WHERE id = :id;
