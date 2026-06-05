@@ -27,13 +27,13 @@ Run a single test class:
 
 ### Two-module KMP split
 
-`:shared` — pure Kotlin, zero Android deps. Targets `jvm` (for fast local tests) and `androidTarget`. All algorithms, state machines, domain models, and repository interfaces live here. Tests run on the JVM without an emulator.
+`:shared` — pure Kotlin, zero Android or iOS deps. Targets `jvm` (for fast local tests), `androidTarget`, `iosArm64`, `iosSimulatorArm64`, and `iosX64`. All algorithms, state machines, domain models, and repository interfaces live here. Tests run on the JVM without an emulator. The iOS artifact is `BoldExplorerShared.xcframework` (built via `make xcframework` on macOS).
 
 `:app` — Android-only. Consumes `:shared`. Contains all Android API usage: SQLDelight driver, FusedLocationProvider, SensorManager, AudioTrack, TextToSpeech, DataStore, Hilt DI, Jetpack Compose UI.
 
 ### Original Vue/Capacitor source as reference
 
-`../bold-explorer/` (sibling directory) is the reference implementation. Port from it; never modify it. Key files:
+`../js-bold-explorer/` (sibling directory) is the reference implementation. Port from it; never modify it. Key files:
 
 - `src/utils/geo.ts` → `shared/.../geo/GeoMath.kt`
 - `src/composables/useFollowTrail.ts` → `shared/.../navigation/TrailFollower.kt`
@@ -44,6 +44,7 @@ Run a single test class:
 
 ### Data flow
 
+<!--
 ```
 GPS/Sensor hardware
   └── FusedLocationProviderImpl / SensorCompassProvider  (:app, Phase 3)
@@ -58,6 +59,7 @@ AudioCueScheduler.events: SharedFlow<AudioCueEvent>
         ├── AudioEngine (AudioTrack PCM sine)
         └── TtsEngine (TextToSpeech)
 ```
+-->
 
 ### Key patterns
 

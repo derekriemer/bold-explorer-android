@@ -22,6 +22,11 @@ test-db:
 test:
 	$(GW) :shared:jvmTest :app:testDebugUnitTest
 
+# ── iOS XCFramework (requires macOS + Xcode) ───────────────────────────────
+.PHONY: xcframework
+xcframework:
+	$(GW) :shared:assembleSharedXCFramework
+
 # ── Android build (requires ANDROID_HOME) ──────────────────────────────────
 .PHONY: assemble
 assemble:
@@ -69,3 +74,4 @@ help:
 	@echo "make adb-connect       — connect to phone via Tailscale (set PHONE_IP, PHONE_PORT)"
 	@echo "make adb-pair          — pair phone for first-time wireless ADB (set PHONE_IP, PAIR_PORT)"
 	@echo "make logcat            — tail app + crash logs"
+	@echo "make xcframework       — build BoldExplorerShared.xcframework (macOS + Xcode only)"

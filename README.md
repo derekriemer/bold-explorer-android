@@ -1,12 +1,14 @@
 # Bold Explorer — Android
 
-Native Android trail navigation app, built for and by a blind user. The original Vue 3 + Ionic Capacitor app was a prototype; this repo is the production Android implementation.
+Offline trail navigation app built for a blind user. Audio is the primary interface.
 
-Pure logic (algorithms, state machines, models, settings migration, repository interfaces) lives in `:shared`; Android APIs and UI live in `:app`.
+The original Vue 3 + Ionic Capacitor prototype is at `../bold-explorer/` (sibling directory) — do not modify it; it is the algorithm reference.
 
-Original Vue/Capacitor source lives at `../bold-explorer/` (sibling directory). TypeScript files there are the reference for algorithm parity — port from them, don't modify them.
+**For a full product and design spec (including iOS porting guidance) see [SPEC.md](SPEC.md).**
 
-## Project Structure
+---
+
+## Module Structure
 
 ```
 bold-explorer-android/
@@ -20,7 +22,7 @@ bold-explorer-android/
 │       ├── geo/                    # GeoMath, LatLng, BboxResult
 │       ├── model/                  # domain models, LocationSample, HeadingReading
 │       ├── repository/             # interfaces only
-│       ├── navigation/             # TrailFollower, BearingComputer
+│       ├── navigation/             # TrailFollower, BearingComputer, CollectionExplorer
 │       ├── audio/                  # AudioCueEvent, AudioCueConfig, AudioCueScheduler
 │       └── settings/               # AppSettings, SettingsMigration
 │
@@ -31,7 +33,7 @@ bold-explorer-android/
         ├── compass/                # SensorCompassProvider
         ├── audio/                  # AudioEngine (AudioTrack), TtsEngine, AudioCuePlayer
         ├── settings/               # DataStoreSettingsRepository
-        ├── gpx/                    # GpxExporter
+        ├── gpx/                    # GpxParser, GpxExporter, GpxFileWriter
         ├── di/                     # Hilt modules
         └── ui/                     # Jetpack Compose screens + ViewModels
 ```
@@ -40,38 +42,53 @@ bold-explorer-android/
 
 | Concern | Choice | Reason |
 |---|---|---|
-| Database | SQLDelight 2.x | Typed SQLite access and generated query APIs |
-| DI | Hilt (Android-only) | Compile-time verification; `:shared` has zero DI deps |
-| Audio tones | AudioTrack (PCM float, stereo) | Full pan control via `setStereoVolume()`; sub-10ms latency |
+| Database | SQLDelight 2.x | Typed SQLite; no trig in SQL |
+| DI | Hilt | Compile-time verification; `:shared` has zero DI deps |
+| Audio tones | AudioTrack (PCM float, stereo) | Full pan control; sub-10 ms latency |
 | Speech | Android TextToSpeech | Offline, queue-based |
-| Reactive | Coroutines + StateFlow/SharedFlow | Replaces RxJS |
-| Settings | Preferences DataStore | Coroutine-native persistence with shared migration parsing |
-| GPS | FusedLocationProviderClient | Battery-efficient; ports gating logic from `locationStream.ts` |
+| Reactive | Coroutines + StateFlow / SharedFlow | Replaces RxJS |
+| Settings | Preferences DataStore | Coroutine-native; shared migration logic in `:shared` |
+| GPS | FusedLocationProviderClient | Battery-efficient; gating logic ported from `locationStream.ts` |
 | Compass | SensorManager TYPE_ROTATION_VECTOR + GeomagneticField | No third-party plugin |
 
 ## Getting Started
 
 ```bash
 bash setup.sh           # install JDK 17, Android SDK, ADB (WSL/Linux)
-make test-shared        # run shared module tests
+make test-shared        # run shared module tests (no device needed)
 make test               # run shared + app JVM tests
 make assemble           # build debug APK
 make install            # push to device (USB or ADB-over-Tailscale)
 adb logcat -s BoldExplorer
 ```
 
+## Screens
+
+| Screen | Purpose |
+|---|---|
+| GPS | Primary navigation — waypoint / trail / collection scopes, audio cues, mark waypoint |
+| Waypoints | CRUD, near-me filter, attach to trails / collections, GPX import/export |
+| Trails | CRUD, ordered waypoint list, reorder, GPX import/export |
+| Collections | CRUD, heterogeneous grouping of waypoints + trails, explore mode, GPX import/export |
+| Settings | Units, bearing display, compass mode, audio toggles |
+| Debug | GPS telemetry, raw GNSS toggle, accuracy beacon test, advancement diagnostics |
+
 ## Accessibility Requirements
 
-This app is built for a blind user. Every phase must meet these before it is considered complete:
+This app is built for a blind user. Every release must satisfy:
 
 - All icon-only elements: `Modifier.semantics { contentDescription = "..." }`
 - Live regions: `Modifier.semantics { liveRegion = LiveRegionMode.Polite }` on announcements
-- Waypoint/trail transitions announced via TTS (not just visual state changes)
-- Minimum 48dp touch targets throughout
-- TalkBack pass required before each phase ships
-- Audio cues are the primary interface — audio quality is never a "nice to have"
+- Waypoint / trail transitions announced via TTS (not just visual state)
+- Minimum 48 dp touch targets throughout
+- TalkBack pass required before any change ships
+- Audio cues are the primary interface — audio quality is never optional
+
+**Container label rule:** setting `contentDescription` on a container silences all child `Text()` nodes. Always spell out every piece of visible information (name, distance, state) in the container description.
 
 ## Implementation Status
+
+All six phases complete. The app is in hardening / feature completion.
 
 | Phase | Description | Status |
 |---|---|---|
@@ -80,15 +97,16 @@ This app is built for a blind user. Every phase must meet these before it is con
 | 3 | FusedLocation + SensorCompass + foreground service | Done |
 | 4 | AudioTrack engine, TTS, AudioCueScheduler wiring | Done |
 | 5 | Jetpack Compose UI, NavGraph, TalkBack pass | Done |
-| 6 | DataStore settings, GPX export, polish | Done |
+| 6 | DataStore settings, GPX import/export, polish | Done |
 
 ## Release Readiness Checklist
 
 - `make test` passes.
 - `make assemble` builds a debug APK.
-- Physical device pass: GPS fix, compass heading, background tracking with screen off.
-- Headphones pass: accuracy beacon changes pitch, alignment pan points left/right correctly.
-- TTS pass: waypoint reached and trail complete announcements are spoken.
-- TalkBack pass: all icon-only controls have labels, live announcements are polite, touch targets are usable.
+- Physical device: GPS fix, compass heading, background tracking with screen off.
+- Headphones: accuracy beacon pitch changes; directional beacon pans correctly.
+- TTS: waypoint reached and trail complete spoken aloud.
+- TalkBack: all icon-only controls labelled, live regions fire, touch targets are usable.
 
-See [PLAN.md](PLAN.md) for architecture detail, audio design, GPS pipeline, SQLDelight schema, and hardening notes.
+See [SPEC.md](SPEC.md) for full product spec, data model, audio design, GPS pipeline, database schema, and iOS platform equivalents.
+See [PLAN.md](PLAN.md) for original architecture rationale and phase-by-phase implementation notes.

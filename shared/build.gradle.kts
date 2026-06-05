@@ -11,6 +11,15 @@ kotlin {
         }
     }
 
+    // iOS targets — produces BoldExplorerShared.xcframework on macOS.
+    // Skipped automatically on Linux/CI without Xcode.
+    listOf(iosArm64(), iosSimulatorArm64(), iosX64()).forEach { target ->
+        target.binaries.framework {
+            baseName = "BoldExplorerShared"
+            isStatic = true
+        }
+    }
+
     sourceSets {
         commonMain.dependencies {
             implementation(libs.kotlinx.coroutines.core)
