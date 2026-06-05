@@ -28,10 +28,13 @@ import com.boldexplorer.shared.navigation.CollectionExplorer
 import com.boldexplorer.shared.navigation.CollectionExplorerEvent
 import com.boldexplorer.shared.navigation.CollectionExplorerState
 import com.boldexplorer.shared.navigation.CollectionPoint
+import com.boldexplorer.shared.navigation.TrailGuidance
+import com.boldexplorer.shared.navigation.TrailGuidanceState
 import com.boldexplorer.shared.navigation.TrailFollower
 import com.boldexplorer.shared.navigation.TrailFollowerEvent
 import com.boldexplorer.shared.navigation.TrailFollowerState
 import com.boldexplorer.shared.navigation.TrailPoint
+import com.boldexplorer.shared.navigation.TrustedCourse
 import com.boldexplorer.shared.repository.CollectionRepository
 import com.boldexplorer.shared.repository.SettingsRepository
 import com.boldexplorer.shared.repository.TrailRepository
@@ -161,6 +164,19 @@ private data class BearingGroup(
     val distanceM: Double?,
     val relativeDeg: Double?,
     val alignmentActive: Boolean,
+)
+
+private data class AudioAlignmentGroup(
+    val headingDeg: Double?,
+    val alignmentBearingDeg: Double?,
+    val alignmentActive: Boolean,
+)
+
+private data class AudioNavigationGroup(
+    val waypointRelativeDeg: Double?,
+    val trailRelativeDeg: Double?,
+    val scope: GpsScope,
+    val followState: TrailFollowerState,
 )
 
 private data class InteractionGroup(
@@ -297,6 +313,14 @@ class GpsViewModel @Inject constructor(
 
     private val trailFollower = TrailFollower()
     val trailFollowState: StateFlow<TrailFollowerState> = trailFollower.state
+    private var lastTrustedCourse: TrustedCourse? = null
+    private val _trailGuidance = MutableStateFlow<TrailGuidanceState?>(null)
+    private val trailGuidance: StateFlow<TrailGuidanceState?> = _trailGuidance.asStateFlow()
+    private val trailGuidanceRelativeDeg: StateFlow<Double?> = _trailGuidance
+        .map { it?.relativeDeg }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    private var lastOrdinaryGuidanceAtMs = Long.MIN_VALUE
+    private var lastOrdinaryGuidanceLocation: LatLng? = null
 
     // ── Collection explorer ───────────────────────────────────────────────────────
 
@@ -355,9 +379,8 @@ class GpsViewModel @Inject constructor(
         else haversineDistanceMeters(LatLng(loc.lat, loc.lon), target)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
 
-    // Uses navHeadingDeg (GPS course when moving, compass when still) so clock/relative display
-    // stays accurate in a car. Absolute (TRUE_NORTH) mode ignores this entirely — it just shows
-    // bearingDeg directly from haversine math, no heading involved.
+    // Uses GPS course-over-ground for target-relative display. Trail-follow beacons/speech use
+    // TrailGuidance instead so they point along the trail segment, not necessarily direct-to-target.
     val relativeDeg: StateFlow<Double?> = combine(navHeadingDeg, bearingDeg) { heading, bearing ->
         if (heading == null || bearing == null) null
         else deltaAngle(heading, bearing)
@@ -374,13 +397,28 @@ class GpsViewModel @Inject constructor(
     // When alignment is active, audio uses compass heading vs the stored alignment bearing.
     // Waypoint targeting uses GPS course (navHeadingDeg); alignment uses compass (headingDeg)
     // because the user is physically pointing the phone at a target, not moving toward it.
+    private val audioAlignmentGroup = combine(
+        headingDeg, _alignmentBearingDeg, _alignmentActive,
+    ) { heading, alignBearing, alignActive ->
+        AudioAlignmentGroup(heading, alignBearing, alignActive)
+    }
+
+    private val audioNavigationGroup = combine(
+        combine(relativeDeg, trailGuidanceRelativeDeg) { wpRelative, trailRelative -> wpRelative to trailRelative },
+        combine(_scope, trailFollowState) { scope, followState -> scope to followState },
+    ) { (wpRelative, trailRelative), (scope, followState) ->
+        AudioNavigationGroup(wpRelative, trailRelative, scope, followState)
+    }
+
     val audioRelativeDeg: StateFlow<Double?> = combine(
-        headingDeg, _alignmentBearingDeg, _alignmentActive, relativeDeg,
-    ) { heading, alignBearing, alignActive, wpRelative ->
-        if (alignActive && heading != null && alignBearing != null)
-            deltaAngle(heading, alignBearing)
+        audioAlignmentGroup, audioNavigationGroup,
+    ) { alignment, navigation ->
+        if (alignment.alignmentActive && alignment.headingDeg != null && alignment.alignmentBearingDeg != null)
+            deltaAngle(alignment.headingDeg, alignment.alignmentBearingDeg)
+        else if (navigation.scope == GpsScope.TRAIL && navigation.followState is TrailFollowerState.Active)
+            navigation.trailRelativeDeg
         else
-            wpRelative
+            navigation.waypointRelativeDeg
     }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     // Signed delta between current compass heading and alignment target.
@@ -420,8 +458,18 @@ class GpsViewModel @Inject constructor(
     private val selectionGroup = combine(
         selectedWaypointId, selectedTrailId, selectedCollectionId, trailFollowState, collectionExplorerState,
     ) { wp, tr, col, fs, ce -> SelectionGroup(wp, tr, col, fs, ce) }
-    private val bearingGroup = combine(targetName, bearingDeg, distanceM, relativeDeg, alignmentActive) {
-        tn, bd, dm, rd, aa -> BearingGroup(tn, bd, dm, rd, aa)
+    private val bearingGroup = combine(
+        combine(targetName, bearingDeg, distanceM, relativeDeg) {
+            tn, bd, dm, rd -> BearingGroup(tn, bd, dm, rd, alignmentActive = false)
+        },
+        combine(alignmentActive, _scope, trailFollowState, trailGuidance) {
+            aa, scope, fs, guidance -> Triple(aa, scope == GpsScope.TRAIL && fs is TrailFollowerState.Active, guidance)
+        },
+    ) { group, (aa, trailActive, guidance) ->
+        group.copy(
+            relativeDeg = if (trailActive) guidance?.relativeDeg else group.relativeDeg,
+            alignmentActive = aa,
+        )
     }
     private val interactionGroup = combine(
         combine(alignmentBearingDeg, alignmentRelativeDeg, announcement, navigationActive, autoRecording) {
@@ -497,34 +545,29 @@ class GpsViewModel @Inject constructor(
         // Also handle auto-recording.
         viewModelScope.launch {
             location.filterNotNull().collect { sample ->
+                lastTrustedCourse = TrailGuidance.updateTrustedCourse(lastTrustedCourse, sample)
                 when (val event = trailFollower.onLocationUpdate(
                     location = LatLng(sample.lat, sample.lon),
                     altitudeM = sample.altitude,
-                    bearingDeg = sample.heading?.takeIf { (sample.speed ?: 0.0) >= 1.0 }?.toFloat(),
+                    bearingDeg = sample.heading
+                        ?.takeIf { (sample.speed ?: 0.0) >= TrailGuidance.MIN_TRUSTED_SPEED_MPS }
+                        ?.toFloat(),
                 )) {
                     is TrailFollowerEvent.WaypointReached -> {
-                        val oneBasedN = event.index + 1
-                        val heading = headingDeg.value
-                        val relDir = if (heading != null) directionHint(deltaAngle(heading, event.absoluteBearingDeg)) else null
-                        val distLabel = formatDistanceM(event.distanceToNextM, settings.value.units)
-                        val text = if (event.kind == Waypoint.KIND_TRACK_POINT) {
-                            buildString {
-                                append("Checkpoint $oneBasedN of ${event.total}.")
-                                if (relDir != null) append(" $distLabel, $relDir.")
-                            }
-                        } else {
-                            buildString {
-                                append("${event.name}.")
-                                if (relDir != null) append(" $distLabel, $relDir.")
-                            }
-                        }
+                        val guidance = updateTrailGuidance(sample)
+                        val text = buildTrailAdvanceAnnouncement(event, guidance)
                         announce(text, speakInBackground = true, trigger = "WaypointReached")
+                        resetOrdinaryGuidanceThrottle(sample)
                     }
                     is TrailFollowerEvent.TrailComplete -> {
+                        clearTrailGuidance()
                         announce("Trail complete", speakInBackground = true, trigger = "TrailComplete")
                         trailFollower.stop()
                     }
-                    null -> Unit
+                    null -> {
+                        val guidance = updateTrailGuidance(sample)
+                        maybeAnnounceOrdinaryTrailGuidance(sample, guidance)
+                    }
                 }
 
                 // Drive CollectionExplorer when in collection scope.
@@ -653,10 +696,13 @@ class GpsViewModel @Inject constructor(
             if (ordered.isEmpty()) return@launch
             val points = ordered.map { TrailPoint(it.id, it.name, it.lat, it.lon, elevationM = it.elevM, kind = it.kind) }
             val loc = location.value?.let { LatLng(it.lat, it.lon) }
-            val bearing = location.value?.let { s -> s.heading?.takeIf { (s.speed ?: 0.0) >= 1.0 }?.toFloat() }
+            val bearing = location.value?.let { s ->
+                s.heading?.takeIf { (s.speed ?: 0.0) >= TrailGuidance.MIN_TRUSTED_SPEED_MPS }?.toFloat()
+            }
             _selectedTrailId.value = trailEnd.trail.id
             setScope(GpsScope.TRAIL)
             if (loc != null) trailFollower.startNearest(points, loc, bearing) else trailFollower.start(points)
+            refreshTrailGuidanceFromLatestLocation(resetOrdinaryThrottle = true)
             backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, true)
             startLocationService()
             announce(buildTrailStartAnnouncement(
@@ -673,8 +719,11 @@ class GpsViewModel @Inject constructor(
         if (wps.isEmpty()) return
         val points = wps.map { TrailPoint(it.id, it.name, it.lat, it.lon, elevationM = it.elevM, kind = it.kind) }
         val loc = location.value?.let { LatLng(it.lat, it.lon) }
-        val bearing = location.value?.let { s -> s.heading?.takeIf { (s.speed ?: 0.0) >= 1.0 }?.toFloat() }
+        val bearing = location.value?.let { s ->
+            s.heading?.takeIf { (s.speed ?: 0.0) >= TrailGuidance.MIN_TRUSTED_SPEED_MPS }?.toFloat()
+        }
         if (loc != null) trailFollower.startNearest(points, loc, bearing) else trailFollower.start(points)
+        refreshTrailGuidanceFromLatestLocation(resetOrdinaryThrottle = true)
         backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, true)
         startLocationService()
         announce(buildTrailStartAnnouncement("Trail started", points, loc), speakInBackground = true, trigger = "TrailStarted")
@@ -685,8 +734,11 @@ class GpsViewModel @Inject constructor(
         if (wps.isEmpty()) return
         val points = wps.reversed().map { TrailPoint(it.id, it.name, it.lat, it.lon, elevationM = it.elevM, kind = it.kind) }
         val loc = location.value?.let { LatLng(it.lat, it.lon) }
-        val bearing = location.value?.let { s -> s.heading?.takeIf { (s.speed ?: 0.0) >= 1.0 }?.toFloat() }
+        val bearing = location.value?.let { s ->
+            s.heading?.takeIf { (s.speed ?: 0.0) >= TrailGuidance.MIN_TRUSTED_SPEED_MPS }?.toFloat()
+        }
         if (loc != null) trailFollower.startNearest(points, loc, bearing) else trailFollower.start(points)
+        refreshTrailGuidanceFromLatestLocation(resetOrdinaryThrottle = true)
         backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, true)
         startLocationService()
         announce(buildTrailStartAnnouncement("Trail started in reverse", points, loc), speakInBackground = true, trigger = "TrailStartedReversed")
@@ -696,21 +748,23 @@ class GpsViewModel @Inject constructor(
         val active = trailFollower.state.value as? TrailFollowerState.Active
         val firstWp = active?.waypoints?.getOrNull(active.currentIndex)
         val total = active?.waypoints?.size ?: points.size
-        val heading = headingDeg.value
+        val guidance = _trailGuidance.value
         return buildString {
-            append("$prefix. Checkpoint 1 of $total.")
+            val checkpointN = active?.currentIndex?.plus(1) ?: 1
+            append("$prefix. Checkpoint $checkpointN of $total.")
             if (firstWp != null && loc != null) {
                 val dist = haversineDistanceMeters(loc, LatLng(firstWp.lat, firstWp.lon))
-                val bearing = initialBearingDeg(loc, LatLng(firstWp.lat, firstWp.lon))
                 val distLabel = formatDistanceM(dist, settings.value.units)
-                val relDir = if (heading != null) directionHint(deltaAngle(heading, bearing)) else null
+                val relDir = guidance?.relativeDeg?.let { directionHint(it) }
                 if (relDir != null) append(" $distLabel, $relDir.")
+                else append(" $distLabel.")
             }
         }
     }
 
     fun stopFollowTrail() {
         trailFollower.stop()
+        clearTrailGuidance()
         backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, false)
         stopLocationServiceIfIdle()
         announce("Trail navigation stopped", speakInBackground = true, trigger = "TrailStopped")
@@ -833,6 +887,77 @@ class GpsViewModel @Inject constructor(
             beaconCuesEnabled = beaconCuesEnabled,
         )
 
+    private fun updateTrailGuidance(sample: LocationSample): TrailGuidanceState? {
+        val guidance = TrailGuidance.compute(trailFollower.state.value, sample, lastTrustedCourse)
+        _trailGuidance.value = guidance
+        return guidance
+    }
+
+    private fun refreshTrailGuidanceFromLatestLocation(resetOrdinaryThrottle: Boolean = false) {
+        val sample = location.value ?: return
+        lastTrustedCourse = TrailGuidance.updateTrustedCourse(lastTrustedCourse, sample)
+        updateTrailGuidance(sample)
+        if (resetOrdinaryThrottle) resetOrdinaryGuidanceThrottle(sample)
+    }
+
+    private fun clearTrailGuidance() {
+        _trailGuidance.value = null
+        lastOrdinaryGuidanceAtMs = Long.MIN_VALUE
+        lastOrdinaryGuidanceLocation = null
+    }
+
+    private fun buildTrailAdvanceAnnouncement(
+        event: TrailFollowerEvent.WaypointReached,
+        guidance: TrailGuidanceState?,
+    ): String {
+        val oneBasedN = event.index + 1
+        val distance = guidance?.distanceToTargetM ?: event.distanceToNextM
+        val distLabel = formatDistanceM(distance, settings.value.units)
+        val relDir = guidance?.relativeDeg?.let { directionHint(it) }
+
+        return if (event.kind == Waypoint.KIND_TRACK_POINT) {
+            buildString {
+                append("Checkpoint $oneBasedN of ${event.total}.")
+                append(" $distLabel.")
+                if (relDir != null) append(" $relDir.")
+            }
+        } else {
+            buildString {
+                append("${event.name}.")
+                append(" $distLabel.")
+                if (relDir != null) append(" $relDir.")
+            }
+        }
+    }
+
+    private fun maybeAnnounceOrdinaryTrailGuidance(sample: LocationSample, guidance: TrailGuidanceState?) {
+        if (_scope.value != GpsScope.TRAIL) return
+        if (trailFollower.state.value !is TrailFollowerState.Active) return
+        val relative = guidance?.relativeDeg ?: return
+        if (!TrailGuidance.isMajorCorrection(relative)) return
+        if (sample.timestamp - lastOrdinaryGuidanceAtMs < ORDINARY_GUIDANCE_INTERVAL_MS) return
+
+        val current = LatLng(sample.lat, sample.lon)
+        val lastLocation = lastOrdinaryGuidanceLocation
+        if (lastLocation != null &&
+            haversineDistanceMeters(lastLocation, current) < ORDINARY_GUIDANCE_DISTANCE_M) return
+
+        lastOrdinaryGuidanceAtMs = sample.timestamp
+        lastOrdinaryGuidanceLocation = current
+        val checkpointN = guidance.targetIndex + 1
+        val distLabel = formatDistanceM(guidance.distanceToTargetM, settings.value.units)
+        announce(
+            "Checkpoint $checkpointN of ${guidance.total}. $distLabel, ${directionHint(relative)}.",
+            speakInBackground = true,
+            trigger = "OrdinaryTrailGuidance",
+        )
+    }
+
+    private fun resetOrdinaryGuidanceThrottle(sample: LocationSample) {
+        lastOrdinaryGuidanceAtMs = sample.timestamp
+        lastOrdinaryGuidanceLocation = LatLng(sample.lat, sample.lon)
+    }
+
     private fun announce(text: String, speakInBackground: Boolean = false, trigger: String = "unknown") {
         _announcement.value = text
         if (speakInBackground) spokenGuidancePlayer.speak(text)
@@ -941,5 +1066,7 @@ class GpsViewModel @Inject constructor(
         private const val AUTO_RECORD_TTS_INTERVAL = 5
         // Minimum speed (m/s) before GPS course-over-ground is trusted for direction-aware selection.
         private const val MIN_TRAVEL_HEADING_SPEED_MPS = 1.0
+        private const val ORDINARY_GUIDANCE_INTERVAL_MS = 30_000L
+        private const val ORDINARY_GUIDANCE_DISTANCE_M = 25.0
     }
 }
