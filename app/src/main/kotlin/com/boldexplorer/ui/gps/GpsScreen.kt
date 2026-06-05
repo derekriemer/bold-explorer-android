@@ -578,6 +578,18 @@ private fun CollectionScopePanel(
                 }
             }
 
+            if (active.target != null) {
+                Spacer(Modifier.height(4.dp))
+                TextButton(
+                    onClick = { onAction(GpsAction.SkipCollectionTarget) },
+                    modifier = Modifier.semantics {
+                        contentDescription = "Skip current target and pick something else"
+                    },
+                ) {
+                    Text("Not this")
+                }
+            }
+
             // ── Follow button (trail endpoints only, when within range) ───────────
             val currentTarget = active.target
             if (currentTarget is CollectionPoint.TrailEnd && active.nearTrailEndM != null) {

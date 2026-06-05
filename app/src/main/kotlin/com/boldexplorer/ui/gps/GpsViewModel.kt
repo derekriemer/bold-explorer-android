@@ -105,6 +105,7 @@ sealed interface GpsAction {
     data class SelectCollection(val id: Long) : GpsAction
     data class SelectCollectionPoint(val point: CollectionPoint) : GpsAction
     data object ClearCollectionTarget : GpsAction
+    data object SkipCollectionTarget : GpsAction
     data object ClearCollectionVisited : GpsAction
     data class SetCollectionExploreMode(val enabled: Boolean) : GpsAction
     data class FollowTrailFromCollectionEnd(val trailEnd: CollectionPoint.TrailEnd) : GpsAction
@@ -547,6 +548,9 @@ class GpsViewModel @Inject constructor(
                         is CollectionExplorerEvent.NearTrailEnd -> {
                             // UI reacts to state change; no audio needed here.
                         }
+                        is CollectionExplorerEvent.TargetSkipped -> {
+                            // Skip is emitted only by the user action path, not by GPS updates.
+                        }
                         is CollectionExplorerEvent.NearbyPoint -> {
                             val name = when (val p = event.point) {
                                 is CollectionPoint.Standalone -> p.waypoint.name
@@ -605,6 +609,27 @@ class GpsViewModel @Inject constructor(
         collectionExplorer.clearTarget()
         backgroundSession.setModeActive(GpsBackgroundMode.CollectionFollow, false)
         stopLocationServiceIfIdle()
+    }
+    fun skipCollectionTarget() {
+        val event = collectionExplorer.skipTarget() ?: return
+        backgroundSession.setModeActive(GpsBackgroundMode.CollectionFollow, event.next != null)
+        if (event.next != null) startLocationService() else stopLocationServiceIfIdle()
+
+        val nextText = event.next?.let { next ->
+            val loc = location.value?.let { LatLng(it.lat, it.lon) }
+            val distanceText = loc?.let {
+                formatDistanceM(
+                    haversineDistanceMeters(it, LatLng(next.waypoint.lat, next.waypoint.lon)),
+                    settings.value.units,
+                )
+            }
+            buildString {
+                append(" Next: ${collectionPointName(next)}")
+                if (distanceText != null) append(", $distanceText")
+                append(".")
+            }
+        } ?: " No more unvisited points."
+        announce("Skipping ${collectionPointName(event.skipped)}.$nextText", speakInBackground = true)
     }
     fun clearCollectionVisited() { collectionExplorer.clearVisited() }
     fun setCollectionExploreMode(enabled: Boolean) {
@@ -845,6 +870,7 @@ class GpsViewModel @Inject constructor(
             is GpsAction.SelectCollection -> selectCollection(action.id)
             is GpsAction.SelectCollectionPoint -> selectCollectionPoint(action.point)
             GpsAction.ClearCollectionTarget -> clearCollectionTarget()
+            GpsAction.SkipCollectionTarget -> skipCollectionTarget()
             GpsAction.ClearCollectionVisited -> clearCollectionVisited()
             is GpsAction.SetCollectionExploreMode -> setCollectionExploreMode(action.enabled)
             is GpsAction.FollowTrailFromCollectionEnd -> startFollowTrailFromCollectionEnd(action.trailEnd)
@@ -869,6 +895,11 @@ class GpsViewModel @Inject constructor(
 
     private fun directionHint(relativeDeg: Double): String =
         com.boldexplorer.shared.navigation.BearingComputer.toRelative(relativeDeg)
+
+    private fun collectionPointName(point: CollectionPoint): String = when (point) {
+        is CollectionPoint.Standalone -> point.waypoint.name
+        is CollectionPoint.TrailEnd -> "${point.trail.name} (${if (point.isStart) "start" else "end"})"
+    }
 
     private fun formatDistanceM(meters: Double, units: Units): String =
         if (units == Units.METRIC) {

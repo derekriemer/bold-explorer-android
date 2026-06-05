@@ -44,6 +44,8 @@ sealed class CollectionExplorerState {
 sealed class CollectionExplorerEvent {
     /** Target reached; next target already selected (or null if all visited). */
     data class PointReached(val reached: CollectionPoint, val next: CollectionPoint?) : CollectionExplorerEvent()
+    /** Current target was rejected by the user; next target already selected (or null if all visited). */
+    data class TargetSkipped(val skipped: CollectionPoint, val next: CollectionPoint?) : CollectionExplorerEvent()
     /** User is within TRAIL_APPROACH_M of a TrailEnd target — surface Follow button. */
     data class NearTrailEnd(val trailEnd: CollectionPoint.TrailEnd, val distanceM: Double) : CollectionExplorerEvent()
     /** User passed within PROXIMITY_M of an unvisited non-target point. Fires once per point per session. */
@@ -94,6 +96,20 @@ class CollectionExplorer {
     fun clearVisited() {
         val s = _state.value as? CollectionExplorerState.Active ?: return
         _state.value = s.copy(visitedIds = emptyList(), target = null, nearTrailEndM = null, proximityAnnouncedIds = emptySet())
+    }
+
+    /** Reject the current target and advance to the next nearest unvisited point. */
+    fun skipTarget(): CollectionExplorerEvent.TargetSkipped? {
+        val s = _state.value as? CollectionExplorerState.Active ?: return null
+        val target = s.target ?: s.points.firstOrNull { it.id !in s.visitedIds } ?: return null
+        val newVisited = (s.visitedIds + target.id).takeLast(VISITED_CAP)
+        val nextTarget = s.points.firstOrNull { it.id !in newVisited }
+        _state.value = s.copy(
+            target = nextTarget,
+            visitedIds = newVisited,
+            nearTrailEndM = null,
+        )
+        return CollectionExplorerEvent.TargetSkipped(target, nextTarget)
     }
 
     /**
