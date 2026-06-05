@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.boldexplorer.audio.AudioEngine
+import com.boldexplorer.audio.AudioEventLog
+import com.boldexplorer.audio.AudioLogEntry
 import com.boldexplorer.compass.SensorCompassProvider
 import com.boldexplorer.shared.gpx.GpxExporter
 import com.boldexplorer.gpx.GpxFileWriter
@@ -14,6 +16,7 @@ import com.boldexplorer.shared.model.LocationSample
 import com.boldexplorer.shared.repository.WaypointRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -31,6 +34,7 @@ class DebugViewModel @Inject constructor(
     private val waypointRepo: WaypointRepository,
     private val audioEngine: AudioEngine,
     private val scheduler: AudioCueScheduler,
+    private val audioEventLog: AudioEventLog,
 ) : ViewModel() {
 
     val location: StateFlow<LocationSample?> = locationRouter.locationFlow
@@ -46,6 +50,60 @@ class DebugViewModel @Inject constructor(
     val accuracyBeaconEnabled: StateFlow<Boolean> = scheduler.accuracyBeaconEnabled
 
     val useGnss: StateFlow<Boolean> = locationRouter.useGnss
+
+    // ── Audio log ─────────────────────────────────────────────────────────────────
+
+    val logEntries: StateFlow<List<AudioLogEntry>> = audioEventLog.entries
+
+    private val _logStatus = MutableStateFlow<String?>(null)
+    val logStatus: StateFlow<String?> = _logStatus.asStateFlow()
+
+    // Non-null while the IMPORTANT! dialog is open; holds the timestamp recorded at button-press
+    // so the marker is filed at the moment the user pressed the button, not when they dismiss.
+    private val _pendingMarkerTimestampMs = MutableStateFlow<Long?>(null)
+    val showMarkerDialog: StateFlow<Boolean> = _pendingMarkerTimestampMs
+        .map { it != null }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), false)
+
+    fun onImportantPressed() {
+        _pendingMarkerTimestampMs.value = System.currentTimeMillis()
+    }
+
+    fun confirmMarker(note: String) {
+        val ts = _pendingMarkerTimestampMs.value ?: return
+        _pendingMarkerTimestampMs.value = null
+        viewModelScope.launch {
+            audioEventLog.append(
+                AudioLogEntry(
+                    timestampMs = ts,
+                    kind = AudioLogEntry.Kind.USER_MARKER,
+                    trigger = "IMPORTANT button",
+                    inputs = "",
+                    outputs = "",
+                    played = "",
+                    note = note,
+                ),
+            )
+        }
+    }
+
+    fun dismissMarker() {
+        _pendingMarkerTimestampMs.value = null
+    }
+
+    fun newLog() {
+        audioEventLog.newSession()
+        _logStatus.value = "Log cleared"
+    }
+
+    fun exportLog() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _logStatus.value = audioEventLog.exportToDownloads()
+                .fold(onSuccess = { it }, onFailure = { "Export failed: ${it.message}" })
+        }
+    }
+
+    // ── Existing ──────────────────────────────────────────────────────────────────
 
     fun setAccuracyBeaconEnabled(enabled: Boolean) {
         scheduler.accuracyBeaconEnabled.value = enabled

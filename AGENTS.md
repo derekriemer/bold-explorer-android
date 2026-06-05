@@ -91,7 +91,7 @@ Phases 1–6 are implemented. Treat new work as hardening or feature completion,
 ### Accessibility constraints (non-negotiable)
 
 This app is built for a blind user. Audio cues are the primary interface.
-- Every icon-only element needs `Modifier.semantics { contentDescription = "..." }`
+- Every icon-only element needs `Modifier.semantics { contentDescription = "..." }` — **do not add `contentDescription` when the composable already has sufficient visible text** (e.g. a `Button` with a `Text` child). Setting `contentDescription` on a composable with readable children *replaces* the default label entirely; TalkBack will read only your string and skip the visible text. Only override when the default is ambiguous or missing.
 - State transitions (waypoint reached, trail complete) must be announced via `TtsEngine`, not just reflected in UI state
 - Live regions: `Modifier.semantics { liveRegion = LiveRegionMode.Polite }` on announcement composables
 - Minimum 48dp touch targets

@@ -7,6 +7,8 @@ import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.boldexplorer.audio.AudioEventLog
+import com.boldexplorer.audio.AudioLogEntry
 import com.boldexplorer.audio.SpokenGuidancePlayer
 import com.boldexplorer.compass.SensorCompassProvider
 import com.boldexplorer.location.BeaconAudioInputs
@@ -182,6 +184,7 @@ class GpsViewModel @Inject constructor(
     private val backgroundSession: GpsBackgroundSession,
     private val spokenGuidancePlayer: SpokenGuidancePlayer,
     private val settingsRepo: SettingsRepository,
+    private val audioEventLog: AudioEventLog,
 ) : ViewModel() {
 
     // ── Settings ──────────────────────────────────────────────────────────────────
@@ -515,10 +518,10 @@ class GpsViewModel @Inject constructor(
                                 if (relDir != null) append(" $distLabel, $relDir.")
                             }
                         }
-                        announce(text, speakInBackground = true)
+                        announce(text, speakInBackground = true, trigger = "WaypointReached")
                     }
                     is TrailFollowerEvent.TrailComplete -> {
-                        announce("Trail complete", speakInBackground = true)
+                        announce("Trail complete", speakInBackground = true, trigger = "TrailComplete")
                         trailFollower.stop()
                     }
                     null -> Unit
@@ -548,7 +551,7 @@ class GpsViewModel @Inject constructor(
                                     append(" No more unvisited points.")
                                 }
                             }
-                            announce(text, speakInBackground = true)
+                            announce(text, speakInBackground = true, trigger = "CollectionPointReached")
                         }
                         is CollectionExplorerEvent.NearTrailEnd -> {
                             // UI reacts to state change; no audio needed here.
@@ -562,7 +565,7 @@ class GpsViewModel @Inject constructor(
                                 is CollectionPoint.TrailEnd -> "${p.trail.name} (${if (p.isStart) "start" else "end"})"
                             }
                             val dist = formatDistanceM(event.distanceM, settings.value.units)
-                            announce("Nearby: $name, $dist", speakInBackground = true)
+                            announce("Nearby: $name, $dist", speakInBackground = true, trigger = "NearbyPoint")
                         }
                         null -> Unit
                     }
@@ -634,7 +637,7 @@ class GpsViewModel @Inject constructor(
                 append(".")
             }
         } ?: " No more unvisited points."
-        announce("Skipping ${collectionPointName(event.skipped)}.$nextText", speakInBackground = true)
+        announce("Skipping ${collectionPointName(event.skipped)}.$nextText", speakInBackground = true, trigger = "CollectionSkip")
     }
     fun clearCollectionVisited() { collectionExplorer.clearVisited() }
     fun setCollectionExploreMode(enabled: Boolean) {
@@ -659,7 +662,7 @@ class GpsViewModel @Inject constructor(
             announce(buildTrailStartAnnouncement(
                 "Following ${trailEnd.trail.name}${if (reversed) " in reverse" else ""}",
                 points, loc,
-            ), speakInBackground = true)
+            ), speakInBackground = true, trigger = "TrailStartedFromCollection")
         }
     }
 
@@ -674,7 +677,7 @@ class GpsViewModel @Inject constructor(
         if (loc != null) trailFollower.startNearest(points, loc, bearing) else trailFollower.start(points)
         backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, true)
         startLocationService()
-        announce(buildTrailStartAnnouncement("Trail started", points, loc), speakInBackground = true)
+        announce(buildTrailStartAnnouncement("Trail started", points, loc), speakInBackground = true, trigger = "TrailStarted")
     }
 
     fun startFollowTrailReversed() {
@@ -686,7 +689,7 @@ class GpsViewModel @Inject constructor(
         if (loc != null) trailFollower.startNearest(points, loc, bearing) else trailFollower.start(points)
         backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, true)
         startLocationService()
-        announce(buildTrailStartAnnouncement("Trail started in reverse", points, loc), speakInBackground = true)
+        announce(buildTrailStartAnnouncement("Trail started in reverse", points, loc), speakInBackground = true, trigger = "TrailStartedReversed")
     }
 
     private fun buildTrailStartAnnouncement(prefix: String, points: List<TrailPoint>, loc: LatLng?): String {
@@ -710,7 +713,7 @@ class GpsViewModel @Inject constructor(
         trailFollower.stop()
         backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, false)
         stopLocationServiceIfIdle()
-        announce("Trail navigation stopped", speakInBackground = true)
+        announce("Trail navigation stopped", speakInBackground = true, trigger = "TrailStopped")
     }
 
     // ── Audio navigation ──────────────────────────────────────────────────────────
@@ -830,9 +833,21 @@ class GpsViewModel @Inject constructor(
             beaconCuesEnabled = beaconCuesEnabled,
         )
 
-    private fun announce(text: String, speakInBackground: Boolean = false) {
+    private fun announce(text: String, speakInBackground: Boolean = false, trigger: String = "unknown") {
         _announcement.value = text
         if (speakInBackground) spokenGuidancePlayer.speak(text)
+        viewModelScope.launch {
+            audioEventLog.append(
+                AudioLogEntry(
+                    timestampMs = System.currentTimeMillis(),
+                    kind = AudioLogEntry.Kind.TTS_ANNOUNCEMENT,
+                    trigger = trigger,
+                    inputs = "text=\"$text\"",
+                    outputs = "",
+                    played = "Spoke: '$text'",
+                ),
+            )
+        }
     }
 
     // ── Trail recording ───────────────────────────────────────────────────────────
@@ -854,7 +869,7 @@ class GpsViewModel @Inject constructor(
         _autoRecording.value = true
         backgroundSession.setModeActive(GpsBackgroundMode.AutoRecord, true)
         startLocationService()  // keep process alive when screen is off
-        announce("Auto-recording started. Move to capture track points.", speakInBackground = true)
+        announce("Auto-recording started. Move to capture track points.", speakInBackground = true, trigger = "AutoRecordStart")
     }
 
     fun stopAutoRecord() {
@@ -862,7 +877,7 @@ class GpsViewModel @Inject constructor(
         _lastAutoRecordLoc = null
         backgroundSession.setModeActive(GpsBackgroundMode.AutoRecord, false)
         stopLocationServiceIfIdle()
-        announce("Auto-recording stopped. ${_autoRecordCount.value} points recorded.", speakInBackground = true)
+        announce("Auto-recording stopped. ${_autoRecordCount.value} points recorded.", speakInBackground = true, trigger = "AutoRecordStop")
     }
 
     // ── Action dispatcher ─────────────────────────────────────────────────────────
