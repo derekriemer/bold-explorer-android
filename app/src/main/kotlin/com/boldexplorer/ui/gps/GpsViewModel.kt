@@ -526,7 +526,8 @@ class GpsViewModel @Inject constructor(
 
                 // Drive CollectionExplorer when in collection scope.
                 if (_scope.value == GpsScope.COLLECTION) {
-                    when (val event = collectionExplorer.onLocationUpdate(LatLng(sample.lat, sample.lon))) {
+                    val travelHeadingDeg = sample.heading?.takeIf { (sample.speed ?: 0.0) >= MIN_TRAVEL_HEADING_SPEED_MPS }
+                    when (val event = collectionExplorer.onLocationUpdate(LatLng(sample.lat, sample.lon), travelHeadingDeg)) {
                         is CollectionExplorerEvent.PointReached -> {
                             val name = when (val p = event.reached) {
                                 is CollectionPoint.Standalone -> p.waypoint.name
@@ -919,6 +920,7 @@ class GpsViewModel @Inject constructor(
     companion object {
         private const val AUTO_RECORD_DISTANCE_M = 10.0
         private const val AUTO_RECORD_TTS_INTERVAL = 5
-        // Minimum speed (m/s) before GPS course-over-ground is trusted over the compass.
+        // Minimum speed (m/s) before GPS course-over-ground is trusted for direction-aware selection.
+        private const val MIN_TRAVEL_HEADING_SPEED_MPS = 1.0
     }
 }

@@ -39,6 +39,28 @@ class CollectionExplorerTest {
         assertNull(CollectionExplorer().skipTarget())
     }
 
+    @Test
+    fun autoTarget_usesNearestPointWhenTravelHeadingIsMissing() {
+        val explorer = CollectionExplorer()
+        explorer.load(listOf(east, north), exploreMode = false)
+
+        explorer.onLocationUpdate(home)
+
+        val state = explorer.state.value as CollectionExplorerState.Active
+        assertEquals(north.id, state.target?.id)
+    }
+
+    @Test
+    fun autoTarget_prefersFartherPointAheadOfTravelDirection() {
+        val explorer = CollectionExplorer()
+        explorer.load(listOf(north, east), exploreMode = false)
+
+        explorer.onLocationUpdate(home, travelHeadingDeg = 90.0)
+
+        val state = explorer.state.value as CollectionExplorerState.Active
+        assertEquals(east.id, state.target?.id)
+    }
+
     private fun point(id: Long, name: String, lat: Double, lon: Double): CollectionPoint.Standalone =
         CollectionPoint.Standalone(
             Waypoint(

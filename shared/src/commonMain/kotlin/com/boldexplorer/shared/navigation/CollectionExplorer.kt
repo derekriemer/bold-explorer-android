@@ -1,9 +1,12 @@
 package com.boldexplorer.shared.navigation
 
 import com.boldexplorer.shared.geo.LatLng
+import com.boldexplorer.shared.geo.deltaAngle
 import com.boldexplorer.shared.geo.haversineDistanceMeters
+import com.boldexplorer.shared.geo.initialBearingDeg
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.Waypoint
+import kotlin.math.abs
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -119,7 +122,7 @@ class CollectionExplorer {
      * - Checks reach threshold and trail-approach threshold.
      * Returns an event if something notable happened, null otherwise.
      */
-    fun onLocationUpdate(location: LatLng): CollectionExplorerEvent? {
+    fun onLocationUpdate(location: LatLng, travelHeadingDeg: Double? = null): CollectionExplorerEvent? {
         val s = _state.value as? CollectionExplorerState.Active ?: return null
 
         // Re-sort all points by current distance.
@@ -127,8 +130,8 @@ class CollectionExplorer {
             haversineDistanceMeters(location, LatLng(p.waypoint.lat, p.waypoint.lon))
         }
 
-        // Resolve the current target: manual pick or nearest unvisited.
-        val target = s.target ?: sorted.firstOrNull { it.id !in s.visitedIds }
+        // Resolve the current target: manual pick or best automatic candidate.
+        val target = s.target ?: selectAutomaticTarget(sorted, s.visitedIds, location, travelHeadingDeg)
 
         if (target == null) {
             _state.value = s.copy(points = sorted, target = null, nearTrailEndM = null)
@@ -166,7 +169,7 @@ class CollectionExplorer {
 
             // In explore mode, auto-advance to next nearest unvisited.
             val nextTarget = if (s.exploreMode) {
-                sorted.firstOrNull { it.id !in newVisited }
+                selectAutomaticTarget(sorted, newVisited, location, travelHeadingDeg)
             } else {
                 null     // hold; user must clear or pick manually
             }
@@ -206,10 +209,28 @@ class CollectionExplorer {
         haversineDistanceMeters(location, LatLng(p.waypoint.lat, p.waypoint.lon)) <= PROXIMITY_M
     }
 
+    private fun selectAutomaticTarget(
+        sorted: List<CollectionPoint>,
+        visitedIds: List<Long>,
+        location: LatLng,
+        travelHeadingDeg: Double?,
+    ): CollectionPoint? {
+        val candidates = sorted.filter { it.id !in visitedIds }
+        if (travelHeadingDeg == null) return candidates.firstOrNull()
+        return candidates.minByOrNull { point ->
+            val pointLocation = LatLng(point.waypoint.lat, point.waypoint.lon)
+            val distanceM = haversineDistanceMeters(location, pointLocation)
+            val bearingDeg = initialBearingDeg(location, pointLocation)
+            val headingDeltaDeg = abs(deltaAngle(travelHeadingDeg, bearingDeg))
+            distanceM + headingDeltaDeg * HEADING_DEGREE_PENALTY_M
+        }
+    }
+
     companion object {
         const val REACH_THRESHOLD_M = 15.0
         const val TRAIL_APPROACH_M = 10.0
         const val PROXIMITY_M = 30.0
         const val VISITED_CAP = 3
+        const val HEADING_DEGREE_PENALTY_M = 1.5
     }
 }
