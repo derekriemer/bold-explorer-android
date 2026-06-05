@@ -36,12 +36,24 @@ sealed class CollectionExplorerState {
 
     data class Active(
         val points: List<CollectionPoint>,          // all points, sorted nearest-first
-        val target: CollectionPoint?,               // null = system picks nearest
+        val targeting: CollectionTargeting,         // auto, manual, or paused targeting state
         val visitedIds: List<Long>,                 // capped at VISITED_CAP; newest last
         val exploreMode: Boolean,
         val nearTrailEndM: Double?,                 // distance to target if it's a TrailEnd, else null
         val proximityAnnouncedIds: Set<Long> = emptySet(), // points already proximity-announced this session
-    ) : CollectionExplorerState()
+    ) : CollectionExplorerState() {
+        val target: CollectionPoint? get() = targeting.target
+    }
+}
+
+sealed class CollectionTargeting {
+    abstract val target: CollectionPoint?
+
+    data class Auto(override val target: CollectionPoint? = null) : CollectionTargeting()
+    data class Manual(override val target: CollectionPoint) : CollectionTargeting()
+    object Paused : CollectionTargeting() {
+        override val target: CollectionPoint? = null
+    }
 }
 
 sealed class CollectionExplorerEvent {
@@ -67,7 +79,7 @@ class CollectionExplorer {
         }
         _state.value = CollectionExplorerState.Active(
             points = points,
-            target = null,          // null → system will pick nearest on first GPS fix
+            targeting = CollectionTargeting.Auto(), // system picks on first GPS fix
             visitedIds = emptyList(),
             exploreMode = exploreMode,
             nearTrailEndM = null,
@@ -80,25 +92,35 @@ class CollectionExplorer {
 
     fun setExploreMode(enabled: Boolean) {
         val s = _state.value as? CollectionExplorerState.Active ?: return
-        _state.value = s.copy(exploreMode = enabled)
+        val targeting = if (enabled && s.targeting == CollectionTargeting.Paused) {
+            CollectionTargeting.Auto()
+        } else {
+            s.targeting
+        }
+        _state.value = s.copy(exploreMode = enabled, targeting = targeting)
     }
 
     /** User explicitly selected a target from the list. */
     fun selectTarget(point: CollectionPoint) {
         val s = _state.value as? CollectionExplorerState.Active ?: return
-        _state.value = s.copy(target = point, nearTrailEndM = null)
+        _state.value = s.copy(targeting = CollectionTargeting.Manual(point), nearTrailEndM = null)
     }
 
-    /** Clear manual selection → system picks nearest on next GPS fix. */
+    /** Clear manual selection or paused state → system picks on next GPS fix. */
     fun clearTarget() {
         val s = _state.value as? CollectionExplorerState.Active ?: return
-        _state.value = s.copy(target = null, nearTrailEndM = null)
+        _state.value = s.copy(targeting = CollectionTargeting.Auto(), nearTrailEndM = null)
     }
 
     /** Reset visited queue (useful to re-tour in explore mode). */
     fun clearVisited() {
         val s = _state.value as? CollectionExplorerState.Active ?: return
-        _state.value = s.copy(visitedIds = emptyList(), target = null, nearTrailEndM = null, proximityAnnouncedIds = emptySet())
+        _state.value = s.copy(
+            visitedIds = emptyList(),
+            targeting = CollectionTargeting.Auto(),
+            nearTrailEndM = null,
+            proximityAnnouncedIds = emptySet(),
+        )
     }
 
     /** Reject the current target and advance to the next nearest unvisited point. */
@@ -108,7 +130,7 @@ class CollectionExplorer {
         val newVisited = (s.visitedIds + target.id).takeLast(VISITED_CAP)
         val nextTarget = s.points.firstOrNull { it.id !in newVisited }
         _state.value = s.copy(
-            target = nextTarget,
+            targeting = nextTarget?.let { CollectionTargeting.Auto(it) } ?: CollectionTargeting.Paused,
             visitedIds = newVisited,
             nearTrailEndM = null,
         )
@@ -130,11 +152,12 @@ class CollectionExplorer {
             haversineDistanceMeters(location, LatLng(p.waypoint.lat, p.waypoint.lon))
         }
 
-        // Resolve the current target: manual pick or best automatic candidate.
-        val target = s.target ?: selectAutomaticTarget(sorted, s.visitedIds, location, travelHeadingDeg)
+        // Resolve the current target according to the targeting state.
+        val targeting = resolveTargeting(s.targeting, sorted, s.visitedIds, location, travelHeadingDeg)
+        val target = targeting.target
 
         if (target == null) {
-            _state.value = s.copy(points = sorted, target = null, nearTrailEndM = null)
+            _state.value = s.copy(points = sorted, targeting = targeting, nearTrailEndM = null)
             return null
         }
 
@@ -150,7 +173,7 @@ class CollectionExplorer {
             val nearby = proximityCheck(sorted, target, s, location)
             _state.value = s.copy(
                 points = sorted,
-                target = target,
+                targeting = targeting,
                 nearTrailEndM = nearTrailEndM,
                 proximityAnnouncedIds = if (nearby != null) s.proximityAnnouncedIds + nearby.id else s.proximityAnnouncedIds,
             )
@@ -168,15 +191,16 @@ class CollectionExplorer {
             val newVisited = (s.visitedIds + target.id).takeLast(VISITED_CAP)
 
             // In explore mode, auto-advance to next nearest unvisited.
-            val nextTarget = if (s.exploreMode) {
-                selectAutomaticTarget(sorted, newVisited, location, travelHeadingDeg)
+            val nextTarget = if (s.exploreMode) selectAutomaticTarget(sorted, newVisited, location, travelHeadingDeg) else null
+            val nextTargeting = if (s.exploreMode) {
+                nextTarget?.let { CollectionTargeting.Auto(it) } ?: CollectionTargeting.Paused
             } else {
-                null     // hold; user must clear or pick manually
+                CollectionTargeting.Paused
             }
 
             _state.value = s.copy(
                 points = sorted,
-                target = nextTarget,
+                targeting = nextTargeting,
                 visitedIds = newVisited,
                 nearTrailEndM = null,
             )
@@ -187,7 +211,7 @@ class CollectionExplorer {
         val nearby = proximityCheck(sorted, target, s, location)
         _state.value = s.copy(
             points = sorted,
-            target = target,
+            targeting = targeting,
             nearTrailEndM = nearTrailEndM,
             proximityAnnouncedIds = if (nearby != null) s.proximityAnnouncedIds + nearby.id else s.proximityAnnouncedIds,
         )
@@ -195,6 +219,20 @@ class CollectionExplorer {
             val dist = haversineDistanceMeters(location, LatLng(nearby.waypoint.lat, nearby.waypoint.lon))
             CollectionExplorerEvent.NearbyPoint(nearby, dist)
         } else null
+    }
+
+    private fun resolveTargeting(
+        targeting: CollectionTargeting,
+        sorted: List<CollectionPoint>,
+        visitedIds: List<Long>,
+        location: LatLng,
+        travelHeadingDeg: Double?,
+    ): CollectionTargeting = when (targeting) {
+        is CollectionTargeting.Auto ->
+            targeting.target?.let { targeting }
+                ?: CollectionTargeting.Auto(selectAutomaticTarget(sorted, visitedIds, location, travelHeadingDeg))
+        is CollectionTargeting.Manual -> targeting
+        CollectionTargeting.Paused -> targeting
     }
 
     private fun proximityCheck(

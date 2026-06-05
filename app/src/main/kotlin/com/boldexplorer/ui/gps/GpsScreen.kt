@@ -51,6 +51,7 @@ import com.boldexplorer.shared.geo.haversineDistanceMeters
 import com.boldexplorer.shared.navigation.BearingComputer
 import com.boldexplorer.shared.navigation.CollectionExplorerState
 import com.boldexplorer.shared.navigation.CollectionPoint
+import com.boldexplorer.shared.navigation.CollectionTargeting
 import com.boldexplorer.shared.navigation.TrailFollowerState
 import com.boldexplorer.ui.common.MultiSelectItemDialog
 
@@ -525,7 +526,11 @@ private fun CollectionScopePanel(
                 modifier = Modifier.semantics { contentDescription = "Collection has no points" },
             )
         } else {
-            val targetLabel = active.target?.let { pointLabel(it) } ?: "Nearest (auto)"
+            val targetLabel = when (val targeting = active.targeting) {
+                is CollectionTargeting.Auto -> targeting.target?.let { pointLabel(it) } ?: "Nearest (auto)"
+                is CollectionTargeting.Manual -> pointLabel(targeting.target)
+                CollectionTargeting.Paused -> "No target"
+            }
             val pointScrollState = rememberScrollState()
             LaunchedEffect(pointExpanded) {
                 if (pointExpanded) pointScrollState.scrollTo(0)

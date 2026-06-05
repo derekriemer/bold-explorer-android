@@ -542,7 +542,11 @@ class GpsViewModel @Inject constructor(
                             val text = buildString {
                                 append("Reached $name.")
                                 if (nextName != null) append(" Next: $nextName.")
-                                else append(" No more unvisited points.")
+                                else if ((collectionExplorer.state.value as? CollectionExplorerState.Active)?.exploreMode == false) {
+                                    append(" Choose another target or tap Nearest.")
+                                } else {
+                                    append(" No more unvisited points.")
+                                }
                             }
                             announce(text, speakInBackground = true)
                         }

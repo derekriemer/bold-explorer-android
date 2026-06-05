@@ -61,6 +61,41 @@ class CollectionExplorerTest {
         assertEquals(east.id, state.target?.id)
     }
 
+    @Test
+    fun reachedTarget_withExploreOff_pausesInsteadOfPickingAnotherTarget() {
+        val explorer = CollectionExplorer()
+        explorer.load(listOf(north, east), exploreMode = false)
+
+        val event = explorer.onLocationUpdate(LatLng(north.waypoint.lat, north.waypoint.lon))
+
+        assertIs<CollectionExplorerEvent.PointReached>(event)
+        assertNull(event.next)
+
+        val reachedState = explorer.state.value as CollectionExplorerState.Active
+        assertIs<CollectionTargeting.Paused>(reachedState.targeting)
+        assertNull(reachedState.target)
+
+        explorer.onLocationUpdate(home)
+
+        val laterState = explorer.state.value as CollectionExplorerState.Active
+        assertIs<CollectionTargeting.Paused>(laterState.targeting)
+        assertNull(laterState.target)
+    }
+
+    @Test
+    fun turningExploreOnFromPaused_resumesAutomaticTargeting() {
+        val explorer = CollectionExplorer()
+        explorer.load(listOf(north, east), exploreMode = false)
+        explorer.onLocationUpdate(LatLng(north.waypoint.lat, north.waypoint.lon))
+
+        explorer.setExploreMode(true)
+        explorer.onLocationUpdate(home)
+
+        val state = explorer.state.value as CollectionExplorerState.Active
+        assertIs<CollectionTargeting.Auto>(state.targeting)
+        assertEquals(east.id, state.target?.id)
+    }
+
     private fun point(id: Long, name: String, lat: Double, lon: Double): CollectionPoint.Standalone =
         CollectionPoint.Standalone(
             Waypoint(
