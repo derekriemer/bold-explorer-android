@@ -125,6 +125,14 @@ class AudioEngine
             scope.launch { playTone(pitchHz, durationMs = 80, leftVol = left, rightVol = right) }
         }
 
+        /** Two descending tones (660 → 440 Hz) centered in both ears — "wrong direction" earcon. */
+        fun playWrongVector() {
+            scope.launch {
+                playTone(660.0, durationMs = 120, leftVol = 0.7f, rightVol = 0.7f)
+                playTone(440.0, durationMs = 120, leftVol = 0.7f, rightVol = 0.7f)
+            }
+        }
+
         // 0 m (perfect fix) → 880 Hz; 30 m (degraded) → 220 Hz; clamped outside that range.
         private fun mapAccuracyToFrequency(accuracyM: Double): Double {
             val clamped = accuracyM.coerceIn(0.0, 30.0)

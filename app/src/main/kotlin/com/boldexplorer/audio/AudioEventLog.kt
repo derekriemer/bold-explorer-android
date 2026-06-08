@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -40,7 +41,7 @@ class AudioEventLog
     ) {
         private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         private val fileMutex = Mutex()
-        private val logFile: File get() = File(context.filesDir, "audio_log.txt")
+        private val logFile: File get() = File(context.filesDir, "audio_log.jsonl")
 
         private val _entries = MutableStateFlow<List<AudioLogEntry>>(emptyList())
         val entries: StateFlow<List<AudioLogEntry>> = _entries.asStateFlow()
@@ -77,22 +78,15 @@ class AudioEventLog
         suspend fun exportToDownloads(): Result<String> =
             runCatching {
                 val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-                val filename = "bold_explorer_audio_log_$timestamp.txt"
-                val header =
-                    buildString {
-                        appendLine("Bold Explorer Audio Event Log")
-                        appendLine("Exported: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}")
-                        appendLine("Columns:  timestampMs | kind | trigger | inputs | outputs | played | note")
-                        appendLine("---")
-                    }
+                val filename = "bold_explorer_audio_log_$timestamp.jsonl"
                 val body = fileMutex.withLock { if (logFile.exists()) logFile.readText() else "" }
-                val contents = header + body
+                val contents = body
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     val values =
                         ContentValues().apply {
                             put(MediaStore.Downloads.DISPLAY_NAME, filename)
-                            put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+                            put(MediaStore.Downloads.MIME_TYPE, "application/jsonl")
                             put(MediaStore.Downloads.IS_PENDING, 1)
                         }
                     val resolver = context.contentResolver
@@ -115,25 +109,31 @@ class AudioEventLog
 
         // ── Serialization ─────────────────────────────────────────────────────────
 
-        private fun formatLine(e: AudioLogEntry): String {
-            fun String.esc() = replace("\n", "\\n").replace("\t", " ")
-            return "${e.timestampMs}\t${e.kind.name}\t${e.trigger.esc()}\t" +
-                "${e.inputs.esc()}\t${e.outputs.esc()}\t${e.played.esc()}\t${e.note.esc()}"
-        }
+        private fun formatLine(e: AudioLogEntry): String =
+            JSONObject()
+                .apply {
+                    put("ts", e.timestampMs)
+                    put("kind", e.kind.name)
+                    put("trigger", e.trigger)
+                    put("inputs", e.inputs)
+                    put("outputs", e.outputs)
+                    put("played", e.played)
+                    if (e.note.isNotEmpty()) put("note", e.note)
+                    e.extra.forEach { (k, v) -> if (v != null) put(k, v) }
+                }.toString()
 
         private fun parseLine(line: String): AudioLogEntry? {
             if (line.isBlank()) return null
-            val cols = line.split("\t")
-            if (cols.size < 7) return null
             return runCatching {
+                val j = JSONObject(line)
                 AudioLogEntry(
-                    timestampMs = cols[0].toLong(),
-                    kind = AudioLogEntry.Kind.valueOf(cols[1]),
-                    trigger = cols[2].replace("\\n", "\n"),
-                    inputs = cols[3].replace("\\n", "\n"),
-                    outputs = cols[4].replace("\\n", "\n"),
-                    played = cols[5].replace("\\n", "\n"),
-                    note = cols[6].replace("\\n", "\n"),
+                    timestampMs = j.getLong("ts"),
+                    kind = AudioLogEntry.Kind.valueOf(j.getString("kind")),
+                    trigger = j.getString("trigger"),
+                    inputs = j.getString("inputs"),
+                    outputs = j.getString("outputs"),
+                    played = j.getString("played"),
+                    note = j.optString("note", ""),
                 )
             }.getOrNull()
         }

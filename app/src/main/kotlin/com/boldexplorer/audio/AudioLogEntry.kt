@@ -8,6 +8,7 @@ data class AudioLogEntry(
     val outputs: String,
     val played: String,
     val note: String = "",
+    val extra: Map<String, Any?> = emptyMap(),
 ) {
     enum class Kind {
         DIRECTIONAL_BEACON,
@@ -17,5 +18,6 @@ data class AudioLogEntry(
         TRAIL_COMPLETE,
         TTS_ANNOUNCEMENT,
         USER_MARKER,
+        DETECTION_STATE,
     }
 }

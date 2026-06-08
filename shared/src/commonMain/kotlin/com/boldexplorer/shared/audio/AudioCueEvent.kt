@@ -30,4 +30,8 @@ sealed class AudioCueEvent {
 
     // TTS announcement when the trail is finished.
     object TrailComplete : AudioCueEvent()
+
+    // Earcon played when the user is consistently off-trail or moving away from their target.
+    // Two descending tones signal a wrong-vector condition.
+    object WrongVector : AudioCueEvent()
 }

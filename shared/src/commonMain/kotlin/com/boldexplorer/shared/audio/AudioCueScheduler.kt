@@ -112,4 +112,8 @@ class AudioCueScheduler(
             _events.emit(AudioCueEvent.TrailComplete)
         }
     }
+
+    suspend fun emitWrongVector() {
+        _events.emit(AudioCueEvent.WrongVector)
+    }
 }

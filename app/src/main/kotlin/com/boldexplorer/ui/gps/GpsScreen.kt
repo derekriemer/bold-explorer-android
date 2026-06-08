@@ -45,7 +45,6 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.haversineDistanceMeters
@@ -59,7 +58,7 @@ import com.boldexplorer.ui.common.MultiSelectItemDialog
 @Composable
 fun GpsRoute(
     paddingValues: PaddingValues,
-    viewModel: GpsViewModel = hiltViewModel(),
+    viewModel: GpsViewModel,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
 
@@ -205,16 +204,10 @@ fun GpsScreen(
 
             Spacer(Modifier.height(8.dp))
 
-            // ── TalkBack live region ──────────────────────────────────────────────
+            // ── Announcement display (visual only — live region is in NavGraph) ──
             Text(
                 text = state.announcement,
-                modifier =
-                    Modifier
-                        .padding(horizontal = 16.dp)
-                        .semantics {
-                            liveRegion = LiveRegionMode.Polite
-                            contentDescription = state.announcement
-                        },
+                modifier = Modifier.padding(horizontal = 16.dp),
                 style = MaterialTheme.typography.bodySmall,
             )
 

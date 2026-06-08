@@ -4,8 +4,11 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import com.boldexplorer.BuildConfig
 import com.boldexplorer.shared.audio.AudioCueEvent
 import com.boldexplorer.shared.audio.AudioCueScheduler
+import com.boldexplorer.shared.model.LocationSample
+import com.boldexplorer.shared.navigation.TrailGuidanceState
 import com.boldexplorer.shared.repository.SettingsRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
@@ -54,6 +57,8 @@ class AudioCuePlayer
         // Stored from start() so dispatch() can snapshot current values for logging.
         private var accuracyMFlow: StateFlow<Double?>? = null
         private var relativeDegFlow: StateFlow<Double?>? = null
+        private var locationFlow: StateFlow<LocationSample?>? = null
+        private var trailGuidanceFlow: StateFlow<TrailGuidanceState?>? = null
 
         private val audioManager = context.getSystemService(AudioManager::class.java)
         private val focusAttributes =
@@ -68,11 +73,15 @@ class AudioCuePlayer
             relativeDeg: StateFlow<Double?>,
             alignmentActive: StateFlow<Boolean>,
             beaconCuesEnabled: StateFlow<Boolean>,
+            location: StateFlow<LocationSample?>,
+            trailGuidance: StateFlow<TrailGuidanceState?>,
         ) {
             if (playerJob != null) return
 
             accuracyMFlow = accuracyM
             relativeDegFlow = relativeDeg
+            locationFlow = location
+            trailGuidanceFlow = trailGuidance
 
             audioEngine.start()
             val schedulerJob = scheduler.start(scope, accuracyM, relativeDeg, alignmentActive, beaconCuesEnabled)
@@ -92,6 +101,8 @@ class AudioCuePlayer
             playerJob = null
             accuracyMFlow = null
             relativeDegFlow = null
+            locationFlow = null
+            trailGuidanceFlow = null
             audioEngine.stop()
             abandonAudioFocus()
         }
@@ -103,11 +114,30 @@ class AudioCuePlayer
             val nowMs = System.currentTimeMillis()
             val relDeg = relativeDegFlow?.value
             val accM = accuracyMFlow?.value
+            val loc = locationFlow?.value
+            val guidance = trailGuidanceFlow?.value
 
             when (event) {
                 is AudioCueEvent.DirectionalBeacon -> {
                     audioEngine.playDirectionalBeacon(event.pan, event.pitchHz)
                     scope.launch {
+                        val extra =
+                            buildMap<String, Any?> {
+                                if (BuildConfig.SHOW_DEBUG_FEATURES) {
+                                    loc?.let {
+                                        put("userLat", it.lat)
+                                        put("userLng", it.lon)
+                                        it.altitude?.let { v -> put("userElev_m", v) }
+                                        it.heading?.let { v -> put("userHeading", v) }
+                                        it.speed?.let { v -> put("userSpeed_ms", v) }
+                                        it.accuracy?.let { v -> put("userAccuracy_m", v) }
+                                    }
+                                }
+                                guidance?.let {
+                                    put("targetIndex", it.targetIndex)
+                                    put("distToTarget_m", it.distanceToTargetM)
+                                }
+                            }
                         audioEventLog.append(
                             AudioLogEntry(
                                 timestampMs = nowMs,
@@ -120,6 +150,7 @@ class AudioCuePlayer
                                     }.trimStart(',', ' '),
                                 outputs = "pan=${"%.3f".format(event.pan)}, pitchHz=${"%.0f".format(event.pitchHz)} Hz",
                                 played = "Tone @ ${"%.0f".format(event.pitchHz)} Hz",
+                                extra = extra,
                             ),
                         )
                     }
@@ -189,6 +220,22 @@ class AudioCuePlayer
                                 inputs = "",
                                 outputs = "",
                                 played = "Spoke: 'Trail complete'",
+                            ),
+                        )
+                    }
+                }
+
+                is AudioCueEvent.WrongVector -> {
+                    audioEngine.playWrongVector()
+                    scope.launch {
+                        audioEventLog.append(
+                            AudioLogEntry(
+                                timestampMs = nowMs,
+                                kind = AudioLogEntry.Kind.DIRECTIONAL_BEACON,
+                                trigger = "WrongVector",
+                                inputs = relDeg?.let { "relativeDeg=${"%.1f".format(it)}°" } ?: "",
+                                outputs = "660 Hz → 440 Hz descending",
+                                played = "Wrong-vector earcon",
                             ),
                         )
                     }

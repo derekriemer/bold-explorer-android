@@ -22,11 +22,14 @@ class SpokenGuidancePlayer
     ) {
         private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-        fun speak(text: String) {
+        /** Returns true if TTS will actually play (app is backgrounded and spoken guidance is enabled). */
+        fun speak(text: String): Boolean {
+            val willSpeak = !appForegroundState.isInForeground.value
             scope.launch {
-                if (appForegroundState.isInForeground.value) return@launch
+                if (!willSpeak) return@launch
                 if (!settingsRepo.load().spokenGuidanceEnabled) return@launch
                 ttsEngine.speak(text)
             }
+            return willSpeak
         }
     }

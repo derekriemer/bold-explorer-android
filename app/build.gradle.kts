@@ -19,7 +19,24 @@ android {
         versionName = "1.0.0"
     }
 
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
+
+    buildTypes {
+        debug {
+            buildConfigField("boolean", "SHOW_DEBUG_FEATURES", "true")
+        }
+        register("beta") {
+            initWith(getByName("release"))
+            buildConfigField("boolean", "SHOW_DEBUG_FEATURES", "true")
+            matchingFallbacks += "release"
+        }
+        release {
+            buildConfigField("boolean", "SHOW_DEBUG_FEATURES", "false")
+        }
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -46,7 +63,7 @@ android.sourceSets.getByName("main") {
 }
 
 afterEvaluate {
-    listOf("Debug", "Release").forEach { variant ->
+    listOf("Debug", "Beta", "Release").forEach { variant ->
         tasks.findByName("ksp${variant}Kotlin")
             ?.dependsOn("generate${variant}BoldExplorerDatabaseInterface")
     }

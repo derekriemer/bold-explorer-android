@@ -28,9 +28,20 @@ xcframework:
 	$(GW) :shared:assembleSharedXCFramework
 
 # ── Android build (requires ANDROID_HOME) ──────────────────────────────────
+# debug:   dev sideload, debug key, full logging incl. coordinates
+# beta:    release-signed, debug tab + coordinate logging on — distribute for testing
+# release: production, no debug tab, no coordinates in logs
 .PHONY: assemble
 assemble:
 	$(GW) :app:assembleDebug
+
+.PHONY: assemble-beta
+assemble-beta:
+	$(GW) :app:assembleBeta
+
+.PHONY: assemble-release
+assemble-release:
+	$(GW) :app:assembleRelease
 
 .PHONY: install
 install:
@@ -75,6 +86,8 @@ help:
 	@echo "make test-shared       — run :shared:jvmTest (Phase 1 gate)"
 	@echo "make test              — run all unit tests"
 	@echo "make assemble          — build debug APK (needs ANDROID_HOME)"
+	@echo "make assemble-beta     — build beta APK (release-signed, debug features on)"
+	@echo "make assemble-release  — build release APK (no debug tab, no coordinates)"
 	@echo "make install           — install debug APK on connected device"
 	@echo "make clean             — clean all build outputs"
 	@echo "make fmt               — reformat all Kotlin sources with ktlint"

@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.boldexplorer.BuildConfig
 import com.boldexplorer.audio.AudioEventLog
 import com.boldexplorer.audio.AudioLogEntry
 import com.boldexplorer.audio.SpokenGuidancePlayer
@@ -15,10 +16,13 @@ import com.boldexplorer.location.BeaconAudioInputs
 import com.boldexplorer.location.GpsBackgroundMode
 import com.boldexplorer.location.GpsBackgroundSession
 import com.boldexplorer.location.LocationForegroundService
+import com.boldexplorer.shared.audio.AudioCueScheduler
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.deltaAngle
+import com.boldexplorer.shared.geo.distanceToSegmentMeters
 import com.boldexplorer.shared.geo.haversineDistanceMeters
 import com.boldexplorer.shared.geo.initialBearingDeg
+import com.boldexplorer.shared.geo.segmentFraction
 import com.boldexplorer.shared.location.LocationProvider
 import com.boldexplorer.shared.model.Collection
 import com.boldexplorer.shared.model.LocationSample
@@ -248,6 +252,7 @@ class GpsViewModel
         private val spokenGuidancePlayer: SpokenGuidancePlayer,
         private val settingsRepo: SettingsRepository,
         private val audioEventLog: AudioEventLog,
+        private val scheduler: AudioCueScheduler,
     ) : ViewModel() {
         // ── Settings ──────────────────────────────────────────────────────────────────
 
@@ -401,6 +406,13 @@ class GpsViewModel
                 .stateIn(viewModelScope, SharingStarted.Eagerly, null)
         private var lastOrdinaryGuidanceAtMs = Long.MIN_VALUE
         private var lastOrdinaryGuidanceLocation: LatLng? = null
+        private var consecutiveOffTrailCount = 0
+        private var offTrailAlertFiredAt = 0L
+        private var offTrailGraceUntilMs = 0L
+        private var consecutiveBacktrackCount = 0
+        private var prevDistToTargetM: Double? = null
+        private var backtrackAlertFiredAt = 0L
+        private var backtrackGraceUntilMs = 0L
 
         // ── Collection explorer ───────────────────────────────────────────────────────
 
@@ -717,19 +729,21 @@ class GpsViewModel
                         is TrailFollowerEvent.WaypointReached -> {
                             val guidance = updateTrailGuidance(sample)
                             val text = buildTrailAdvanceAnnouncement(event, guidance)
-                            announce(text, speakInBackground = true, trigger = "WaypointReached")
+                            announce(text, speakInBackground = true, trigger = "WaypointReached", sample = sample, guidance = guidance)
                             resetOrdinaryGuidanceThrottle(sample)
                         }
 
                         is TrailFollowerEvent.TrailComplete -> {
                             clearTrailGuidance()
-                            announce("Trail complete", speakInBackground = true, trigger = "TrailComplete")
+                            announce("Trail complete", speakInBackground = true, trigger = "TrailComplete", sample = sample)
                             trailFollower.stop()
                         }
 
                         null -> {
                             val guidance = updateTrailGuidance(sample)
                             maybeAnnounceOrdinaryTrailGuidance(sample, guidance)
+                            maybeAnnounceOffTrail(sample, guidance)
+                            maybeAnnounceBacktrack(sample, guidance)
                         }
                     }
 
@@ -1095,6 +1109,8 @@ class GpsViewModel
                 relativeDeg = audioRelativeDeg,
                 alignmentActive = _alignmentActive,
                 beaconCuesEnabled = beaconCuesEnabled,
+                location = location,
+                trailGuidance = trailGuidance,
             )
 
         private fun updateTrailGuidance(sample: LocationSample): TrailGuidanceState? {
@@ -1114,6 +1130,13 @@ class GpsViewModel
             _trailGuidance.value = null
             lastOrdinaryGuidanceAtMs = Long.MIN_VALUE
             lastOrdinaryGuidanceLocation = null
+            consecutiveOffTrailCount = 0
+            offTrailAlertFiredAt = 0L
+            offTrailGraceUntilMs = 0L
+            consecutiveBacktrackCount = 0
+            prevDistToTargetM = null
+            backtrackAlertFiredAt = 0L
+            backtrackGraceUntilMs = 0L
         }
 
         private fun buildTrailAdvanceAnnouncement(
@@ -1166,22 +1189,204 @@ class GpsViewModel
                 "Checkpoint $checkpointN of ${guidance.total}. $distLabel, ${directionHint(relative)}.",
                 speakInBackground = true,
                 trigger = "OrdinaryTrailGuidance",
+                sample = sample,
+                guidance = guidance,
+            )
+        }
+
+        // BUG-3: alert when consecutive GPS fixes show |relativeDeg| >= 60° (user is off trail).
+        private fun maybeAnnounceOffTrail(
+            sample: LocationSample,
+            guidance: TrailGuidanceState?,
+        ) {
+            if (_scope.value != GpsScope.TRAIL) return
+            if (trailFollower.state.value !is TrailFollowerState.Active) return
+            if (sample.timestamp < offTrailGraceUntilMs) return
+
+            val relative = guidance?.relativeDeg
+            val sinceLastAlertMs = sample.timestamp - offTrailAlertFiredAt
+
+            if (relative != null && TrailGuidance.isMajorCorrection(relative)) {
+                consecutiveOffTrailCount++
+            } else {
+                consecutiveOffTrailCount = 0
+                offTrailAlertFiredAt = 0L
+            }
+
+            viewModelScope.launch {
+                audioEventLog.append(
+                    AudioLogEntry(
+                        timestampMs = sample.timestamp,
+                        kind = AudioLogEntry.Kind.DETECTION_STATE,
+                        trigger = "OffTrailCheck",
+                        inputs =
+                            "relativeDeg=${relative?.let { "%.1f°".format(it) } ?: "null"}" +
+                                ", scope=${_scope.value}, followerActive=${trailFollower.state.value is TrailFollowerState.Active}",
+                        outputs = "consecutiveOffTrail=$consecutiveOffTrailCount, sinceLastAlertMs=$sinceLastAlertMs",
+                        played =
+                            when {
+                                relative == null -> {
+                                    "bail:no_relative_deg"
+                                }
+
+                                consecutiveOffTrailCount < OFF_TRAIL_CONSECUTIVE_THRESHOLD -> {
+                                    "bail:count_${consecutiveOffTrailCount}_of_$OFF_TRAIL_CONSECUTIVE_THRESHOLD"
+                                }
+
+                                sinceLastAlertMs < OFF_TRAIL_ALERT_INTERVAL_MS -> {
+                                    "bail:cooldown_${sinceLastAlertMs}ms"
+                                }
+
+                                else -> {
+                                    "FIRING"
+                                }
+                            },
+                    ),
+                )
+            }
+
+            if (relative == null) return
+            if (consecutiveOffTrailCount < OFF_TRAIL_CONSECUTIVE_THRESHOLD) return
+            if (sinceLastAlertMs < OFF_TRAIL_ALERT_INTERVAL_MS) return
+
+            offTrailAlertFiredAt = sample.timestamp
+            announce("You may be off trail.", speakInBackground = true, trigger = "OffTrailAlert", sample = sample, guidance = guidance)
+            viewModelScope.launch { scheduler.emitWrongVector() }
+        }
+
+        // BUG-9: alert when consecutive GPS fixes show distance to target steadily increasing (backtracking).
+        private fun maybeAnnounceBacktrack(
+            sample: LocationSample,
+            guidance: TrailGuidanceState?,
+        ) {
+            if (_scope.value != GpsScope.TRAIL) return
+            if (trailFollower.state.value !is TrailFollowerState.Active) return
+            if (sample.timestamp < backtrackGraceUntilMs) return
+
+            val distM = guidance?.distanceToTargetM
+            val prev = prevDistToTargetM
+            val sinceLastAlertMs = sample.timestamp - backtrackAlertFiredAt
+
+            if (distM == null) {
+                consecutiveBacktrackCount = 0
+                prevDistToTargetM = null
+            } else {
+                if (prev != null && distM > prev + BACKTRACK_NOISE_FLOOR_M) {
+                    consecutiveBacktrackCount++
+                } else {
+                    consecutiveBacktrackCount = 0
+                    backtrackAlertFiredAt = 0L
+                }
+                prevDistToTargetM = distM
+            }
+
+            viewModelScope.launch {
+                audioEventLog.append(
+                    AudioLogEntry(
+                        timestampMs = sample.timestamp,
+                        kind = AudioLogEntry.Kind.DETECTION_STATE,
+                        trigger = "BacktrackCheck",
+                        inputs =
+                            "distToTarget=${distM?.let { "%.1fm".format(it) } ?: "null"}" +
+                                ", prevDist=${prev?.let { "%.1fm".format(it) } ?: "null"}",
+                        outputs = "consecutiveBacktrack=$consecutiveBacktrackCount, sinceLastAlertMs=$sinceLastAlertMs",
+                        played =
+                            when {
+                                distM == null -> {
+                                    "bail:no_guidance"
+                                }
+
+                                consecutiveBacktrackCount < BACKTRACK_CONSECUTIVE_THRESHOLD -> {
+                                    "bail:count_${consecutiveBacktrackCount}_of_$BACKTRACK_CONSECUTIVE_THRESHOLD"
+                                }
+
+                                sinceLastAlertMs < BACKTRACK_ALERT_INTERVAL_MS -> {
+                                    "bail:cooldown_${sinceLastAlertMs}ms"
+                                }
+
+                                else -> {
+                                    "FIRING"
+                                }
+                            },
+                    ),
+                )
+            }
+
+            if (distM == null) return
+            if (consecutiveBacktrackCount < BACKTRACK_CONSECUTIVE_THRESHOLD) return
+            if (sinceLastAlertMs < BACKTRACK_ALERT_INTERVAL_MS) return
+
+            backtrackAlertFiredAt = sample.timestamp
+            announce(
+                "You may be going the wrong way.",
+                speakInBackground = true,
+                trigger = "BacktrackAlert",
+                sample = sample,
+                guidance = guidance,
             )
         }
 
         private fun resetOrdinaryGuidanceThrottle(sample: LocationSample) {
             lastOrdinaryGuidanceAtMs = sample.timestamp
             lastOrdinaryGuidanceLocation = LatLng(sample.lat, sample.lon)
+            consecutiveOffTrailCount = 0
+            offTrailAlertFiredAt = 0L
+            offTrailGraceUntilMs = sample.timestamp + OFF_TRAIL_GRACE_MS
+            consecutiveBacktrackCount = 0
+            prevDistToTargetM = null
+            backtrackAlertFiredAt = 0L
+            backtrackGraceUntilMs = sample.timestamp + BACKTRACK_GRACE_MS
         }
 
         private fun announce(
             text: String,
             speakInBackground: Boolean = false,
             trigger: String = "unknown",
+            sample: LocationSample? = null,
+            guidance: TrailGuidanceState? = null,
         ) {
             _announcement.value = text
-            if (speakInBackground) spokenGuidancePlayer.speak(text)
+            val ttsDelivered = speakInBackground && spokenGuidancePlayer.speak(text)
             viewModelScope.launch {
+                val extra =
+                    buildMap<String, Any?> {
+                        put("ttsDelivered", ttsDelivered)
+                        sample?.let {
+                            if (BuildConfig.SHOW_DEBUG_FEATURES) {
+                                put("userLat", it.lat)
+                                put("userLng", it.lon)
+                                it.altitude?.let { v -> put("userElev_m", v) }
+                                it.heading?.let { v -> put("userHeading", v) }
+                                it.speed?.let { v -> put("userSpeed_ms", v) }
+                            }
+                            it.accuracy?.let { v -> put("userAccuracy_m", v) }
+                        }
+                        guidance?.let {
+                            put("targetIndex", it.targetIndex)
+                            put("distToTarget_m", it.distanceToTargetM)
+                            put("trailProgress_pct", (it.targetIndex.toDouble() / it.total) * 100.0)
+                            val active = trailFollower.state.value as? TrailFollowerState.Active
+                            val target = active?.waypoints?.getOrNull(it.targetIndex)
+                            if (BuildConfig.SHOW_DEBUG_FEATURES) {
+                                target?.let { wp ->
+                                    put("targetLat", wp.lat)
+                                    put("targetLng", wp.lon)
+                                    wp.elevationM?.let { e -> put("targetElev_m", e) }
+                                }
+                            }
+                            if (active != null && it.targetIndex > 0 && target != null) {
+                                val prev = active.waypoints[it.targetIndex - 1]
+                                val loc = sample?.let { s -> LatLng(s.lat, s.lon) }
+                                if (loc != null) {
+                                    val prevLL = LatLng(prev.lat, prev.lon)
+                                    val targetLL = LatLng(target.lat, target.lon)
+                                    put("crossTrackErr_m", distanceToSegmentMeters(loc, prevLL, targetLL))
+                                    val t = segmentFraction(loc, prevLL, targetLL).coerceIn(0.0, 1.0)
+                                    put("alongTrackDist_m", t * haversineDistanceMeters(prevLL, targetLL))
+                                }
+                            }
+                        }
+                    }
                 audioEventLog.append(
                     AudioLogEntry(
                         timestampMs = System.currentTimeMillis(),
@@ -1189,7 +1394,8 @@ class GpsViewModel
                         trigger = trigger,
                         inputs = "text=\"$text\"",
                         outputs = "",
-                        played = "Spoke: '$text'",
+                        played = if (ttsDelivered) "Spoke: '$text'" else "Suppressed: '$text'",
+                        extra = extra,
                     ),
                 )
             }
@@ -1382,5 +1588,12 @@ class GpsViewModel
             private const val MIN_TRAVEL_HEADING_SPEED_MPS = 1.0
             private const val ORDINARY_GUIDANCE_INTERVAL_MS = 30_000L
             private const val ORDINARY_GUIDANCE_DISTANCE_M = 25.0
+            private const val OFF_TRAIL_CONSECUTIVE_THRESHOLD = 2
+            private const val OFF_TRAIL_ALERT_INTERVAL_MS = 45_000L
+            private const val OFF_TRAIL_GRACE_MS = 30_000L
+            private const val BACKTRACK_CONSECUTIVE_THRESHOLD = 3
+            private const val BACKTRACK_NOISE_FLOOR_M = 2.0
+            private const val BACKTRACK_ALERT_INTERVAL_MS = 45_000L
+            private const val BACKTRACK_GRACE_MS = 20_000L
         }
     }

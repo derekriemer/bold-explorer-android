@@ -12,6 +12,8 @@ make test-shared-watch          # same, continuous mode
 make test                       # all unit tests (:shared:jvmTest + :app:testDebugUnitTest)
 make test-db                    # database repository tests only
 make assemble                   # build debug APK (requires ANDROID_HOME)
+make assemble-beta              # build beta APK (release-signed, debug features on)
+make assemble-release           # build release APK (no debug tab, no coordinates in logs)
 make install                    # push debug APK to connected device
 make logcat                     # tail app + crash logs (adb logcat -s BoldExplorer)
 make adb-connect                # connect via Tailscale (set PHONE_IP + PHONE_PORT in env)
@@ -22,6 +24,89 @@ Run a single test class:
 ./gradlew :shared:jvmTest --tests "com.boldexplorer.shared.geo.GeoMathTest"
 ./gradlew :app:testDebugUnitTest --tests "com.boldexplorer.db.WaypointRepositoryTest"
 ```
+
+## Building & Distribution
+
+### Build variants
+
+| Variant | `SHOW_DEBUG_FEATURES` | Debug tab | Coordinates in logs | Signing |
+|---------|-----------------------|-----------|---------------------|---------|
+| `debug` | `true` | ✓ | ✓ | debug key |
+| `beta`  | `true` | ✓ | ✓ | release key |
+| `release` | `false` | ✗ | ✗ | release key |
+
+**debug** — daily development. Sideloaded via ADB. `make assemble && make install`.
+
+**beta** — what you distribute for testing (F-Droid beta track, direct APK share). Has the debug tab and full coordinate logging so you can pull walk logs and debug navigation. Release-signed so it can be installed alongside a future production build.
+
+**release** — production. No debug tab, no lat/lng in logs.
+
+### Building each variant
+
+```bash
+# Debug (sideload for dev)
+make assemble          # → app/build/outputs/apk/debug/app-debug.apk
+make install           # build + push to connected device in one step
+
+# Beta (for distribution / testing)
+make assemble-beta     # → app/build/outputs/apk/beta/app-beta.apk
+
+# Release (production)
+make assemble-release  # → app/build/outputs/apk/release/app-release-unsigned.apk
+```
+
+### Signing setup (required for beta + release)
+
+Create `app/keystore.properties` (not committed — add to `.gitignore`):
+
+```properties
+storeFile=/path/to/boldexplorer.jks
+storePassword=...
+keyAlias=boldexplorer
+keyPassword=...
+```
+
+Then add to `app/build.gradle.kts`:
+
+```kotlin
+val keystoreProps = java.util.Properties().also { props ->
+    val f = rootProject.file("app/keystore.properties")
+    if (f.exists()) props.load(f.inputStream())
+}
+
+android {
+    signingConfigs {
+        create("release") {
+            storeFile     = keystoreProps["storeFile"]?.let { file(it) }
+            storePassword = keystoreProps["storePassword"] as String?
+            keyAlias      = keystoreProps["keyAlias"] as String?
+            keyPassword   = keystoreProps["keyPassword"] as String?
+        }
+    }
+    buildTypes {
+        getByName("release")   { signingConfig = signingConfigs.getByName("release") }
+        getByName("beta")      { signingConfig = signingConfigs.getByName("release") }
+    }
+}
+```
+
+Generate a keystore once:
+```bash
+keytool -genkey -v -keystore boldexplorer.jks \
+  -alias boldexplorer -keyalg RSA -keysize 2048 -validity 10000
+```
+
+Keep `boldexplorer.jks` and `keystore.properties` out of version control. Back up the keystore — losing it means you can never update the app on a device that has it installed.
+
+### F-Droid
+
+F-Droid builds from source, so the signing setup above is not needed for the F-Droid track (they sign with their own key). What F-Droid requires:
+
+- A public Git repo
+- A reproducible build (standard Gradle, no proprietary SDKs in the build path — play-services-location is a dependency but is only used at runtime and can be replaced with a pure GNSS provider for a fully FOSS build)
+- A metadata file in their `fdroiddata` repo describing the build recipe
+
+For now the `beta` APK can be distributed directly (shared as a file, or via a self-hosted F-Droid repo) before the app is accepted into the main F-Droid catalog.
 
 ## Architecture
 
