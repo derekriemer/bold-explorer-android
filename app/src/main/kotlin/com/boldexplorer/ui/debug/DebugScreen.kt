@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.ui.semantics.heading
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -65,7 +66,10 @@ fun DebugScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Debug", style = MaterialTheme.typography.headlineSmall)
+            Text("Debug", style = MaterialTheme.typography.headlineSmall,
+            modifier = Modifier.semantics {
+        heading()
+    })
             Button(
                 onClick = { viewModel.onImportantPressed() },
                 colors = ButtonDefaults.buttonColors(

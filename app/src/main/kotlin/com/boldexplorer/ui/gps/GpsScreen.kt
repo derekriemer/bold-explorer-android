@@ -1,5 +1,6 @@
 package com.boldexplorer.ui.gps
 
+import androidx.compose.ui.semantics.heading
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -130,7 +131,11 @@ fun GpsScreen(
             Text(
                 "GPS",
                 style = MaterialTheme.typography.headlineSmall,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                                        .semantics {
+            heading()
+        },
+
             )
 
             // ── Scope tabs ────────────────────────────────────────────────────────
