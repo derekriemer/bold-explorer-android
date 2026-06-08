@@ -31,8 +31,8 @@ private val USE_GNSS_KEY = booleanPreferencesKey("use_gnss")
 
 /**
  * Routes the app's single [LocationProvider] subscription to either
- * [FusedLocationProviderImpl] (default; better cold-start, Wi-Fi/cell fusion) or
- * [GnssLocationProviderImpl] (raw GNSS chip; better outdoor accuracy).
+ * [FusedLocationProviderImpl] ( better cold-start, Wi-Fi/cell fusion) or
+ * [GnssLocationProviderImpl] (default; raw GNSS chip; better outdoor accuracy).
  *
  * The choice persists across restarts via DataStore. Toggle via [setUseGnss].
  */
@@ -47,7 +47,7 @@ class LocationProviderRouter @Inject constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     val useGnss: StateFlow<Boolean> = context.locationPrefs.data
-        .map { prefs -> prefs[USE_GNSS_KEY] ?: false }
+        .map { prefs -> prefs[USE_GNSS_KEY] ?: true }
         .stateIn(scope, SharingStarted.Eagerly, false)
 
     override val locationFlow: SharedFlow<LocationSample> = useGnss
