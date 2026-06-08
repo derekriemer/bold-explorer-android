@@ -241,8 +241,10 @@ class GpsViewModel @Inject constructor(
     // GPS course-over-ground only — null when stationary or no fix. Matches Vue useBearingDistance.
     // No compass fallback: compass bearing is unreliable for targeting (phone orientation unknown,
     // pocket mode). A future "wand" mode will expose compass-based pointing explicitly.
+    // Speed gate: Android FusedLocation keeps reporting the last bearing even when stationary,
+    // so we null it out below MIN_TRUSTED_SPEED_MPS to suppress the directional beacon at rest.
     private val navHeadingDeg: StateFlow<Double?> = location
-        .map { it?.heading }
+        .map { sample -> sample?.heading?.takeIf { (sample.speed ?: 0.0) >= TrailGuidance.MIN_TRUSTED_SPEED_MPS } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
 
     val accuracyM: StateFlow<Double?> = location
