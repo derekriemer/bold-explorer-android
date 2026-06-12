@@ -26,7 +26,10 @@ object TrailGuidance {
     const val MIN_TRUSTED_SPEED_MPS = 1.0
     const val TRUSTED_COURSE_HOLD_MS = 10_000L
 
-    fun updateTrustedCourse(previous: TrustedCourse?, sample: LocationSample): TrustedCourse? {
+    fun updateTrustedCourse(
+        previous: TrustedCourse?,
+        sample: LocationSample,
+    ): TrustedCourse? {
         val heading = sample.heading
         val speed = sample.speed ?: 0.0
         return if (heading != null && speed >= MIN_TRUSTED_SPEED_MPS) {
@@ -46,9 +49,10 @@ object TrailGuidance {
         val location = LatLng(sample.lat, sample.lon)
         val targetLocation = LatLng(target.lat, target.lon)
         val desiredCourse = desiredTrailCourseDeg(active, location) ?: return null
-        val freshCourse = trustedCourse?.takeIf {
-            sample.timestamp - it.timestampMs <= TRUSTED_COURSE_HOLD_MS
-        }
+        val freshCourse =
+            trustedCourse?.takeIf {
+                sample.timestamp - it.timestampMs <= TRUSTED_COURSE_HOLD_MS
+            }
 
         return TrailGuidanceState(
             targetIndex = active.currentIndex,
@@ -63,7 +67,10 @@ object TrailGuidance {
 
     fun isMajorCorrection(relativeDeg: Double): Boolean = abs(relativeDeg) >= 60.0
 
-    private fun desiredTrailCourseDeg(active: TrailFollowerState.Active, location: LatLng): Double? {
+    private fun desiredTrailCourseDeg(
+        active: TrailFollowerState.Active,
+        location: LatLng,
+    ): Double? {
         val points = active.waypoints
         val target = points.getOrNull(active.currentIndex) ?: return null
         val targetLocation = LatLng(target.lat, target.lon)

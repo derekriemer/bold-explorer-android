@@ -7,10 +7,10 @@ import com.boldexplorer.audio.AudioEngine
 import com.boldexplorer.audio.AudioEventLog
 import com.boldexplorer.audio.AudioLogEntry
 import com.boldexplorer.compass.SensorCompassProvider
-import com.boldexplorer.shared.gpx.GpxExporter
 import com.boldexplorer.gpx.GpxFileWriter
 import com.boldexplorer.location.LocationProviderRouter
 import com.boldexplorer.shared.audio.AudioCueScheduler
+import com.boldexplorer.shared.gpx.GpxExporter
 import com.boldexplorer.shared.model.HeadingReading
 import com.boldexplorer.shared.model.LocationSample
 import com.boldexplorer.shared.repository.WaypointRepository
@@ -27,112 +27,118 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
-class DebugViewModel @Inject constructor(
-    @ApplicationContext private val context: Context,
-    private val locationRouter: LocationProviderRouter,
-    private val compassProvider: SensorCompassProvider,
-    private val waypointRepo: WaypointRepository,
-    private val audioEngine: AudioEngine,
-    private val scheduler: AudioCueScheduler,
-    private val audioEventLog: AudioEventLog,
-) : ViewModel() {
+class DebugViewModel
+    @Inject
+    constructor(
+        @ApplicationContext private val context: Context,
+        private val locationRouter: LocationProviderRouter,
+        private val compassProvider: SensorCompassProvider,
+        private val waypointRepo: WaypointRepository,
+        private val audioEngine: AudioEngine,
+        private val scheduler: AudioCueScheduler,
+        private val audioEventLog: AudioEventLog,
+    ) : ViewModel() {
+        val location: StateFlow<LocationSample?> =
+            locationRouter.locationFlow
+                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
 
-    val location: StateFlow<LocationSample?> = locationRouter.locationFlow
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
+        val heading: StateFlow<HeadingReading?> =
+            compassProvider.headingFlow
+                .map { it }
+                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
 
-    val heading: StateFlow<HeadingReading?> = compassProvider.headingFlow
-        .map { it }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
+        private val _exportStatus = MutableStateFlow<String?>(null)
+        val exportStatus: StateFlow<String?> = _exportStatus.asStateFlow()
 
-    private val _exportStatus = MutableStateFlow<String?>(null)
-    val exportStatus: StateFlow<String?> = _exportStatus.asStateFlow()
+        val accuracyBeaconEnabled: StateFlow<Boolean> = scheduler.accuracyBeaconEnabled
 
-    val accuracyBeaconEnabled: StateFlow<Boolean> = scheduler.accuracyBeaconEnabled
+        val useGnss: StateFlow<Boolean> = locationRouter.useGnss
 
-    val useGnss: StateFlow<Boolean> = locationRouter.useGnss
+        // ── Audio log ─────────────────────────────────────────────────────────────────
 
-    // ── Audio log ─────────────────────────────────────────────────────────────────
+        val logEntries: StateFlow<List<AudioLogEntry>> = audioEventLog.entries
 
-    val logEntries: StateFlow<List<AudioLogEntry>> = audioEventLog.entries
+        private val _logStatus = MutableStateFlow<String?>(null)
+        val logStatus: StateFlow<String?> = _logStatus.asStateFlow()
 
-    private val _logStatus = MutableStateFlow<String?>(null)
-    val logStatus: StateFlow<String?> = _logStatus.asStateFlow()
+        // Non-null while the IMPORTANT! dialog is open; holds the timestamp recorded at button-press
+        // so the marker is filed at the moment the user pressed the button, not when they dismiss.
+        private val _pendingMarkerTimestampMs = MutableStateFlow<Long?>(null)
+        val showMarkerDialog: StateFlow<Boolean> =
+            _pendingMarkerTimestampMs
+                .map { it != null }
+                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), false)
 
-    // Non-null while the IMPORTANT! dialog is open; holds the timestamp recorded at button-press
-    // so the marker is filed at the moment the user pressed the button, not when they dismiss.
-    private val _pendingMarkerTimestampMs = MutableStateFlow<Long?>(null)
-    val showMarkerDialog: StateFlow<Boolean> = _pendingMarkerTimestampMs
-        .map { it != null }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), false)
-
-    fun onImportantPressed() {
-        _pendingMarkerTimestampMs.value = System.currentTimeMillis()
-    }
-
-    fun confirmMarker(note: String) {
-        val ts = _pendingMarkerTimestampMs.value ?: return
-        _pendingMarkerTimestampMs.value = null
-        viewModelScope.launch {
-            audioEventLog.append(
-                AudioLogEntry(
-                    timestampMs = ts,
-                    kind = AudioLogEntry.Kind.USER_MARKER,
-                    trigger = "IMPORTANT button",
-                    inputs = "",
-                    outputs = "",
-                    played = "",
-                    note = note,
-                ),
-            )
+        fun onImportantPressed() {
+            _pendingMarkerTimestampMs.value = System.currentTimeMillis()
         }
-    }
 
-    fun dismissMarker() {
-        _pendingMarkerTimestampMs.value = null
-    }
-
-    fun newLog() {
-        audioEventLog.newSession()
-        _logStatus.value = "Log cleared"
-    }
-
-    fun exportLog() {
-        viewModelScope.launch(Dispatchers.IO) {
-            _logStatus.value = audioEventLog.exportToDownloads()
-                .fold(onSuccess = { it }, onFailure = { "Export failed: ${it.message}" })
-        }
-    }
-
-    // ── Existing ──────────────────────────────────────────────────────────────────
-
-    fun setAccuracyBeaconEnabled(enabled: Boolean) {
-        scheduler.accuracyBeaconEnabled.value = enabled
-    }
-
-    fun setUseGnss(enabled: Boolean) {
-        locationRouter.setUseGnss(enabled)
-    }
-
-    fun testAccuracyBeacon() {
-        audioEngine.playAccuracyBeacon(location.value?.accuracy ?: 15.0)
-    }
-
-    fun exportAllWaypoints() {
-        viewModelScope.launch {
-            val waypoints = waypointRepo.getAll()
-            if (waypoints.isEmpty()) {
-                _exportStatus.value = "No waypoints to export"
-                return@launch
+        fun confirmMarker(note: String) {
+            val ts = _pendingMarkerTimestampMs.value ?: return
+            _pendingMarkerTimestampMs.value = null
+            viewModelScope.launch {
+                audioEventLog.append(
+                    AudioLogEntry(
+                        timestampMs = ts,
+                        kind = AudioLogEntry.Kind.USER_MARKER,
+                        trigger = "IMPORTANT button",
+                        inputs = "",
+                        outputs = "",
+                        played = "",
+                        note = note,
+                    ),
+                )
             }
-            val gpx = GpxExporter.exportWaypoints(waypoints)
-            val filename = "bold_explorer_waypoints.gpx"
-            GpxFileWriter.writeToDownloads(context, filename, gpx)
-                .onSuccess {
-                _exportStatus.value = "Exported ${waypoints.size} waypoints → Downloads/$filename"
+        }
+
+        fun dismissMarker() {
+            _pendingMarkerTimestampMs.value = null
+        }
+
+        fun newLog() {
+            audioEventLog.newSession()
+            _logStatus.value = "Log cleared"
+        }
+
+        fun exportLog() {
+            viewModelScope.launch(Dispatchers.IO) {
+                _logStatus.value =
+                    audioEventLog
+                        .exportToDownloads()
+                        .fold(onSuccess = { it }, onFailure = { "Export failed: ${it.message}" })
+            }
+        }
+
+        // ── Existing ──────────────────────────────────────────────────────────────────
+
+        fun setAccuracyBeaconEnabled(enabled: Boolean) {
+            scheduler.accuracyBeaconEnabled.value = enabled
+        }
+
+        fun setUseGnss(enabled: Boolean) {
+            locationRouter.setUseGnss(enabled)
+        }
+
+        fun testAccuracyBeacon() {
+            audioEngine.playAccuracyBeacon(location.value?.accuracy ?: 15.0)
+        }
+
+        fun exportAllWaypoints() {
+            viewModelScope.launch {
+                val waypoints = waypointRepo.getAll()
+                if (waypoints.isEmpty()) {
+                    _exportStatus.value = "No waypoints to export"
+                    return@launch
                 }
-                .onFailure { e ->
-                    _exportStatus.value = "Export failed: ${e.message}"
-                }
+                val gpx = GpxExporter.exportWaypoints(waypoints)
+                val filename = "bold_explorer_waypoints.gpx"
+                GpxFileWriter
+                    .writeToDownloads(context, filename, gpx)
+                    .onSuccess {
+                        _exportStatus.value = "Exported ${waypoints.size} waypoints → Downloads/$filename"
+                    }.onFailure { e ->
+                        _exportStatus.value = "Export failed: ${e.message}"
+                    }
+            }
         }
     }
-}

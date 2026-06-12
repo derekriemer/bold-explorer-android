@@ -38,32 +38,34 @@ private val USE_GNSS_KEY = booleanPreferencesKey("use_gnss")
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @Singleton
-class LocationProviderRouter @Inject constructor(
-    val fused: FusedLocationProviderImpl,
-    val gnss: GnssLocationProviderImpl,
-    @ApplicationContext private val context: Context,
-) : LocationProvider {
+class LocationProviderRouter
+    @Inject
+    constructor(
+        val fused: FusedLocationProviderImpl,
+        val gnss: GnssLocationProviderImpl,
+        @ApplicationContext private val context: Context,
+    ) : LocationProvider {
+        private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val useGnss: StateFlow<Boolean> =
+            context.locationPrefs.data
+                .map { prefs -> prefs[USE_GNSS_KEY] ?: true }
+                .stateIn(scope, SharingStarted.Eagerly, false)
 
-    val useGnss: StateFlow<Boolean> = context.locationPrefs.data
-        .map { prefs -> prefs[USE_GNSS_KEY] ?: true }
-        .stateIn(scope, SharingStarted.Eagerly, false)
+        override val locationFlow: SharedFlow<LocationSample> =
+            useGnss
+                .flatMapLatest { gnssActive ->
+                    if (gnssActive) gnss.locationFlow else fused.locationFlow
+                }.shareIn(scope, SharingStarted.WhileSubscribed(5_000L), replay = 1)
 
-    override val locationFlow: SharedFlow<LocationSample> = useGnss
-        .flatMapLatest { gnssActive ->
-            if (gnssActive) gnss.locationFlow else fused.locationFlow
+        fun setBackgroundMode(enabled: Boolean) {
+            fused.setBackgroundMode(enabled)
+            gnss.setBackgroundMode(enabled)
         }
-        .shareIn(scope, SharingStarted.WhileSubscribed(5_000L), replay = 1)
 
-    fun setBackgroundMode(enabled: Boolean) {
-        fused.setBackgroundMode(enabled)
-        gnss.setBackgroundMode(enabled)
-    }
-
-    fun setUseGnss(enabled: Boolean) {
-        scope.launch {
-            context.locationPrefs.edit { prefs -> prefs[USE_GNSS_KEY] = enabled }
+        fun setUseGnss(enabled: Boolean) {
+            scope.launch {
+                context.locationPrefs.edit { prefs -> prefs[USE_GNSS_KEY] = enabled }
+            }
         }
     }
-}

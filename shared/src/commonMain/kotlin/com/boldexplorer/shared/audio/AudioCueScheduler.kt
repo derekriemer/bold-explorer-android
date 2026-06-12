@@ -17,7 +17,9 @@ import kotlin.math.abs
 // Pure scheduling logic — decides WHAT to emit and WHEN.
 // Android AudioCuePlayer consumes the SharedFlow and handles actual playback.
 // iOS can plug in its own player without touching this class.
-class AudioCueScheduler(val config: AudioCueConfig = AudioCueConfig()) {
+class AudioCueScheduler(
+    val config: AudioCueConfig = AudioCueConfig(),
+) {
     private val _events = MutableSharedFlow<AudioCueEvent>(extraBufferCapacity = 16)
     val events: SharedFlow<AudioCueEvent> = _events.asSharedFlow()
 
@@ -75,11 +77,12 @@ class AudioCueScheduler(val config: AudioCueConfig = AudioCueConfig()) {
                                     val pan = BearingComputer.computePan(deg)
                                     val pitchHz = BearingComputer.computeAlignmentPitchHz(deg)
                                     _events.emit(AudioCueEvent.AlignmentPing(pan, pitchHz))
-                                    val intervalMs = if (aligned) {
-                                        (1000.0 / (config.alignmentPingHz / 3.0)).toLong()
-                                    } else {
-                                        (1000.0 / config.alignmentPingHz).toLong()
-                                    }
+                                    val intervalMs =
+                                        if (aligned) {
+                                            (1000.0 / (config.alignmentPingHz / 3.0)).toLong()
+                                        } else {
+                                            (1000.0 / config.alignmentPingHz).toLong()
+                                        }
                                     delay(intervalMs)
                                 } else {
                                     delay(500)
@@ -95,7 +98,10 @@ class AudioCueScheduler(val config: AudioCueConfig = AudioCueConfig()) {
     }
 
     // Called by GpsViewModel when TrailFollower emits a WaypointReached event.
-    suspend fun emitWaypointApproach(name: String, spokenGuidanceEnabled: Boolean) {
+    suspend fun emitWaypointApproach(
+        name: String,
+        spokenGuidanceEnabled: Boolean,
+    ) {
         if (config.waypointApproachEnabled && spokenGuidanceEnabled) {
             _events.emit(AudioCueEvent.WaypointApproach(name))
         }

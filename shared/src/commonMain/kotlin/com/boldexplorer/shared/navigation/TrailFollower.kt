@@ -23,40 +23,45 @@ data class TrailPoint(
 
 sealed class TrailFollowerState {
     object Idle : TrailFollowerState()
+
     data class Active(
         val waypoints: List<TrailPoint>,
         val currentIndex: Int,
         val thresholdM: Double,
     ) : TrailFollowerState()
+
     object Complete : TrailFollowerState()
 }
 
 sealed class TrailFollowerEvent {
     // Emitted when user reaches a waypoint; name/index are the NEW current target.
     data class WaypointReached(
-        val index: Int,               // 0-based index of NEW target
+        val index: Int, // 0-based index of NEW target
         val name: String,
-        val kind: String,             // "waypoint" or "track_point"
-        val total: Int,               // total waypoint count
-        val distanceToNextM: Double,  // distance from current loc to next wp (3D when elevation available)
+        val kind: String, // "waypoint" or "track_point"
+        val total: Int, // total waypoint count
+        val distanceToNextM: Double, // distance from current loc to next wp (3D when elevation available)
         val absoluteBearingDeg: Double, // bearing from current loc to next wp
     ) : TrailFollowerEvent()
+
     object TrailComplete : TrailFollowerEvent()
 }
 
 /** Diagnostic payload emitted via [TrailFollower.onAdvancement] on each waypoint advance. */
 data class AdvancementReason(
-    val mechanism: String,             // "radial" | "projection" | "divergence"
-    val distanceToTargetM: Double,     // 2D haversine to target at moment of advance
-    val segmentFraction: Double?,      // null for radial/divergence advances
-    val crossTrackM: Double?,          // null for radial/divergence advances
+    val mechanism: String, // "radial" | "projection" | "divergence"
+    val distanceToTargetM: Double, // 2D haversine to target at moment of advance
+    val segmentFraction: Double?, // null for radial/divergence advances
+    val crossTrackM: Double?, // null for radial/divergence advances
     val headingDifferenceDeg: Double?, // null when bearingDeg was not provided
-    val closestApproachM: Double,      // closest the user got to this target
+    val closestApproachM: Double, // closest the user got to this target
 )
 
 // Port of src/composables/useFollowTrail.ts.
 // Call onLocationUpdate() on each GPS fix; it returns an event if the user crossed a threshold.
-class TrailFollower(private val defaultThresholdM: Double = 15.0) {
+class TrailFollower(
+    private val defaultThresholdM: Double = 15.0,
+) {
     private val _state = MutableStateFlow<TrailFollowerState>(TrailFollowerState.Idle)
     val state: StateFlow<TrailFollowerState> = _state.asStateFlow()
 
@@ -66,7 +71,11 @@ class TrailFollower(private val defaultThresholdM: Double = 15.0) {
     /** Optional callback fired on every waypoint advance with diagnostic information. */
     var onAdvancement: ((AdvancementReason) -> Unit)? = null
 
-    fun start(waypoints: List<TrailPoint>, fromIndex: Int = 0, thresholdM: Double = defaultThresholdM) {
+    fun start(
+        waypoints: List<TrailPoint>,
+        fromIndex: Int = 0,
+        thresholdM: Double = defaultThresholdM,
+    ) {
         if (waypoints.isEmpty()) return
         val idx = fromIndex.coerceIn(0, waypoints.size - 1)
         closestApproachM = Double.MAX_VALUE
@@ -87,24 +96,26 @@ class TrailFollower(private val defaultThresholdM: Double = 15.0) {
         thresholdM: Double = defaultThresholdM,
     ) {
         if (waypoints.isEmpty()) return
-        val nearestIdx = if (bearingDeg == null) {
-            waypoints.indices.minByOrNull { i ->
-                haversineDistanceMeters(location, LatLng(waypoints[i].lat, waypoints[i].lon))
-            } ?: 0
-        } else {
-            val aheadCandidates = waypoints.indices.filter { i ->
-                val wpBearing = initialBearingDeg(location, LatLng(waypoints[i].lat, waypoints[i].lon))
-                angleDifferenceDeg(bearingDeg.toDouble(), wpBearing) <= 90.0
+        val nearestIdx =
+            if (bearingDeg == null) {
+                waypoints.indices.minByOrNull { i ->
+                    haversineDistanceMeters(location, LatLng(waypoints[i].lat, waypoints[i].lon))
+                } ?: 0
+            } else {
+                val aheadCandidates =
+                    waypoints.indices.filter { i ->
+                        val wpBearing = initialBearingDeg(location, LatLng(waypoints[i].lat, waypoints[i].lon))
+                        angleDifferenceDeg(bearingDeg.toDouble(), wpBearing) <= 90.0
+                    }
+                // Fall back to all candidates when every waypoint is behind the user.
+                val pool = aheadCandidates.ifEmpty { waypoints.indices.toList() }
+                pool.minByOrNull { i ->
+                    val dist = haversineDistanceMeters(location, LatLng(waypoints[i].lat, waypoints[i].lon))
+                    val wpBearing = initialBearingDeg(location, LatLng(waypoints[i].lat, waypoints[i].lon))
+                    val penalty = angleDifferenceDeg(bearingDeg.toDouble(), wpBearing)
+                    dist * (1.0 + penalty / 90.0)
+                } ?: 0
             }
-            // Fall back to all candidates when every waypoint is behind the user.
-            val pool = aheadCandidates.ifEmpty { waypoints.indices.toList() }
-            pool.minByOrNull { i ->
-                val dist = haversineDistanceMeters(location, LatLng(waypoints[i].lat, waypoints[i].lon))
-                val wpBearing = initialBearingDeg(location, LatLng(waypoints[i].lat, waypoints[i].lon))
-                val penalty = angleDifferenceDeg(bearingDeg.toDouble(), wpBearing)
-                dist * (1.0 + penalty / 90.0)
-            } ?: 0
-        }
         closestApproachM = Double.MAX_VALUE
         _state.value = TrailFollowerState.Active(waypoints, nearestIdx, thresholdM)
     }
@@ -136,8 +147,9 @@ class TrailFollower(private val defaultThresholdM: Double = 15.0) {
         if (d < closestApproachM) closestApproachM = d
 
         // 1. Radial threshold — the primary, fast-path check.
-        if (d <= current.thresholdM)
+        if (d <= current.thresholdM) {
             return fireAdvance(current, location, altitudeM, null, null, null, "radial")
+        }
 
         // 2. Incoming-segment projection: user walked ≥90% of the trail leg toward this target.
         //    Guards on proximity (4× threshold) so a user 1 km past the trailhead on an
@@ -152,10 +164,12 @@ class TrailFollower(private val defaultThresholdM: Double = 15.0) {
             val segBearing = initialBearingDeg(prevLL, targetLL)
             val headingDiffDeg = bearingDeg?.let { angleDifferenceDeg(it.toDouble(), segBearing) }
             val headingOk = headingDiffDeg == null || headingDiffDeg <= HEADING_TOLERANCE_DEG
-            if (t >= INCOMING_ADVANCE_FRACTION
-                && crossTrack <= current.thresholdM * CROSS_TRACK_FACTOR
-                && headingOk)
+            if (t >= INCOMING_ADVANCE_FRACTION &&
+                crossTrack <= current.thresholdM * CROSS_TRACK_FACTOR &&
+                headingOk
+            ) {
                 return fireAdvance(current, location, altitudeM, t, crossTrack, headingDiffDeg, "projection")
+            }
         }
 
         // 3. Divergence check: user got within 2× threshold of target (close enough to "count"
@@ -164,12 +178,14 @@ class TrailFollower(private val defaultThresholdM: Double = 15.0) {
         val nextI = current.currentIndex + 1
         if (nextI < current.waypoints.size &&
             closestApproachM <= current.thresholdM * CLOSENESS_FACTOR &&
-            d >= closestApproachM + DIVERGE_M) {
+            d >= closestApproachM + DIVERGE_M
+        ) {
             val nextWpLL = LatLng(current.waypoints[nextI].lat, current.waypoints[nextI].lon)
             val dNext = haversineDistanceMeters(location, nextWpLL)
             val segmentLength = haversineDistanceMeters(LatLng(target.lat, target.lon), nextWpLL)
-            if (dNext < d && dNext <= segmentLength * DIVERGE_NEXT_PROXIMITY_FACTOR)
+            if (dNext < d && dNext <= segmentLength * DIVERGE_NEXT_PROXIMITY_FACTOR) {
                 return fireAdvance(current, location, altitudeM, null, null, null, "divergence")
+            }
         }
 
         return null
@@ -185,14 +201,17 @@ class TrailFollower(private val defaultThresholdM: Double = 15.0) {
         mechanism: String = "radial",
     ): TrailFollowerEvent {
         val capturedClosest = closestApproachM
-        val dToTarget = haversineDistanceMeters(
-            location, LatLng(current.waypoints[current.currentIndex].lat, current.waypoints[current.currentIndex].lon)
-        )
+        val dToTarget =
+            haversineDistanceMeters(
+                location,
+                LatLng(current.waypoints[current.currentIndex].lat, current.waypoints[current.currentIndex].lon),
+            )
         closestApproachM = Double.MAX_VALUE
 
-        fun emitCallback() = onAdvancement?.invoke(
-            AdvancementReason(mechanism, dToTarget, segFraction, crossTrackM, headingDiffDeg, capturedClosest)
-        )
+        fun emitCallback() =
+            onAdvancement?.invoke(
+                AdvancementReason(mechanism, dToTarget, segFraction, crossTrackM, headingDiffDeg, capturedClosest),
+            )
 
         return if (current.currentIndex < current.waypoints.size - 1) {
             val nextIdx = current.currentIndex + 1
@@ -200,10 +219,12 @@ class TrailFollower(private val defaultThresholdM: Double = 15.0) {
             _state.value = current.copy(currentIndex = nextIdx)
             val nextLL = LatLng(nextWp.lat, nextWp.lon)
             val horizDist = haversineDistanceMeters(location, nextLL)
-            val distToNext = if (altitudeM != null && nextWp.elevationM != null)
-                distance3DMeters(horizDist, altitudeM - nextWp.elevationM)
-            else
-                horizDist
+            val distToNext =
+                if (altitudeM != null && nextWp.elevationM != null) {
+                    distance3DMeters(horizDist, altitudeM - nextWp.elevationM)
+                } else {
+                    horizDist
+                }
             emitCallback()
             TrailFollowerEvent.WaypointReached(
                 index = nextIdx,
@@ -223,16 +244,22 @@ class TrailFollower(private val defaultThresholdM: Double = 15.0) {
     companion object {
         /** Incoming projection: ≥90% along the trail leg → auto-advance. */
         private const val INCOMING_ADVANCE_FRACTION = 0.9
+
         /** Incoming projection only fires within 4× threshold to avoid false advances on open terrain. */
         private const val PROJECTION_PROXIMITY_FACTOR = 4.0
+
         /** Incoming projection: cross-track distance must be within 3× threshold. */
         private const val CROSS_TRACK_FACTOR = 3.0
+
         /** Incoming projection: COG must agree with segment direction within this many degrees. */
         private const val HEADING_TOLERANCE_DEG = 60.0
+
         /** Divergence: user must have gotten within 2× threshold of the target (a near-miss). */
         private const val CLOSENESS_FACTOR = 2.0
+
         /** Divergence: user must have moved ≥5 m further away since closest approach. */
         private const val DIVERGE_M = 5.0
+
         /** Divergence: next waypoint must be within this factor of the current segment length. */
         private const val DIVERGE_NEXT_PROXIMITY_FACTOR = 1.5
     }

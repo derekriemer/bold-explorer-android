@@ -7,7 +7,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class BearingComputerTest {
-
     // ---------- toRelative ----------
 
     @Test
@@ -36,12 +35,16 @@ class BearingComputerTest {
         // Cross-module contract: deltaAngle positive = target is right of heading.
         // toRelative must agree. If either function's sign convention is changed
         // without updating the other, this test fails.
-        val rightward = deltaAngle(0.0, 90.0)   // heading N, target E → positive
-        assertTrue(BearingComputer.toRelative(rightward).contains("right"),
-            "deltaAngle(N→E)=$rightward should map to a right label")
-        val leftward = deltaAngle(90.0, 0.0)    // heading E, target N → negative
-        assertTrue(BearingComputer.toRelative(leftward).contains("left"),
-            "deltaAngle(E→N)=$leftward should map to a left label")
+        val rightward = deltaAngle(0.0, 90.0) // heading N, target E → positive
+        assertTrue(
+            BearingComputer.toRelative(rightward).contains("right"),
+            "deltaAngle(N→E)=$rightward should map to a right label",
+        )
+        val leftward = deltaAngle(90.0, 0.0) // heading E, target N → negative
+        assertTrue(
+            BearingComputer.toRelative(leftward).contains("left"),
+            "deltaAngle(E→N)=$leftward should map to a left label",
+        )
     }
 
     // ---------- computePan ----------

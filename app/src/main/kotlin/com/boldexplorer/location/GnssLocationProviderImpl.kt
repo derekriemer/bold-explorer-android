@@ -38,81 +38,82 @@ import javax.inject.Singleton
  * Gate logic mirrors [FusedLocationProviderImpl]: accuracy gate → interval gate → distance gate.
  */
 @Singleton
-class GnssLocationProviderImpl @Inject constructor(
-    @ApplicationContext private val context: Context,
-) : LocationProvider {
+class GnssLocationProviderImpl
+    @Inject
+    constructor(
+        @ApplicationContext private val context: Context,
+    ) : LocationProvider {
+        private val locationManager = context.getSystemService(LocationManager::class.java)
+        private val _backgroundMode = MutableStateFlow(false)
+        private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    private val locationManager = context.getSystemService(LocationManager::class.java)
-    private val _backgroundMode = MutableStateFlow(false)
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-
-    @SuppressLint("MissingPermission")
-    override val locationFlow: SharedFlow<LocationSample> = callbackFlow {
-        while (!hasLocationPermission()) {
-            delay(PERMISSION_RECHECK_MS)
-        }
-
-        val listener = LocationListener { location -> trySend(location) }
-
-        locationManager.requestLocationUpdates(
-            LocationManager.GPS_PROVIDER,
-            MIN_INTERVAL_MS,
-            0f,
-            listener,
-            Looper.getMainLooper(),
-        )
-        awaitClose { locationManager.removeUpdates(listener) }
-    }
-        .combine(_backgroundMode) { loc, bg ->
-            val limit = if (bg) BACKGROUND_ACCURACY_M else FOREGROUND_ACCURACY_M
-            if (loc.accuracy <= 0f || loc.accuracy <= limit) loc else null
-        }
-        .filterNotNull()
-        .map { loc ->
-            LocationSample(
-                lat = loc.latitude,
-                lon = loc.longitude,
-                accuracy = if (loc.hasAccuracy()) loc.accuracy.toDouble() else null,
-                altitude = if (loc.hasAltitude()) loc.altitude else null,
-                heading = if (loc.hasBearing()) loc.bearing.toDouble() else null,
-                speed = if (loc.hasSpeed()) loc.speed.toDouble() else null,
-                timestamp = loc.time,
-                provider = "gnss",
-            )
-        }
-        .let { upstream ->
-            var lastEmitMs = 0L
-            var lastSample: LocationSample? = null
-            upstream.filter { sample ->
-                val now = System.currentTimeMillis()
-                if (now - lastEmitMs < MIN_INTERVAL_MS) return@filter false
-                val prev = lastSample
-                if (prev != null) {
-                    val dist = haversineDistanceMeters(
-                        LatLng(prev.lat, prev.lon),
-                        LatLng(sample.lat, sample.lon),
-                    )
-                    if (dist < MIN_DISTANCE_M) return@filter false
+        @SuppressLint("MissingPermission")
+        override val locationFlow: SharedFlow<LocationSample> =
+            callbackFlow {
+                while (!hasLocationPermission()) {
+                    delay(PERMISSION_RECHECK_MS)
                 }
-                lastEmitMs = now
-                lastSample = sample
-                true
-            }
+
+                val listener = LocationListener { location -> trySend(location) }
+
+                locationManager.requestLocationUpdates(
+                    LocationManager.GPS_PROVIDER,
+                    MIN_INTERVAL_MS,
+                    0f,
+                    listener,
+                    Looper.getMainLooper(),
+                )
+                awaitClose { locationManager.removeUpdates(listener) }
+            }.combine(_backgroundMode) { loc, bg ->
+                val limit = if (bg) BACKGROUND_ACCURACY_M else FOREGROUND_ACCURACY_M
+                if (loc.accuracy <= 0f || loc.accuracy <= limit) loc else null
+            }.filterNotNull()
+                .map { loc ->
+                    LocationSample(
+                        lat = loc.latitude,
+                        lon = loc.longitude,
+                        accuracy = if (loc.hasAccuracy()) loc.accuracy.toDouble() else null,
+                        altitude = if (loc.hasAltitude()) loc.altitude else null,
+                        heading = if (loc.hasBearing()) loc.bearing.toDouble() else null,
+                        speed = if (loc.hasSpeed()) loc.speed.toDouble() else null,
+                        timestamp = loc.time,
+                        provider = "gnss",
+                    )
+                }.let { upstream ->
+                    var lastEmitMs = 0L
+                    var lastSample: LocationSample? = null
+                    upstream.filter { sample ->
+                        val now = System.currentTimeMillis()
+                        if (now - lastEmitMs < MIN_INTERVAL_MS) return@filter false
+                        val prev = lastSample
+                        if (prev != null) {
+                            val dist =
+                                haversineDistanceMeters(
+                                    LatLng(prev.lat, prev.lon),
+                                    LatLng(sample.lat, sample.lon),
+                                )
+                            if (dist < MIN_DISTANCE_M) return@filter false
+                        }
+                        lastEmitMs = now
+                        lastSample = sample
+                        true
+                    }
+                }.shareIn(scope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), replay = 1)
+
+        fun setBackgroundMode(enabled: Boolean) {
+            _backgroundMode.value = enabled
         }
-        .shareIn(scope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), replay = 1)
 
-    fun setBackgroundMode(enabled: Boolean) { _backgroundMode.value = enabled }
+        private fun hasLocationPermission(): Boolean =
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED
 
-    private fun hasLocationPermission(): Boolean =
-        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
-            PackageManager.PERMISSION_GRANTED
-
-    companion object {
-        private const val FOREGROUND_ACCURACY_M = 10f
-        private const val BACKGROUND_ACCURACY_M = 50f
-        private const val MIN_INTERVAL_MS = 1_000L
-        private const val MIN_DISTANCE_M = 0.0
-        private const val STOP_TIMEOUT_MS = 5_000L
-        private const val PERMISSION_RECHECK_MS = 500L
+        companion object {
+            private const val FOREGROUND_ACCURACY_M = 10f
+            private const val BACKGROUND_ACCURACY_M = 50f
+            private const val MIN_INTERVAL_MS = 1_000L
+            private const val MIN_DISTANCE_M = 0.0
+            private const val STOP_TIMEOUT_MS = 5_000L
+            private const val PERMISSION_RECHECK_MS = 500L
+        }
     }
-}

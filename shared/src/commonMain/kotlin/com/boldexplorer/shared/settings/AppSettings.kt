@@ -10,5 +10,7 @@ data class AppSettings(
 )
 
 enum class Units { METRIC, IMPERIAL }
+
 enum class CompassMode { MAGNETIC, TRUE }
+
 enum class BearingDisplayMode { RELATIVE, CLOCK, TRUE_NORTH }

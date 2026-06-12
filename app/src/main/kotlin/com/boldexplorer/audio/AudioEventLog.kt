@@ -33,102 +33,108 @@ import javax.inject.Singleton
  * is updated immediately on the calling coroutine before the disk write starts.
  */
 @Singleton
-class AudioEventLog @Inject constructor(
-    @ApplicationContext private val context: Context,
-) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val fileMutex = Mutex()
-    private val logFile: File get() = File(context.filesDir, "audio_log.txt")
+class AudioEventLog
+    @Inject
+    constructor(
+        @ApplicationContext private val context: Context,
+    ) {
+        private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        private val fileMutex = Mutex()
+        private val logFile: File get() = File(context.filesDir, "audio_log.txt")
 
-    private val _entries = MutableStateFlow<List<AudioLogEntry>>(emptyList())
-    val entries: StateFlow<List<AudioLogEntry>> = _entries.asStateFlow()
+        private val _entries = MutableStateFlow<List<AudioLogEntry>>(emptyList())
+        val entries: StateFlow<List<AudioLogEntry>> = _entries.asStateFlow()
 
-    init {
-        scope.launch {
-            fileMutex.withLock {
-                if (!logFile.exists()) return@withLock
-                val lines = logFile.readLines()
-                val parsed = lines.mapNotNull { parseLine(it) }.reversed() // newest-first
-                _entries.value = parsed
+        init {
+            scope.launch {
+                fileMutex.withLock {
+                    if (!logFile.exists()) return@withLock
+                    val lines = logFile.readLines()
+                    val parsed = lines.mapNotNull { parseLine(it) }.reversed() // newest-first
+                    _entries.value = parsed
+                }
             }
         }
-    }
 
-    fun append(entry: AudioLogEntry) {
-        _entries.value = listOf(entry) + _entries.value
-        scope.launch {
-            fileMutex.withLock {
-                logFile.appendText(formatLine(entry) + "\n")
+        fun append(entry: AudioLogEntry) {
+            _entries.value = listOf(entry) + _entries.value
+            scope.launch {
+                fileMutex.withLock {
+                    logFile.appendText(formatLine(entry) + "\n")
+                }
             }
         }
-    }
 
-    fun newSession() {
-        _entries.value = emptyList()
-        scope.launch {
-            fileMutex.withLock {
-                logFile.writeText("")
+        fun newSession() {
+            _entries.value = emptyList()
+            scope.launch {
+                fileMutex.withLock {
+                    logFile.writeText("")
+                }
             }
         }
-    }
 
-    suspend fun exportToDownloads(): Result<String> = runCatching {
-        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-        val filename = "bold_explorer_audio_log_$timestamp.txt"
-        val header = buildString {
-            appendLine("Bold Explorer Audio Event Log")
-            appendLine("Exported: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}")
-            appendLine("Columns:  timestampMs | kind | trigger | inputs | outputs | played | note")
-            appendLine("---")
-        }
-        val body = fileMutex.withLock { if (logFile.exists()) logFile.readText() else "" }
-        val contents = header + body
+        suspend fun exportToDownloads(): Result<String> =
+            runCatching {
+                val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+                val filename = "bold_explorer_audio_log_$timestamp.txt"
+                val header =
+                    buildString {
+                        appendLine("Bold Explorer Audio Event Log")
+                        appendLine("Exported: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}")
+                        appendLine("Columns:  timestampMs | kind | trigger | inputs | outputs | played | note")
+                        appendLine("---")
+                    }
+                val body = fileMutex.withLock { if (logFile.exists()) logFile.readText() else "" }
+                val contents = header + body
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val values = ContentValues().apply {
-                put(MediaStore.Downloads.DISPLAY_NAME, filename)
-                put(MediaStore.Downloads.MIME_TYPE, "text/plain")
-                put(MediaStore.Downloads.IS_PENDING, 1)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val values =
+                        ContentValues().apply {
+                            put(MediaStore.Downloads.DISPLAY_NAME, filename)
+                            put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+                            put(MediaStore.Downloads.IS_PENDING, 1)
+                        }
+                    val resolver = context.contentResolver
+                    val uri =
+                        resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                            ?: error("Could not create file in Downloads")
+                    resolver.openOutputStream(uri)!!.use { it.write(contents.toByteArray()) }
+                    values.clear()
+                    values.put(MediaStore.Downloads.IS_PENDING, 0)
+                    resolver.update(uri, values, null, null)
+                } else {
+                    @Suppress("DEPRECATION")
+                    val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                    dir.mkdirs()
+                    File(dir, filename).writeText(contents)
+                }
+
+                "Exported ${_entries.value.size} entries → Downloads/$filename"
             }
-            val resolver = context.contentResolver
-            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                ?: error("Could not create file in Downloads")
-            resolver.openOutputStream(uri)!!.use { it.write(contents.toByteArray()) }
-            values.clear()
-            values.put(MediaStore.Downloads.IS_PENDING, 0)
-            resolver.update(uri, values, null, null)
-        } else {
-            @Suppress("DEPRECATION")
-            val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            dir.mkdirs()
-            File(dir, filename).writeText(contents)
+
+        // ── Serialization ─────────────────────────────────────────────────────────
+
+        private fun formatLine(e: AudioLogEntry): String {
+            fun String.esc() = replace("\n", "\\n").replace("\t", " ")
+            return "${e.timestampMs}\t${e.kind.name}\t${e.trigger.esc()}\t" +
+                "${e.inputs.esc()}\t${e.outputs.esc()}\t${e.played.esc()}\t${e.note.esc()}"
         }
 
-        "Exported ${_entries.value.size} entries → Downloads/$filename"
+        private fun parseLine(line: String): AudioLogEntry? {
+            if (line.isBlank()) return null
+            val cols = line.split("\t")
+            if (cols.size < 7) return null
+            return runCatching {
+                AudioLogEntry(
+                    timestampMs = cols[0].toLong(),
+                    kind = AudioLogEntry.Kind.valueOf(cols[1]),
+                    trigger = cols[2].replace("\\n", "\n"),
+                    inputs = cols[3].replace("\\n", "\n"),
+                    outputs = cols[4].replace("\\n", "\n"),
+                    played = cols[5].replace("\\n", "\n"),
+                    note = cols[6].replace("\\n", "\n"),
+                )
+            }.getOrNull()
+        }
     }
-
-    // ── Serialization ─────────────────────────────────────────────────────────
-
-    private fun formatLine(e: AudioLogEntry): String {
-        fun String.esc() = replace("\n", "\\n").replace("\t", " ")
-        return "${e.timestampMs}\t${e.kind.name}\t${e.trigger.esc()}\t" +
-            "${e.inputs.esc()}\t${e.outputs.esc()}\t${e.played.esc()}\t${e.note.esc()}"
-    }
-
-    private fun parseLine(line: String): AudioLogEntry? {
-        if (line.isBlank()) return null
-        val cols = line.split("\t")
-        if (cols.size < 7) return null
-        return runCatching {
-            AudioLogEntry(
-                timestampMs = cols[0].toLong(),
-                kind = AudioLogEntry.Kind.valueOf(cols[1]),
-                trigger = cols[2].replace("\\n", "\n"),
-                inputs = cols[3].replace("\\n", "\n"),
-                outputs = cols[4].replace("\\n", "\n"),
-                played = cols[5].replace("\\n", "\n"),
-                note = cols[6].replace("\\n", "\n"),
-            )
-        }.getOrNull()
-    }
-}

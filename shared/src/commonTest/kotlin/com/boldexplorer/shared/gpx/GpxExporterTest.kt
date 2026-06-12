@@ -6,7 +6,6 @@ import kotlin.test.assertContains
 import kotlin.test.assertFalse
 
 class GpxExporterTest {
-
     private fun waypoint(
         id: Long = 1,
         name: String = "WP",
@@ -22,9 +21,10 @@ class GpxExporterTest {
 
     @Test
     fun exportWaypoints_escapesXmlText() {
-        val gpx = GpxExporter.exportWaypoints(
-            listOf(waypoint(name = "A & B <C>", description = "\"quoted\""))
-        )
+        val gpx =
+            GpxExporter.exportWaypoints(
+                listOf(waypoint(name = "A & B <C>", description = "\"quoted\"")),
+            )
         assertContains(gpx, "A &amp; B &lt;C&gt;")
         assertContains(gpx, "&quot;quoted&quot;")
         assertFalse(gpx.contains("A & B <C>"))

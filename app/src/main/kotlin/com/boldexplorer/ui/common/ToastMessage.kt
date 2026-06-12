@@ -1,5 +1,6 @@
 package com.boldexplorer.ui.common
 
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -14,7 +15,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.layout.padding
 import kotlinx.coroutines.delay
 
 /**
@@ -22,7 +22,11 @@ import kotlinx.coroutines.delay
  * Call once per toast source (e.g. `viewModel.toast`, `viewModel.exportStatus`).
  */
 @Composable
-fun useToast(source: String?, onClear: () -> Unit, durationMs: Long = 2000L): String? {
+fun useToast(
+    source: String?,
+    onClear: () -> Unit,
+    durationMs: Long = 2000L,
+): String? {
     var message by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(source) {
         if (source != null) {
@@ -43,9 +47,13 @@ fun ToastMessage(message: String?) {
             it,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier
-                .padding(horizontal = 16.dp)
-                .semantics { liveRegion = LiveRegionMode.Polite; contentDescription = it },
+            modifier =
+                Modifier
+                    .padding(horizontal = 16.dp)
+                    .semantics {
+                        liveRegion = LiveRegionMode.Polite
+                        contentDescription = it
+                    },
         )
     }
 }

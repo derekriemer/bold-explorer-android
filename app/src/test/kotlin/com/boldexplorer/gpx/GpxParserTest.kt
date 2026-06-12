@@ -6,14 +6,15 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class GpxParserTest {
-
     private fun parse(xml: String) = GpxParser.parse(xml.trimIndent().byteInputStream())
 
     // ── Waypoints (<wpt>) ─────────────────────────────────────────────────────────
 
     @Test
     fun wpt_basicFields() {
-        val result = parse("""
+        val result =
+            parse(
+                """
             <?xml version="1.0"?>
             <gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1">
               <wpt lat="47.123" lon="-122.456">
@@ -22,7 +23,8 @@ class GpxParserTest {
                 <desc>Nice view</desc>
               </wpt>
             </gpx>
-        """)
+        """,
+            )
         assertEquals(1, result.waypoints.size)
         val w = result.waypoints[0]
         assertEquals("Summit", w.name)
@@ -34,50 +36,62 @@ class GpxParserTest {
 
     @Test
     fun wpt_missingName_usesFallback() {
-        val result = parse("""
+        val result =
+            parse(
+                """
             <?xml version="1.0"?>
             <gpx version="1.1">
               <wpt lat="1.0" lon="2.0"/>
             </gpx>
-        """)
+        """,
+            )
         assertEquals("Waypoint", result.waypoints[0].name)
     }
 
     @Test
     fun wpt_missingElevAndDesc_areNull() {
-        val result = parse("""
+        val result =
+            parse(
+                """
             <?xml version="1.0"?>
             <gpx version="1.1">
               <wpt lat="1.0" lon="2.0"><name>X</name></wpt>
             </gpx>
-        """)
+        """,
+            )
         assertNull(result.waypoints[0].elevM)
         assertNull(result.waypoints[0].description)
     }
 
     @Test
     fun wpt_invalidCoords_skipped() {
-        val result = parse("""
+        val result =
+            parse(
+                """
             <?xml version="1.0"?>
             <gpx version="1.1">
               <wpt lat="notanumber" lon="2.0"><name>Bad</name></wpt>
               <wpt lat="1.0" lon="2.0"><name>Good</name></wpt>
             </gpx>
-        """)
+        """,
+            )
         assertEquals(1, result.waypoints.size)
         assertEquals("Good", result.waypoints[0].name)
     }
 
     @Test
     fun wpt_multipleWaypoints() {
-        val result = parse("""
+        val result =
+            parse(
+                """
             <?xml version="1.0"?>
             <gpx version="1.1">
               <wpt lat="1.0" lon="2.0"><name>A</name></wpt>
               <wpt lat="3.0" lon="4.0"><name>B</name></wpt>
               <wpt lat="5.0" lon="6.0"><name>C</name></wpt>
             </gpx>
-        """)
+        """,
+            )
         assertEquals(3, result.waypoints.size)
         assertEquals(listOf("A", "B", "C"), result.waypoints.map { it.name })
     }
@@ -86,7 +100,9 @@ class GpxParserTest {
 
     @Test
     fun trk_basicFields() {
-        val result = parse("""
+        val result =
+            parse(
+                """
             <?xml version="1.0"?>
             <gpx version="1.1">
               <trk>
@@ -97,7 +113,8 @@ class GpxParserTest {
                 </trkseg>
               </trk>
             </gpx>
-        """)
+        """,
+            )
         assertEquals(1, result.trails.size)
         val t = result.trails[0]
         assertEquals("My Hike", t.name)
@@ -109,7 +126,9 @@ class GpxParserTest {
 
     @Test
     fun trk_multipleSegmentsConcatenated() {
-        val result = parse("""
+        val result =
+            parse(
+                """
             <?xml version="1.0"?>
             <gpx version="1.1">
               <trk>
@@ -123,24 +142,30 @@ class GpxParserTest {
                 </trkseg>
               </trk>
             </gpx>
-        """)
+        """,
+            )
         assertEquals(3, result.trails[0].points.size)
     }
 
     @Test
     fun trk_missingName_usesFallback() {
-        val result = parse("""
+        val result =
+            parse(
+                """
             <?xml version="1.0"?>
             <gpx version="1.1">
               <trk><trkseg><trkpt lat="1.0" lon="1.0"/></trkseg></trk>
             </gpx>
-        """)
+        """,
+            )
         assertEquals("Imported Trail", result.trails[0].name)
     }
 
     @Test
     fun trk_pointsWithoutName_getIndexedFallback() {
-        val result = parse("""
+        val result =
+            parse(
+                """
             <?xml version="1.0"?>
             <gpx version="1.1">
               <trk><name>T</name><trkseg>
@@ -148,7 +173,8 @@ class GpxParserTest {
                 <trkpt lat="2.0" lon="2.0"/>
               </trkseg></trk>
             </gpx>
-        """)
+        """,
+            )
         assertEquals("Point 1", result.trails[0].points[0].name)
         assertEquals("Point 2", result.trails[0].points[1].name)
     }
@@ -156,7 +182,9 @@ class GpxParserTest {
     @Test
     fun trk_nameElementNotConfusedWithTrkptName() {
         // The trail's <name> should not pick up a <name> nested inside a <trkpt>.
-        val result = parse("""
+        val result =
+            parse(
+                """
             <?xml version="1.0"?>
             <gpx version="1.1">
               <trk>
@@ -166,19 +194,23 @@ class GpxParserTest {
                 </trkseg>
               </trk>
             </gpx>
-        """)
+        """,
+            )
         assertEquals("Trail Name", result.trails[0].name)
         assertEquals("Point Name", result.trails[0].points[0].name)
     }
 
     @Test
     fun trk_emptyTrack_omitted() {
-        val result = parse("""
+        val result =
+            parse(
+                """
             <?xml version="1.0"?>
             <gpx version="1.1">
               <trk><name>Empty</name></trk>
             </gpx>
-        """)
+        """,
+            )
         assertTrue(result.trails.isEmpty())
     }
 
@@ -186,7 +218,9 @@ class GpxParserTest {
 
     @Test
     fun rte_isMarkedAsRoute() {
-        val result = parse("""
+        val result =
+            parse(
+                """
             <?xml version="1.0"?>
             <gpx version="1.1">
               <rte>
@@ -195,7 +229,8 @@ class GpxParserTest {
                 <rtept lat="2.0" lon="2.0"><name>End</name></rtept>
               </rte>
             </gpx>
-        """)
+        """,
+            )
         assertEquals(1, result.trails.size)
         assertEquals(true, result.trails[0].isRoute)
         assertEquals("Day Route", result.trails[0].name)
@@ -206,7 +241,9 @@ class GpxParserTest {
 
     @Test
     fun mixed_wptAndTrkBothParsed() {
-        val result = parse("""
+        val result =
+            parse(
+                """
             <?xml version="1.0"?>
             <gpx version="1.1">
               <wpt lat="1.0" lon="1.0"><name>Camp</name></wpt>
@@ -217,7 +254,8 @@ class GpxParserTest {
                 </trkseg>
               </trk>
             </gpx>
-        """)
+        """,
+            )
         assertEquals(1, result.waypoints.size)
         assertEquals(1, result.trails.size)
     }
@@ -232,14 +270,17 @@ class GpxParserTest {
 
     @Test
     fun summary_pluralisation() {
-        val result = parse("""
+        val result =
+            parse(
+                """
             <?xml version="1.0"?>
             <gpx version="1.1">
               <wpt lat="1.0" lon="1.0"><name>A</name></wpt>
               <wpt lat="2.0" lon="2.0"><name>B</name></wpt>
               <trk><name>T</name><trkseg><trkpt lat="3.0" lon="3.0"/></trkseg></trk>
             </gpx>
-        """)
+        """,
+            )
         assertEquals("2 waypoints, 1 trail", result.summary)
     }
 }

@@ -37,9 +37,10 @@ fun SettingsScreen(
     val settings by viewModel.settings.collectAsStateWithLifecycle()
 
     Column(
-        modifier = Modifier
-            .padding(paddingValues)
-            .verticalScroll(rememberScrollState()),
+        modifier =
+            Modifier
+                .padding(paddingValues)
+                .verticalScroll(rememberScrollState()),
     ) {
         Text(
             "Settings",
@@ -52,10 +53,11 @@ fun SettingsScreen(
         // Units
         SettingGroupLabel("Units")
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .selectableGroup(),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .selectableGroup(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             RadioOption(
@@ -77,10 +79,11 @@ fun SettingsScreen(
         // Bearing display
         SettingGroupLabel("Bearing Display")
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .selectableGroup(),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .selectableGroup(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             RadioOption(
@@ -109,8 +112,12 @@ fun SettingsScreen(
             label = "Spoken Guidance",
             checked = settings.spokenGuidanceEnabled,
             onCheckedChange = { viewModel.setSpokenGuidance(it) },
-            contentDescription = if (settings.spokenGuidanceEnabled)
-                "Spoken guidance, on" else "Spoken guidance, off",
+            contentDescription =
+                if (settings.spokenGuidanceEnabled) {
+                    "Spoken guidance, on"
+                } else {
+                    "Spoken guidance, off"
+                },
         )
 
         HorizontalDivider()
@@ -129,8 +136,12 @@ fun SettingsScreen(
             label = "Use True North",
             checked = settings.compassMode == CompassMode.TRUE,
             onCheckedChange = { viewModel.setCompassMode(if (it) CompassMode.TRUE else CompassMode.MAGNETIC) },
-            contentDescription = if (settings.compassMode == CompassMode.TRUE)
-                "Use true north, on" else "Use true north, off, using magnetic north",
+            contentDescription =
+                if (settings.compassMode == CompassMode.TRUE) {
+                    "Use true north, on"
+                } else {
+                    "Use true north, off, using magnetic north"
+                },
         )
 
         HorizontalDivider()
@@ -140,8 +151,12 @@ fun SettingsScreen(
             label = "Duck Music During Beacons",
             checked = settings.duckAudioEnabled,
             onCheckedChange = { viewModel.setDuckAudio(it) },
-            contentDescription = if (settings.duckAudioEnabled)
-                "Duck music during beacons, on" else "Duck music during beacons, off",
+            contentDescription =
+                if (settings.duckAudioEnabled) {
+                    "Duck music during beacons, on"
+                } else {
+                    "Duck music during beacons, off"
+                },
         )
 
         HorizontalDivider()
@@ -167,16 +182,16 @@ private fun RadioOption(
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = modifier
-            .selectable(
-                selected = selected,
-                onClick = onClick,
-                role = Role.RadioButton,
-            )
-            .padding(vertical = 8.dp)
-            .semantics {
-                contentDescription = if (selected) "$label, selected" else "$label, not selected"
-            },
+        modifier =
+            modifier
+                .selectable(
+                    selected = selected,
+                    onClick = onClick,
+                    role = Role.RadioButton,
+                ).padding(vertical = 8.dp)
+                .semantics {
+                    contentDescription = if (selected) "$label, selected" else "$label, not selected"
+                },
     ) {
         Text(
             label,
@@ -195,9 +210,10 @@ private fun SwitchRow(
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
         Text(label, modifier = Modifier.weight(1f))
         Spacer(Modifier.width(8.dp))

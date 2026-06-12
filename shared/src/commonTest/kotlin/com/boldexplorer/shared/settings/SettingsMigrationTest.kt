@@ -4,7 +4,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class SettingsMigrationTest {
-
     @Test
     fun units_nullReturnsDefault() {
         val result = migrateStoredValue(UnitsPrefSpec, null)

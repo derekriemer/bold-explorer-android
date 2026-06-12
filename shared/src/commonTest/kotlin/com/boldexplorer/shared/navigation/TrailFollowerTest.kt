@@ -4,17 +4,17 @@ import com.boldexplorer.shared.geo.LatLng
 import kotlin.math.abs
 import kotlin.math.sqrt
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
-import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class TrailFollowerTest {
     // Two waypoints ~10 m apart so threshold=15m will trigger easily
     private val wp1 = TrailPoint(1, "Start", 0.0, 0.0)
     private val wp2 = TrailPoint(2, "Middle", 0.00009, 0.0) // ~10 m north
-    private val wp3 = TrailPoint(3, "End", 0.00018, 0.0)    // ~20 m north
+    private val wp3 = TrailPoint(3, "End", 0.00018, 0.0) // ~20 m north
 
     @Test
     fun idle_byDefault() {
@@ -226,8 +226,8 @@ class TrailFollowerTest {
         // swC is "behind" the user's path in — segments face very different directions.
         // threshold = 5 m → projection gate = 20 m, closeness gate = 10 m.
         val swA = TrailPoint(30, "swA", 0.0, 0.0)
-        val swB = TrailPoint(31, "swB", 0.001, 0.0)   // ~111 m east
-        val swC = TrailPoint(32, "swC", 0.0, 0.001)   // ~111 m north of swA
+        val swB = TrailPoint(31, "swB", 0.001, 0.0) // ~111 m east
+        val swC = TrailPoint(32, "swC", 0.0, 0.001) // ~111 m north of swA
 
         val f = TrailFollower()
         f.start(listOf(swA, swB, swC), thresholdM = 5.0)
@@ -248,7 +248,7 @@ class TrailFollowerTest {
     // Projection gate = 4×5=20m, cross-track gate = 3×5=15m, heading tol = 60°.
 
     private val gA = TrailPoint(40, "A", 0.0, 0.0)
-    private val gB = TrailPoint(41, "B", 0.0009, 0.0)   // ~100 m north
+    private val gB = TrailPoint(41, "B", 0.0009, 0.0) // ~100 m north
     private val gC = TrailPoint(42, "C", 0.0018, 0.0)
 
     @Test
@@ -312,7 +312,7 @@ class TrailFollowerTest {
         // segmentLength(dvBNear→dvCFar) ≈ 200m, FACTOR=1.5 → bound = 300m.
         // User diverges from dvA but ends up 400m from dvCFar — bound blocks.
         val dvBNear = TrailPoint(51, "Near", 0.0, 0.0002)
-        val dvCFar  = TrailPoint(52, "Far",  0.0, 0.002)
+        val dvCFar = TrailPoint(52, "Far", 0.0, 0.002)
         val f = TrailFollower()
         f.start(listOf(dvA, dvBNear, dvCFar), thresholdM = 10.0)
 
@@ -332,7 +332,7 @@ class TrailFollowerTest {
         // User at (0,0) heading north (bearingDeg=0). Two waypoints: ahead and behind.
         // Ahead: (0.001,0) ~111m north. Behind: (-0.0005,0) ~55m south.
         // Without bearing, the south (closer) waypoint wins. With bearing, north wins.
-        val ahead  = TrailPoint(60, "Ahead",  0.001,   0.0)
+        val ahead = TrailPoint(60, "Ahead", 0.001, 0.0)
         val behind = TrailPoint(61, "Behind", -0.0005, 0.0)
         val f = TrailFollower()
         f.startNearest(listOf(ahead, behind), LatLng(0.0, 0.0), bearingDeg = 0f)
@@ -392,16 +392,18 @@ class TrailFollowerTest {
     @Test
     fun fireAdvance_uses3DDistanceWhenElevationAvailable() {
         // Next waypoint is 0m horizontal away but 30m above. 3D distance should be ~30m.
-        val base   = TrailPoint(70, "Base",  0.0,     0.0, elevationM = 0.0)
-        val summit = TrailPoint(71, "Summit",0.00009, 0.0, elevationM = 30.0)
+        val base = TrailPoint(70, "Base", 0.0, 0.0, elevationM = 0.0)
+        val summit = TrailPoint(71, "Summit", 0.00009, 0.0, elevationM = 30.0)
         val f = TrailFollower()
         f.start(listOf(base, summit), thresholdM = 15.0)
         // Arrive at base; altitudeM=0.0 so elevation delta to summit is 30m.
         val event = f.onLocationUpdate(LatLng(0.0, 0.0), altitudeM = 0.0) as TrailFollowerEvent.WaypointReached
         // Horizontal distance from (0,0) to summit ~10m; 3D = sqrt(10²+30²) ≈ 31.6m
-        val expectedMin = sqrt(5.0 * 5.0 + 30.0 * 30.0)  // conservative lower bound
-        assertTrue(event.distanceToNextM >= expectedMin,
-            "expected 3D distance >= $expectedMin, got ${event.distanceToNextM}")
+        val expectedMin = sqrt(5.0 * 5.0 + 30.0 * 30.0) // conservative lower bound
+        assertTrue(
+            event.distanceToNextM >= expectedMin,
+            "expected 3D distance >= $expectedMin, got ${event.distanceToNextM}",
+        )
     }
 
     @Test

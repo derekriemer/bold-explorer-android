@@ -28,7 +28,6 @@ import javax.inject.Inject
  */
 @AndroidEntryPoint
 class LocationForegroundService : Service() {
-
     @Inject
     lateinit var locationProvider: LocationProviderRouter
 
@@ -43,9 +42,17 @@ class LocationForegroundService : Service() {
         createNotificationChannel()
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    override fun onStartCommand(
+        intent: Intent?,
+        flags: Int,
+        startId: Int,
+    ): Int {
         when (intent?.action) {
-            ACTION_START, null -> startTracking()  // null = restarted by Android after process kill
+            ACTION_START, null -> {
+                startTracking()
+            }
+
+            // null = restarted by Android after process kill
             ACTION_STOP -> {
                 if (!backgroundSession.state.value.needsForegroundService) {
                     stopTracking()
@@ -73,8 +80,9 @@ class LocationForegroundService : Service() {
         // Subscribe to the shared flow so the GPS upstream stays active.
         // Actual location data is consumed by the ViewModel via the same SharedFlow.
         if (locationJob == null) {
-            locationJob = locationProvider.locationFlow
-                .launchIn(scope)
+            locationJob =
+                locationProvider.locationFlow
+                    .launchIn(scope)
         }
         backgroundSession.onServiceStarted()
     }
@@ -96,19 +104,21 @@ class LocationForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun createNotificationChannel() {
-        val channel = NotificationChannel(
-            CHANNEL_ID,
-            "Location Tracking",
-            NotificationManager.IMPORTANCE_LOW,
-        ).apply {
-            description = "Active GPS tracking for trail navigation"
-            setShowBadge(false)
-        }
+        val channel =
+            NotificationChannel(
+                CHANNEL_ID,
+                "Location Tracking",
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply {
+                description = "Active GPS tracking for trail navigation"
+                setShowBadge(false)
+            }
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
     private fun buildNotification(): Notification =
-        Notification.Builder(this, CHANNEL_ID)
+        Notification
+            .Builder(this, CHANNEL_ID)
             .setContentTitle("Bold Explorer")
             .setContentText("GPS tracking active")
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)

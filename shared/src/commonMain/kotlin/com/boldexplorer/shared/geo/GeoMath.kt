@@ -10,7 +10,10 @@ const val METERS_PER_DEG_LAT = 111_320.0
 const val DEFAULT_BBOX_RADIUS_M = 50_000.0
 const val EPS_COS_LAT_POLE = 1e-6
 
-fun haversineDistanceMeters(a: LatLng, b: LatLng): Double {
+fun haversineDistanceMeters(
+    a: LatLng,
+    b: LatLng,
+): Double {
     val dLat = (b.lat - a.lat) * DEG_TO_RAD
     val dLon = (b.lon - a.lon) * DEG_TO_RAD
     val lat1 = a.lat * DEG_TO_RAD
@@ -22,7 +25,10 @@ fun haversineDistanceMeters(a: LatLng, b: LatLng): Double {
     return EARTH_R * c
 }
 
-fun initialBearingDeg(a: LatLng, b: LatLng): Double {
+fun initialBearingDeg(
+    a: LatLng,
+    b: LatLng,
+): Double {
     val lat1 = a.lat * DEG_TO_RAD
     val lat2 = b.lat * DEG_TO_RAD
     val dLon = (b.lon - a.lon) * DEG_TO_RAD
@@ -34,8 +40,10 @@ fun initialBearingDeg(a: LatLng, b: LatLng): Double {
 
 // Normalized signed delta from heading to bearing: range [-180, 180).
 // Positive = target is to the right of heading; negative = to the left.
-fun deltaAngle(heading: Double, bearing: Double): Double =
-    ((bearing - heading + 540) % 360) - 180
+fun deltaAngle(
+    heading: Double,
+    bearing: Double,
+): Double = ((bearing - heading + 540) % 360) - 180
 
 /**
  * Scalar projection of [p] onto segment [a]→[b], in the unit space of the segment.
@@ -44,7 +52,11 @@ fun deltaAngle(heading: Double, bearing: Double): Double =
  * Uses approximate flat-earth coordinates (scaled lon by cos(lat)); accurate for segments < ~1 km.
  * Returns 0.0 for degenerate segments (a == b).
  */
-fun segmentFraction(p: LatLng, a: LatLng, b: LatLng): Double {
+fun segmentFraction(
+    p: LatLng,
+    a: LatLng,
+    b: LatLng,
+): Double {
     val cosLat = cos((a.lat + b.lat) / 2.0 * DEG_TO_RAD)
     val abLat = b.lat - a.lat
     val abLon = (b.lon - a.lon) * cosLat
@@ -59,7 +71,11 @@ fun segmentFraction(p: LatLng, a: LatLng, b: LatLng): Double {
  * Clamps the projection to the segment endpoints, so points past the end return
  * distance to the endpoint, not the extended line. Valid for segments < ~1 km.
  */
-fun distanceToSegmentMeters(point: LatLng, segStart: LatLng, segEnd: LatLng): Double {
+fun distanceToSegmentMeters(
+    point: LatLng,
+    segStart: LatLng,
+    segEnd: LatLng,
+): Double {
     val t = segmentFraction(point, segStart, segEnd).coerceIn(0.0, 1.0)
     val projLat = segStart.lat + t * (segEnd.lat - segStart.lat)
     val projLon = segStart.lon + t * (segEnd.lon - segStart.lon)
@@ -67,17 +83,25 @@ fun distanceToSegmentMeters(point: LatLng, segStart: LatLng, segEnd: LatLng): Do
 }
 
 /** Absolute angular difference between two bearings, in [0, 180]. */
-fun angleDifferenceDeg(a: Double, b: Double): Double = abs(deltaAngle(a, b))
+fun angleDifferenceDeg(
+    a: Double,
+    b: Double,
+): Double = abs(deltaAngle(a, b))
 
 /**
  * 3D distance combining a horizontal haversine distance and an elevation delta.
  * Use when both horizontal and vertical displacements are meaningful (e.g. steep terrain).
  * Sign of [elevDeltaM] does not matter — it is squared internally.
  */
-fun distance3DMeters(horizDistM: Double, elevDeltaM: Double): Double =
-    sqrt(horizDistM * horizDistM + elevDeltaM * elevDeltaM)
+fun distance3DMeters(
+    horizDistM: Double,
+    elevDeltaM: Double,
+): Double = sqrt(horizDistM * horizDistM + elevDeltaM * elevDeltaM)
 
-fun computeBbox(center: LatLng, radiusM: Double = DEFAULT_BBOX_RADIUS_M): BboxResult {
+fun computeBbox(
+    center: LatLng,
+    radiusM: Double = DEFAULT_BBOX_RADIUS_M,
+): BboxResult {
     val degLat = radiusM / METERS_PER_DEG_LAT
     val latMin = maxOf(-90.0, center.lat - degLat)
     val latMax = minOf(90.0, center.lat + degLat)

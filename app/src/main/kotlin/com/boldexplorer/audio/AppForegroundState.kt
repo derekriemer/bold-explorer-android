@@ -17,16 +17,25 @@ import javax.inject.Singleton
  * the TalkBack live region handles readout instead.
  */
 @Singleton
-class AppForegroundState @Inject constructor() {
-    private val _isInForeground = MutableStateFlow(false)
-    val isInForeground: StateFlow<Boolean> = _isInForeground.asStateFlow()
+class AppForegroundState
+    @Inject
+    constructor() {
+        private val _isInForeground = MutableStateFlow(false)
+        val isInForeground: StateFlow<Boolean> = _isInForeground.asStateFlow()
 
-    init {
-        Handler(Looper.getMainLooper()).post {
-            ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
-                override fun onStart(owner: LifecycleOwner) { _isInForeground.value = true }
-                override fun onStop(owner: LifecycleOwner) { _isInForeground.value = false }
-            })
+        init {
+            Handler(Looper.getMainLooper()).post {
+                ProcessLifecycleOwner.get().lifecycle.addObserver(
+                    object : DefaultLifecycleObserver {
+                        override fun onStart(owner: LifecycleOwner) {
+                            _isInForeground.value = true
+                        }
+
+                        override fun onStop(owner: LifecycleOwner) {
+                            _isInForeground.value = false
+                        }
+                    },
+                )
+            }
         }
     }
-}

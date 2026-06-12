@@ -9,7 +9,12 @@ import kotlin.test.assertTrue
 class GeoMathTest {
     // Same inputs used in the TypeScript tests to verify exact parity.
 
-    private fun assertClose(actual: Double, expected: Double, tol: Double = 1.0, label: String = "") {
+    private fun assertClose(
+        actual: Double,
+        expected: Double,
+        tol: Double = 1.0,
+        label: String = "",
+    ) {
         assertTrue(abs(actual - expected) <= tol, "$label expected ~$expected got $actual (tol $tol)")
     }
 
@@ -83,10 +88,10 @@ class GeoMathTest {
         // BearingComputer.toRelative and any UI display of this delta must agree.
         // If this formula is ever changed, BearingComputerTest.toRelative_consistentWithDeltaAngle
         // will also fail, forcing both to be updated together.
-        assertTrue(deltaAngle(0.0, 90.0) > 0,   "East of North should be positive (right)")
-        assertTrue(deltaAngle(90.0, 0.0) < 0,   "North of East should be negative (left)")
-        assertTrue(deltaAngle(0.0, 270.0) < 0,  "West of North should be negative (left)")
-        assertTrue(deltaAngle(270.0, 0.0) > 0,  "North of West should be positive (right)")
+        assertTrue(deltaAngle(0.0, 90.0) > 0, "East of North should be positive (right)")
+        assertTrue(deltaAngle(90.0, 0.0) < 0, "North of East should be negative (left)")
+        assertTrue(deltaAngle(0.0, 270.0) < 0, "West of North should be negative (left)")
+        assertTrue(deltaAngle(270.0, 0.0) > 0, "North of West should be positive (right)")
     }
 
     @Test

@@ -22,19 +22,19 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object DatabaseModule {
-
     @Provides
     @Singleton
-    fun provideDatabase(@ApplicationContext context: Context): BoldExplorerDatabase =
+    fun provideDatabase(
+        @ApplicationContext context: Context,
+    ): BoldExplorerDatabase =
         BoldExplorerDatabase(
-            AndroidSqliteDriver(BoldExplorerDatabase.Schema, context, "bold_explorer.db")
+            AndroidSqliteDriver(BoldExplorerDatabase.Schema, context, "bold_explorer.db"),
         )
 }
 
 @Module
 @InstallIn(SingletonComponent::class)
 abstract class RepositoryModule {
-
     @Binds
     @Singleton
     abstract fun bindWaypointRepository(impl: WaypointRepositoryImpl): WaypointRepository

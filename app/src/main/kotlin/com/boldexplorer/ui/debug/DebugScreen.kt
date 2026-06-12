@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.ui.semantics.heading
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -29,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -54,28 +54,35 @@ fun DebugScreen(
     val showMarkerDialog by viewModel.showMarkerDialog.collectAsStateWithLifecycle()
 
     Column(
-        modifier = Modifier
-            .padding(paddingValues)
-            .verticalScroll(rememberScrollState()),
+        modifier =
+            Modifier
+                .padding(paddingValues)
+                .verticalScroll(rememberScrollState()),
     ) {
         // Header row: title on left, IMPORTANT! on right
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Debug", style = MaterialTheme.typography.headlineSmall,
-            modifier = Modifier.semantics {
-        heading()
-    })
+            Text(
+                "Debug",
+                style = MaterialTheme.typography.headlineSmall,
+                modifier =
+                    Modifier.semantics {
+                        heading()
+                    },
+            )
             Button(
                 onClick = { viewModel.onImportantPressed() },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.error,
-                    contentColor = MaterialTheme.colorScheme.onError,
-                ),
+                colors =
+                    ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                    ),
             ) {
                 Text("IMPORTANT!")
             }
@@ -94,11 +101,13 @@ fun DebugScreen(
 
                 Spacer(Modifier.height(8.dp))
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .semantics(mergeDescendants = true) {
-                            contentDescription = "Raw GNSS provider ${if (useGnss) "on" else "off"}: bypasses sensor fusion for better outdoor accuracy"
-                        },
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .semantics(mergeDescendants = true) {
+                                contentDescription =
+                                    "Raw GNSS provider ${if (useGnss) "on" else "off"}: bypasses sensor fusion for better outdoor accuracy"
+                            },
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -136,11 +145,13 @@ fun DebugScreen(
                 Text("Audio", style = MaterialTheme.typography.titleSmall)
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .semantics(mergeDescendants = true) {
-                            contentDescription = "Accuracy beacon ${if (accuracyBeaconEnabled) "on" else "off"}: beeps on every GPS update, pitch maps to fix quality"
-                        },
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .semantics(mergeDescendants = true) {
+                                contentDescription =
+                                    "Accuracy beacon ${if (accuracyBeaconEnabled) "on" else "off"}: beeps on every GPS update, pitch maps to fix quality"
+                            },
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     Text("Accuracy beacon", style = MaterialTheme.typography.bodyMedium)
@@ -150,15 +161,20 @@ fun DebugScreen(
                     )
                 }
                 Text(
-                    "Current accuracy: ${location?.accuracy?.let { "${"%.0f".format(it)} m → ${"%.0f".format(880.0 - (880.0 - 220.0) * (it.coerceIn(0.0, 30.0) / 30.0))} Hz" } ?: "no fix"}",
+                    "Current accuracy: ${location?.accuracy?.let {
+                        "${"%.0f".format(
+                            it,
+                        )} m → ${"%.0f".format(880.0 - (880.0 - 220.0) * (it.coerceIn(0.0, 30.0) / 30.0))} Hz"
+                    } ?: "no fix"}",
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(vertical = 4.dp),
                 )
                 Button(
                     onClick = { viewModel.testAccuracyBeacon() },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .semantics { contentDescription = "Play accuracy beacon tone for current GPS accuracy" },
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .semantics { contentDescription = "Play accuracy beacon tone for current GPS accuracy" },
                 ) {
                     Text("Play Accuracy Beacon")
                 }
@@ -180,9 +196,10 @@ fun DebugScreen(
                 }
                 Button(
                     onClick = { viewModel.exportAllWaypoints() },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .semantics { contentDescription = "Export all waypoints to Downloads folder as GPX file" },
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .semantics { contentDescription = "Export all waypoints to Downloads folder as GPX file" },
                 ) {
                     Text("Export Waypoints GPX")
                 }
@@ -259,11 +276,12 @@ private fun MarkerNoteDialog(
                     Spacer(Modifier.height(4.dp))
                     recentEntries.forEach { entry ->
                         val time = timeFmt.format(Date(entry.timestampMs))
-                        val detail = when {
-                            entry.note.isNotBlank() -> entry.note
-                            entry.played.isNotBlank() -> entry.played
-                            else -> entry.inputs
-                        }
+                        val detail =
+                            when {
+                                entry.note.isNotBlank() -> entry.note
+                                entry.played.isNotBlank() -> entry.played
+                                else -> entry.inputs
+                            }
                         Text(
                             "$time  ${entry.kind.name.replace('_', ' ')}  $detail",
                             style = MaterialTheme.typography.bodySmall,
@@ -295,12 +313,16 @@ private fun MarkerNoteDialog(
 }
 
 @Composable
-private fun DebugRow(label: String, value: String) {
+private fun DebugRow(
+    label: String,
+    value: String,
+) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp)
-            .semantics(mergeDescendants = true) { contentDescription = "$label: $value" },
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 2.dp)
+                .semantics(mergeDescendants = true) { contentDescription = "$label: $value" },
     ) {
         Text(
             "$label:",

@@ -59,24 +59,27 @@ fun TrailsScreen(
     val toast by viewModel.toast.collectAsStateWithLifecycle()
     val exportStatus by viewModel.exportStatus.collectAsStateWithLifecycle()
 
-    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri?.let { viewModel.importGpx(it) }
-    }
+    val importLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+            uri?.let { viewModel.importGpx(it) }
+        }
 
     var showAddDialog by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<Trail?>(null) }
     var deleteTarget by remember { mutableStateOf<Trail?>(null) }
     var addWpToTrail by remember { mutableStateOf<Long?>(null) }
     var attachWpToTrail by remember { mutableStateOf<Long?>(null) }
-    val toastMessage = useToast(toast, viewModel::clearToast)
-        ?: useToast(exportStatus, viewModel::clearExportStatus, durationMs = 3000L)
+    val toastMessage =
+        useToast(toast, viewModel::clearToast)
+            ?: useToast(exportStatus, viewModel::clearExportStatus, durationMs = 3000L)
 
     Column(modifier = Modifier.padding(paddingValues)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
             Text("Trails", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
             TextButton(
@@ -132,12 +135,13 @@ fun TrailsScreen(
                                 "$trackCount track points:",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier
-                                    .padding(horizontal = 24.dp, vertical = 2.dp)
-                                    .semantics {
-                                        liveRegion = LiveRegionMode.Polite
-                                        contentDescription = "$trackCount track points for ${trail.name}"
-                                    },
+                                modifier =
+                                    Modifier
+                                        .padding(horizontal = 24.dp, vertical = 2.dp)
+                                        .semantics {
+                                            liveRegion = LiveRegionMode.Polite
+                                            contentDescription = "$trackCount track points for ${trail.name}"
+                                        },
                             )
                         }
                         tps.forEachIndexed { idx, tp ->
@@ -146,9 +150,10 @@ fun TrailsScreen(
                                     tp.name,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier
-                                        .padding(start = 32.dp, top = 1.dp, end = 16.dp, bottom = 1.dp)
-                                        .semantics { contentDescription = "Track point ${idx + 1}: ${tp.name}" },
+                                    modifier =
+                                        Modifier
+                                            .padding(start = 32.dp, top = 1.dp, end = 16.dp, bottom = 1.dp)
+                                            .semantics { contentDescription = "Track point ${idx + 1}: ${tp.name}" },
                                 )
                             }
                         }
@@ -194,7 +199,10 @@ fun TrailsScreen(
             text = { Text("Delete \"${trail.name}\"? This cannot be undone.") },
             confirmButton = {
                 TextButton(
-                    onClick = { viewModel.delete(trail.id); deleteTarget = null },
+                    onClick = {
+                        viewModel.delete(trail.id)
+                        deleteTarget = null
+                    },
                     modifier = Modifier.semantics { contentDescription = "Confirm delete trail ${trail.name}" },
                 ) { Text("Delete") }
             },
@@ -247,21 +255,23 @@ private fun TrailItem(
     onMoveDown: (index: Int, waypointId: Long) -> Unit,
 ) {
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = if (expanded) 4.dp else 1.dp),
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             // Clickable header row — mergeDescendants scoped only to this row.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onToggle)
-                    .semantics(mergeDescendants = true) {
-                        contentDescription = "${trail.name} trail, ${if (expanded) "expanded" else "collapsed"}"
-                    },
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onToggle)
+                        .semantics(mergeDescendants = true) {
+                            contentDescription = "${trail.name} trail, ${if (expanded) "expanded" else "collapsed"}"
+                        },
             ) {
                 Text(trail.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                 TextButton(
@@ -310,9 +320,10 @@ private fun TrailItem(
                     namedWaypoints.forEachIndexed { idx, wp ->
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 2.dp),
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 2.dp),
                         ) {
                             Text(
                                 "${idx + 1}. ${wp.name}",
@@ -342,21 +353,26 @@ private fun TrailItem(
                     HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                     TextButton(
                         onClick = onToggleTrackPoints,
-                        modifier = Modifier.semantics {
-                            contentDescription = if (trackExpanded)
-                                "Hide $trackPointCount track points for ${trail.name}"
-                            else
-                                "Show $trackPointCount track points for ${trail.name}"
-                        },
+                        modifier =
+                            Modifier.semantics {
+                                contentDescription =
+                                    if (trackExpanded) {
+                                        "Hide $trackPointCount track points for ${trail.name}"
+                                    } else {
+                                        "Show $trackPointCount track points for ${trail.name}"
+                                    }
+                            },
                     ) {
                         Text(
-                            if (trackExpanded) "Hide $trackPointCount track points"
-                            else "$trackPointCount track points — tap to show",
+                            if (trackExpanded) {
+                                "Hide $trackPointCount track points"
+                            } else {
+                                "$trackPointCount track points — tap to show"
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-
                 }
 
                 Spacer(modifier = Modifier.height(4.dp))
@@ -400,8 +416,11 @@ private fun NameDescDialog(
         },
         confirmButton = {
             TextButton(onClick = {
-                if (name.isBlank()) error = "Name required"
-                else onConfirm(name.trim(), desc.trim().ifBlank { null })
+                if (name.isBlank()) {
+                    error = "Name required"
+                } else {
+                    onConfirm(name.trim(), desc.trim().ifBlank { null })
+                }
             }) { Text(confirmLabel) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
@@ -437,8 +456,11 @@ private fun SingleFieldDialog(
         },
         confirmButton = {
             TextButton(onClick = {
-                if (value.isBlank()) error = "Required"
-                else onConfirm(value.trim())
+                if (value.isBlank()) {
+                    error = "Required"
+                } else {
+                    onConfirm(value.trim())
+                }
             }) { Text(confirmLabel) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
@@ -461,10 +483,54 @@ private fun AddWaypointToTrailDialog(
         title = { Text("Add Waypoint") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = lat, onValueChange = { lat = it }, label = { Text("Latitude") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = lon, onValueChange = { lon = it }, label = { Text("Longitude") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = elev, onValueChange = { elev = it }, label = { Text("Elevation m (optional)") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = name, onValueChange = {
+                    name = it
+                }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(
+                    value = lat,
+                    onValueChange = {
+                        lat = it
+                    },
+                    label = {
+                        Text("Latitude")
+                    },
+                    singleLine = true,
+                    keyboardOptions =
+                        KeyboardOptions(
+                            keyboardType = KeyboardType.Decimal,
+                        ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = lon,
+                    onValueChange = {
+                        lon = it
+                    },
+                    label = {
+                        Text("Longitude")
+                    },
+                    singleLine = true,
+                    keyboardOptions =
+                        KeyboardOptions(
+                            keyboardType = KeyboardType.Decimal,
+                        ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = elev,
+                    onValueChange = {
+                        elev = it
+                    },
+                    label = {
+                        Text("Elevation m (optional)")
+                    },
+                    singleLine = true,
+                    keyboardOptions =
+                        KeyboardOptions(
+                            keyboardType = KeyboardType.Decimal,
+                        ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },

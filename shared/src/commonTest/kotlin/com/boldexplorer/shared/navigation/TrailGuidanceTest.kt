@@ -51,16 +51,18 @@ class TrailGuidanceTest {
         follower.onLocationUpdate(LatLng(northA.lat, northA.lon))
 
         val trusted = TrailGuidance.updateTrustedCourse(null, sample(timestamp = 1_000, heading = 0.0, speed = 1.5))
-        val held = TrailGuidance.compute(
-            follower.state.value,
-            sample(lat = 0.0005, timestamp = 10_999, heading = null, speed = 0.0),
-            trusted,
-        )
-        val expired = TrailGuidance.compute(
-            follower.state.value,
-            sample(lat = 0.0005, timestamp = 11_001, heading = null, speed = 0.0),
-            trusted,
-        )
+        val held =
+            TrailGuidance.compute(
+                follower.state.value,
+                sample(lat = 0.0005, timestamp = 10_999, heading = null, speed = 0.0),
+                trusted,
+            )
+        val expired =
+            TrailGuidance.compute(
+                follower.state.value,
+                sample(lat = 0.0005, timestamp = 11_001, heading = null, speed = 0.0),
+                trusted,
+            )
 
         assertNotNull(held)
         assertTrue(held.courseIsFresh)

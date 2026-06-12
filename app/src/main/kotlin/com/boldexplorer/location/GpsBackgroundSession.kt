@@ -38,81 +38,88 @@ data class BeaconAudioInputs(
  * startForeground() succeeds.
  */
 @Singleton
-class GpsBackgroundSession @Inject constructor(
-    private val audioCuePlayer: AudioCuePlayer,
-) {
-    private val _state = MutableStateFlow(GpsBackgroundSessionState())
-    val state: StateFlow<GpsBackgroundSessionState> = _state.asStateFlow()
+class GpsBackgroundSession
+    @Inject
+    constructor(
+        private val audioCuePlayer: AudioCuePlayer,
+    ) {
+        private val _state = MutableStateFlow(GpsBackgroundSessionState())
+        val state: StateFlow<GpsBackgroundSessionState> = _state.asStateFlow()
 
-    private var beaconInputs: BeaconAudioInputs? = null
-    private var alignmentActive = false
+        private var beaconInputs: BeaconAudioInputs? = null
+        private var alignmentActive = false
 
-    fun setModeActive(mode: GpsBackgroundMode, active: Boolean) {
-        _state.value = _state.value.copy(
-            activeModes = if (active) _state.value.activeModes + mode else _state.value.activeModes - mode,
-        )
-        if (!active && mode == GpsBackgroundMode.BeaconNavigation) stopBeaconPlaybackIfIdle()
+        fun setModeActive(
+            mode: GpsBackgroundMode,
+            active: Boolean,
+        ) {
+            _state.value =
+                _state.value.copy(
+                    activeModes = if (active) _state.value.activeModes + mode else _state.value.activeModes - mode,
+                )
+            if (!active && mode == GpsBackgroundMode.BeaconNavigation) stopBeaconPlaybackIfIdle()
+        }
+
+        fun configureBeaconInputs(inputs: BeaconAudioInputs) {
+            beaconInputs = inputs
+            startBeaconPlaybackIfNeeded()
+        }
+
+        fun startBeaconNavigation(inputs: BeaconAudioInputs) {
+            beaconInputs = inputs
+            setModeActive(GpsBackgroundMode.BeaconNavigation, true)
+            startBeaconPlaybackIfNeeded()
+        }
+
+        fun stopBeaconNavigation() {
+            setModeActive(GpsBackgroundMode.BeaconNavigation, false)
+        }
+
+        fun startAlignment(inputs: BeaconAudioInputs) {
+            beaconInputs = inputs
+            alignmentActive = true
+            startBeaconPlaybackIfNeeded()
+        }
+
+        fun stopAlignment() {
+            alignmentActive = false
+            stopBeaconPlaybackIfIdle()
+        }
+
+        fun onServiceStarted() {
+            _state.value = _state.value.copy(serviceStarted = true)
+            startBeaconPlaybackIfNeeded()
+        }
+
+        fun onServiceStopped() {
+            _state.value = _state.value.copy(serviceStarted = false)
+            if (!alignmentActive) stopBeaconPlayback(force = true)
+        }
+
+        private fun startBeaconPlaybackIfNeeded() {
+            val shouldPlay =
+                alignmentActive ||
+                    (_state.value.serviceStarted && GpsBackgroundMode.BeaconNavigation in _state.value.activeModes)
+            if (!shouldPlay || _state.value.beaconPlaybackActive) return
+            val inputs = beaconInputs ?: return
+            audioCuePlayer.start(
+                accuracyM = inputs.accuracyM,
+                relativeDeg = inputs.relativeDeg,
+                alignmentActive = inputs.alignmentActive,
+                beaconCuesEnabled = inputs.beaconCuesEnabled,
+            )
+            _state.value = _state.value.copy(beaconPlaybackActive = true)
+        }
+
+        private fun stopBeaconPlaybackIfIdle() {
+            if (alignmentActive) return
+            if (GpsBackgroundMode.BeaconNavigation in _state.value.activeModes) return
+            stopBeaconPlayback(force = false)
+        }
+
+        private fun stopBeaconPlayback(force: Boolean) {
+            if (!force && !_state.value.beaconPlaybackActive) return
+            audioCuePlayer.stop()
+            _state.value = _state.value.copy(beaconPlaybackActive = false)
+        }
     }
-
-    fun configureBeaconInputs(inputs: BeaconAudioInputs) {
-        beaconInputs = inputs
-        startBeaconPlaybackIfNeeded()
-    }
-
-    fun startBeaconNavigation(inputs: BeaconAudioInputs) {
-        beaconInputs = inputs
-        setModeActive(GpsBackgroundMode.BeaconNavigation, true)
-        startBeaconPlaybackIfNeeded()
-    }
-
-    fun stopBeaconNavigation() {
-        setModeActive(GpsBackgroundMode.BeaconNavigation, false)
-    }
-
-    fun startAlignment(inputs: BeaconAudioInputs) {
-        beaconInputs = inputs
-        alignmentActive = true
-        startBeaconPlaybackIfNeeded()
-    }
-
-    fun stopAlignment() {
-        alignmentActive = false
-        stopBeaconPlaybackIfIdle()
-    }
-
-    fun onServiceStarted() {
-        _state.value = _state.value.copy(serviceStarted = true)
-        startBeaconPlaybackIfNeeded()
-    }
-
-    fun onServiceStopped() {
-        _state.value = _state.value.copy(serviceStarted = false)
-        if (!alignmentActive) stopBeaconPlayback(force = true)
-    }
-
-    private fun startBeaconPlaybackIfNeeded() {
-        val shouldPlay = alignmentActive ||
-            (_state.value.serviceStarted && GpsBackgroundMode.BeaconNavigation in _state.value.activeModes)
-        if (!shouldPlay || _state.value.beaconPlaybackActive) return
-        val inputs = beaconInputs ?: return
-        audioCuePlayer.start(
-            accuracyM = inputs.accuracyM,
-            relativeDeg = inputs.relativeDeg,
-            alignmentActive = inputs.alignmentActive,
-            beaconCuesEnabled = inputs.beaconCuesEnabled,
-        )
-        _state.value = _state.value.copy(beaconPlaybackActive = true)
-    }
-
-    private fun stopBeaconPlaybackIfIdle() {
-        if (alignmentActive) return
-        if (GpsBackgroundMode.BeaconNavigation in _state.value.activeModes) return
-        stopBeaconPlayback(force = false)
-    }
-
-    private fun stopBeaconPlayback(force: Boolean) {
-        if (!force && !_state.value.beaconPlaybackActive) return
-        audioCuePlayer.stop()
-        _state.value = _state.value.copy(beaconPlaybackActive = false)
-    }
-}

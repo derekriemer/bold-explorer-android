@@ -30,12 +30,12 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.boldexplorer.shared.model.Collection as ExplorerCollection
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.Waypoint
 import com.boldexplorer.ui.common.MultiSelectItemDialog
 import com.boldexplorer.ui.common.ToastMessage
 import com.boldexplorer.ui.common.useToast
+import com.boldexplorer.shared.model.Collection as ExplorerCollection
 
 @Composable
 fun CollectionsScreen(
@@ -49,9 +49,10 @@ fun CollectionsScreen(
     val toast by viewModel.toast.collectAsStateWithLifecycle()
     val exportStatus by viewModel.exportStatus.collectAsStateWithLifecycle()
 
-    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri?.let { viewModel.importGpx(it, it.lastPathSegment?.removeSuffix(".gpx") ?: "Imported Collection") }
-    }
+    val importLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+            uri?.let { viewModel.importGpx(it, it.lastPathSegment?.removeSuffix(".gpx") ?: "Imported Collection") }
+        }
 
     var expandedId by rememberSaveable { mutableStateOf<Long?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
@@ -59,15 +60,17 @@ fun CollectionsScreen(
     var deleteTarget by remember { mutableStateOf<ExplorerCollection?>(null) }
     var addWpToCollection by remember { mutableStateOf<Long?>(null) }
     var addTrailToCollection by remember { mutableStateOf<Long?>(null) }
-    val toastMessage = useToast(toast, viewModel::clearToast)
-        ?: useToast(exportStatus, viewModel::clearExportStatus, durationMs = 3000L)
+    val toastMessage =
+        useToast(toast, viewModel::clearToast)
+            ?: useToast(exportStatus, viewModel::clearExportStatus, durationMs = 3000L)
 
     Column(modifier = Modifier.padding(paddingValues)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
             Text("Collections", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
             TextButton(
@@ -139,7 +142,10 @@ fun CollectionsScreen(
                 Column {
                     OutlinedTextField(
                         value = nameInput,
-                        onValueChange = { nameInput = it; error = null },
+                        onValueChange = {
+                            nameInput = it
+                            error = null
+                        },
                         label = { Text("Name") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
@@ -149,8 +155,12 @@ fun CollectionsScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    if (nameInput.isBlank()) error = "Name required"
-                    else { viewModel.rename(coll.id, nameInput.trim()); renameTarget = null }
+                    if (nameInput.isBlank()) {
+                        error = "Name required"
+                    } else {
+                        viewModel.rename(coll.id, nameInput.trim())
+                        renameTarget = null
+                    }
                 }) { Text("Rename") }
             },
             dismissButton = { TextButton(onClick = { renameTarget = null }) { Text("Cancel") } },
@@ -164,7 +174,10 @@ fun CollectionsScreen(
             text = { Text("Delete \"${coll.name}\"? This cannot be undone.") },
             confirmButton = {
                 TextButton(
-                    onClick = { viewModel.delete(coll.id); deleteTarget = null },
+                    onClick = {
+                        viewModel.delete(coll.id)
+                        deleteTarget = null
+                    },
                     modifier = Modifier.semantics { contentDescription = "Confirm delete collection ${coll.name}" },
                 ) { Text("Delete") }
             },
@@ -219,10 +232,11 @@ private fun CollectionItem(
 ) {
     Card(
         onClick = onToggle,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp)
-            .semantics { contentDescription = "${collection.name} collection, ${if (expanded) "expanded" else "collapsed"}" },
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+                .semantics { contentDescription = "${collection.name} collection, ${if (expanded) "expanded" else "collapsed"}" },
         elevation = CardDefaults.cardElevation(defaultElevation = if (expanded) 4.dp else 1.dp),
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
@@ -334,8 +348,11 @@ private fun AddCollectionDialog(
         },
         confirmButton = {
             TextButton(onClick = {
-                if (name.isBlank()) error = "Name required"
-                else onConfirm(name.trim(), desc.trim().ifBlank { null })
+                if (name.isBlank()) {
+                    error = "Name required"
+                } else {
+                    onConfirm(name.trim(), desc.trim().ifBlank { null })
+                }
             }) { Text("Create") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },

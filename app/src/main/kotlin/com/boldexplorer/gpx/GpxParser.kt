@@ -14,10 +14,11 @@ data class GpxParseResult(
 ) {
     val isEmpty get() = waypoints.isEmpty() && trails.isEmpty()
     val summary: String get() {
-        val parts = buildList {
-            if (waypoints.isNotEmpty()) add("${waypoints.size} waypoint${if (waypoints.size == 1) "" else "s"}")
-            if (trails.isNotEmpty()) add("${trails.size} trail${if (trails.size == 1) "" else "s"}")
-        }
+        val parts =
+            buildList {
+                if (waypoints.isNotEmpty()) add("${waypoints.size} waypoint${if (waypoints.size == 1) "" else "s"}")
+                if (trails.isNotEmpty()) add("${trails.size} trail${if (trails.size == 1) "" else "s"}")
+            }
         return if (parts.isEmpty()) "Nothing to import" else parts.joinToString(", ")
     }
 }
@@ -38,36 +39,51 @@ data class ParsedTrail(
 )
 
 object GpxParser {
-
     fun parse(stream: InputStream): GpxParseResult {
-        val root = DocumentBuilderFactory.newInstance()
-            .newDocumentBuilder()
-            .parse(stream)
-            .documentElement
+        val root =
+            DocumentBuilderFactory
+                .newInstance()
+                .newDocumentBuilder()
+                .parse(stream)
+                .documentElement
 
-        val collectionName = root.getElementsByTagName("metadata").elements()
-            .firstOrNull()?.directChildText("name")
+        val collectionName =
+            root
+                .getElementsByTagName("metadata")
+                .elements()
+                .firstOrNull()
+                ?.directChildText("name")
 
-        val waypoints = root.getElementsByTagName("wpt").elements()
-            .mapNotNull { it.toWaypoint(fallbackName = "Waypoint") }
+        val waypoints =
+            root
+                .getElementsByTagName("wpt")
+                .elements()
+                .mapNotNull { it.toWaypoint(fallbackName = "Waypoint") }
 
-        val trails = buildList {
-            root.getElementsByTagName("trk").elements().forEach { trk ->
-                val name = trk.directChildText("name") ?: "Imported Trail"
-                // Concatenate all <trkseg> segments into one ordered list.
-                val points = trk.getElementsByTagName("trkpt").elements()
-                    .mapIndexed { i, pt -> pt.toWaypoint(fallbackName = "Point ${i + 1}") }
-                    .filterNotNull()
-                if (points.isNotEmpty()) add(ParsedTrail(name, points, isRoute = false))
+        val trails =
+            buildList {
+                root.getElementsByTagName("trk").elements().forEach { trk ->
+                    val name = trk.directChildText("name") ?: "Imported Trail"
+                    // Concatenate all <trkseg> segments into one ordered list.
+                    val points =
+                        trk
+                            .getElementsByTagName("trkpt")
+                            .elements()
+                            .mapIndexed { i, pt -> pt.toWaypoint(fallbackName = "Point ${i + 1}") }
+                            .filterNotNull()
+                    if (points.isNotEmpty()) add(ParsedTrail(name, points, isRoute = false))
+                }
+                root.getElementsByTagName("rte").elements().forEach { rte ->
+                    val name = rte.directChildText("name") ?: "Imported Route"
+                    val points =
+                        rte
+                            .getElementsByTagName("rtept")
+                            .elements()
+                            .mapIndexed { i, pt -> pt.toWaypoint(fallbackName = "Point ${i + 1}") }
+                            .filterNotNull()
+                    if (points.isNotEmpty()) add(ParsedTrail(name, points, isRoute = true))
+                }
             }
-            root.getElementsByTagName("rte").elements().forEach { rte ->
-                val name = rte.directChildText("name") ?: "Imported Route"
-                val points = rte.getElementsByTagName("rtept").elements()
-                    .mapIndexed { i, pt -> pt.toWaypoint(fallbackName = "Point ${i + 1}") }
-                    .filterNotNull()
-                if (points.isNotEmpty()) add(ParsedTrail(name, points, isRoute = true))
-            }
-        }
 
         return GpxParseResult(waypoints, trails, collectionName)
     }
@@ -104,6 +120,5 @@ object GpxParser {
     private val Node.localTag: String
         get() = (localName ?: nodeName).substringAfterLast(':')
 
-    private fun NodeList.elements(): List<Element> =
-        (0 until length).mapNotNull { item(it) as? Element }
+    private fun NodeList.elements(): List<Element> = (0 until length).mapNotNull { item(it) as? Element }
 }

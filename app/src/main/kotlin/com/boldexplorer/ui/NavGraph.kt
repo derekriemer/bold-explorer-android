@@ -24,26 +24,35 @@ import com.boldexplorer.ui.settings.SettingsScreen
 import com.boldexplorer.ui.trails.TrailsScreen
 import com.boldexplorer.ui.waypoints.WaypointsScreen
 
-private sealed class Screen(val route: String, val label: String) {
+private sealed class Screen(
+    val route: String,
+    val label: String,
+) {
     object Gps : Screen("gps", "GPS")
+
     object Waypoints : Screen("waypoints", "Waypoints")
+
     object Trails : Screen("trails", "Trails")
+
     object Collections : Screen("collections", "Collections")
+
     object Settings : Screen("settings", "Settings")
+
     object Debug : Screen("debug", "Debug")
 }
 
 @Composable
 fun NavGraph() {
     val navController = rememberNavController()
-    val screens = listOf(
-        Screen.Gps,
-        Screen.Waypoints,
-        Screen.Trails,
-        Screen.Collections,
-        Screen.Settings,
-        Screen.Debug,
-    )
+    val screens =
+        listOf(
+            Screen.Gps,
+            Screen.Waypoints,
+            Screen.Trails,
+            Screen.Collections,
+            Screen.Settings,
+            Screen.Debug,
+        )
 
     MaterialTheme {
         Scaffold(
@@ -52,8 +61,10 @@ fun NavGraph() {
                     val navBackStackEntry by navController.currentBackStackEntryAsState()
                     val currentDestination = navBackStackEntry?.destination
                     screens.forEach { screen ->
-                        val selected = currentDestination?.hierarchy
-                            ?.any { it.route == screen.route } == true
+                        val selected =
+                            currentDestination
+                                ?.hierarchy
+                                ?.any { it.route == screen.route } == true
                         NavigationBarItem(
                             selected = selected,
                             onClick = {
@@ -67,9 +78,10 @@ fun NavGraph() {
                             },
                             label = { Text(screen.label) },
                             icon = {}, // Accessible label is sufficient; icon would need extended icons dep
-                            modifier = Modifier.semantics {
-                                contentDescription = "${screen.label} tab${if (selected) ", selected" else ""}"
-                            },
+                            modifier =
+                                Modifier.semantics {
+                                    contentDescription = "${screen.label} tab${if (selected) ", selected" else ""}"
+                                },
                         )
                     }
                 }

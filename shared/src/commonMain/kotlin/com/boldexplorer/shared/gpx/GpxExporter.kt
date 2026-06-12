@@ -12,29 +12,38 @@ data class GpxTrail(
 )
 
 object GpxExporter {
+    fun exportWaypoints(waypoints: List<Waypoint>): String =
+        buildString {
+            appendGpxHeader()
+            for (wpt in waypoints) appendWpt(wpt)
+            appendLine("</gpx>")
+        }
 
-    fun exportWaypoints(waypoints: List<Waypoint>): String = buildString {
-        appendGpxHeader()
-        for (wpt in waypoints) appendWpt(wpt)
-        appendLine("</gpx>")
-    }
+    fun exportTrail(
+        trailName: String,
+        waypoints: List<Waypoint>,
+    ): String =
+        buildString {
+            appendGpxHeader()
+            for (wpt in waypoints.filter { it.kind == Waypoint.KIND_WAYPOINT }) appendWpt(wpt)
+            appendTrk(trailName, waypoints)
+            appendLine("</gpx>")
+        }
 
-    fun exportTrail(trailName: String, waypoints: List<Waypoint>): String = buildString {
-        appendGpxHeader()
-        for (wpt in waypoints.filter { it.kind == Waypoint.KIND_WAYPOINT }) appendWpt(wpt)
-        appendTrk(trailName, waypoints)
-        appendLine("</gpx>")
-    }
-
-    fun exportCollection(collectionName: String, waypoints: List<Waypoint>, trails: List<GpxTrail>): String = buildString {
-        appendGpxHeader()
-        appendLine("  <metadata>")
-        appendLine("    <name>${escapeXml(collectionName)}</name>")
-        appendLine("  </metadata>")
-        for (wpt in waypoints) appendWpt(wpt)
-        for (trail in trails) appendTrk(trail.name, trail.waypoints)
-        appendLine("</gpx>")
-    }
+    fun exportCollection(
+        collectionName: String,
+        waypoints: List<Waypoint>,
+        trails: List<GpxTrail>,
+    ): String =
+        buildString {
+            appendGpxHeader()
+            appendLine("  <metadata>")
+            appendLine("    <name>${escapeXml(collectionName)}</name>")
+            appendLine("  </metadata>")
+            for (wpt in waypoints) appendWpt(wpt)
+            for (trail in trails) appendTrk(trail.name, trail.waypoints)
+            appendLine("</gpx>")
+        }
 
     private fun StringBuilder.appendGpxHeader() {
         appendLine("""<?xml version="1.0" encoding="UTF-8"?>""")
@@ -53,7 +62,10 @@ object GpxExporter {
         appendLine("  </wpt>")
     }
 
-    private fun StringBuilder.appendTrk(trailName: String, waypoints: List<Waypoint>) {
+    private fun StringBuilder.appendTrk(
+        trailName: String,
+        waypoints: List<Waypoint>,
+    ) {
         appendLine("  <trk>")
         appendLine("    <name>${escapeXml(trailName)}</name>")
         appendLine("    <trkseg>")
@@ -80,10 +92,11 @@ object GpxExporter {
         return sdf.format(Date(epochMs))
     }
 
-    private fun escapeXml(s: String): String = s
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\"", "&quot;")
-        .replace("'", "&apos;")
+    private fun escapeXml(s: String): String =
+        s
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
+            .replace("'", "&apos;")
 }

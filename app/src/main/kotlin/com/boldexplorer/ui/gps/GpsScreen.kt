@@ -1,6 +1,5 @@
 package com.boldexplorer.ui.gps
 
-import androidx.compose.ui.semantics.heading
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -42,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -63,16 +63,17 @@ fun GpsRoute(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
 
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { grants ->
-        if (
-            grants[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
-            grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-        ) {
-            viewModel.onAction(GpsAction.StartNavigation)
+    val permissionLauncher =
+        rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions(),
+        ) { grants ->
+            if (
+                grants[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+            ) {
+                viewModel.onAction(GpsAction.StartNavigation)
+            }
         }
-    }
 
     GpsScreen(
         paddingValues = paddingValues,
@@ -83,7 +84,7 @@ fun GpsRoute(
                     arrayOf(
                         Manifest.permission.ACCESS_FINE_LOCATION,
                         Manifest.permission.ACCESS_COARSE_LOCATION,
-                    )
+                    ),
                 )
             } else {
                 viewModel.onAction(action)
@@ -107,35 +108,42 @@ fun GpsScreen(
         floatingActionButton = {
             FloatingActionButton(
                 onClick = { onAction(GpsAction.MarkWaypoint) },
-                containerColor = if (state.location != null)
-                    MaterialTheme.colorScheme.primaryContainer
-                else
-                    MaterialTheme.colorScheme.surfaceVariant,
-                modifier = Modifier.semantics {
-                    contentDescription = if (state.location != null)
-                        "Mark waypoint at current location"
-                    else
-                        "Mark waypoint — no GPS fix yet"
-                },
+                containerColor =
+                    if (state.location != null) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant
+                    },
+                modifier =
+                    Modifier.semantics {
+                        contentDescription =
+                            if (state.location != null) {
+                                "Mark waypoint at current location"
+                            } else {
+                                "Mark waypoint — no GPS fix yet"
+                            }
+                    },
             ) {
                 Text("+", style = MaterialTheme.typography.titleLarge)
             }
         },
     ) { innerPadding ->
         Column(
-            modifier = Modifier
-                .padding(innerPadding)
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState()),
+            modifier =
+                Modifier
+                    .padding(innerPadding)
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState()),
         ) {
             Text(
                 "GPS",
                 style = MaterialTheme.typography.headlineSmall,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                                        .semantics {
-            heading()
-        },
-
+                modifier =
+                    Modifier
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .semantics {
+                            heading()
+                        },
             )
 
             // ── Scope tabs ────────────────────────────────────────────────────────
@@ -147,9 +155,10 @@ fun GpsScreen(
                         selected = state.scope == gpScope,
                         onClick = { onAction(GpsAction.SetScope(gpScope)) },
                         text = { Text(scopeLabels[index]) },
-                        modifier = Modifier.semantics {
-                            contentDescription = "${scopeLabels[index]} scope tab${if (state.scope == gpScope) ", selected" else ""}"
-                        },
+                        modifier =
+                            Modifier.semantics {
+                                contentDescription = "${scopeLabels[index]} scope tab${if (state.scope == gpScope) ", selected" else ""}"
+                            },
                     )
                 }
             }
@@ -158,32 +167,40 @@ fun GpsScreen(
 
             // ── Scope panel ───────────────────────────────────────────────────────
             when (state.scope) {
-                GpsScope.WAYPOINT -> WaypointScopePanel(
-                    waypoints = state.waypoints,
-                    selectedId = state.selectedWaypointId,
-                    onAction = onAction,
-                )
-                GpsScope.TRAIL -> TrailScopePanel(
-                    trails = state.trails,
-                    selectedId = state.selectedTrailId,
-                    trailWaypoints = state.trailWaypoints,
-                    followState = state.trailFollowState,
-                    autoRecording = state.autoRecording,
-                    autoRecordCount = state.autoRecordCount,
-                    onAction = onAction,
-                )
-                GpsScope.COLLECTION -> CollectionScopePanel(
-                    collections = state.collections,
-                    selectedId = state.selectedCollectionId,
-                    explorerState = state.collectionExplorerState,
-                    settings = state.settings,
-                    allWaypoints = state.waypoints,
-                    allTrails = state.trails,
-                    collectionWaypoints = state.collectionWaypoints,
-                    collectionTrails = state.collectionTrails,
-                    location = state.location,
-                    onAction = onAction,
-                )
+                GpsScope.WAYPOINT -> {
+                    WaypointScopePanel(
+                        waypoints = state.waypoints,
+                        selectedId = state.selectedWaypointId,
+                        onAction = onAction,
+                    )
+                }
+
+                GpsScope.TRAIL -> {
+                    TrailScopePanel(
+                        trails = state.trails,
+                        selectedId = state.selectedTrailId,
+                        trailWaypoints = state.trailWaypoints,
+                        followState = state.trailFollowState,
+                        autoRecording = state.autoRecording,
+                        autoRecordCount = state.autoRecordCount,
+                        onAction = onAction,
+                    )
+                }
+
+                GpsScope.COLLECTION -> {
+                    CollectionScopePanel(
+                        collections = state.collections,
+                        selectedId = state.selectedCollectionId,
+                        explorerState = state.collectionExplorerState,
+                        settings = state.settings,
+                        allWaypoints = state.waypoints,
+                        allTrails = state.trails,
+                        collectionWaypoints = state.collectionWaypoints,
+                        collectionTrails = state.collectionTrails,
+                        location = state.location,
+                        onAction = onAction,
+                    )
+                }
             }
 
             Spacer(Modifier.height(8.dp))
@@ -191,21 +208,25 @@ fun GpsScreen(
             // ── TalkBack live region ──────────────────────────────────────────────
             Text(
                 text = state.announcement,
-                modifier = Modifier
-                    .padding(horizontal = 16.dp)
-                    .semantics {
-                        liveRegion = LiveRegionMode.Polite
-                        contentDescription = state.announcement
-                    },
+                modifier =
+                    Modifier
+                        .padding(horizontal = 16.dp)
+                        .semantics {
+                            liveRegion = LiveRegionMode.Polite
+                            contentDescription = state.announcement
+                        },
                 style = MaterialTheme.typography.bodySmall,
             )
 
             Spacer(Modifier.height(4.dp))
 
             // ── Telemetry card ────────────────────────────────────────────────────
-            Card(modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)) {
+            Card(
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+            ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     val headingText = state.headingDeg?.let { BearingComputer.toCardinal(it) } ?: "—"
                     val headingDegText = state.headingDeg?.let { "${"%.0f".format(it)}°" } ?: "—"
@@ -216,24 +237,32 @@ fun GpsScreen(
                     )
 
                     val bearingLabel = state.targetName?.let { "Bearing to $it" } ?: "Bearing"
-                    val directionText = when (state.settings.bearingDisplayMode) {
-                        com.boldexplorer.shared.settings.BearingDisplayMode.RELATIVE ->
-                            state.relativeDeg?.let { BearingComputer.toRelative(it) } ?: "—"
-                        com.boldexplorer.shared.settings.BearingDisplayMode.CLOCK ->
-                            state.relativeDeg?.let { BearingComputer.toClock(it) } ?: "—"
-                        com.boldexplorer.shared.settings.BearingDisplayMode.TRUE_NORTH ->
-                            state.bearingDeg?.let { "${BearingComputer.toCardinal(it)} (${"%.0f".format(it)}°)" } ?: "—"
-                    }
+                    val directionText =
+                        when (state.settings.bearingDisplayMode) {
+                            com.boldexplorer.shared.settings.BearingDisplayMode.RELATIVE -> {
+                                state.relativeDeg?.let { BearingComputer.toRelative(it) } ?: "—"
+                            }
+
+                            com.boldexplorer.shared.settings.BearingDisplayMode.CLOCK -> {
+                                state.relativeDeg?.let { BearingComputer.toClock(it) } ?: "—"
+                            }
+
+                            com.boldexplorer.shared.settings.BearingDisplayMode.TRUE_NORTH -> {
+                                state.bearingDeg?.let { "${BearingComputer.toCardinal(it)} (${"%.0f".format(it)}°)" } ?: "—"
+                            }
+                        }
                     TelemetryRow(label = bearingLabel, value = directionText, contentDesc = "$bearingLabel: $directionText")
 
-                    val distText = state.distanceM?.let {
-                        BearingComputer.formatDistance(it, state.settings.units)
-                    } ?: "—"
+                    val distText =
+                        state.distanceM?.let {
+                            BearingComputer.formatDistance(it, state.settings.units)
+                        } ?: "—"
                     TelemetryRow(label = "Distance", value = distText, contentDesc = "Distance to target: $distText")
 
-                    val accText = state.accuracyM?.let {
-                        BearingComputer.formatDistance(it, state.settings.units)
-                    } ?: "—"
+                    val accText =
+                        state.accuracyM?.let {
+                            BearingComputer.formatDistance(it, state.settings.units)
+                        } ?: "—"
                     TelemetryRow(label = "GPS Accuracy", value = accText, contentDesc = "GPS accuracy: $accText")
 
                     state.location?.let { loc ->
@@ -267,9 +296,10 @@ fun GpsScreen(
                 } else {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         val targetBearingText = "%.0f".format(state.alignmentBearingDeg ?: 0.0)
-                        val deltaText = state.alignmentRelativeDeg?.let { delta ->
-                            BearingComputer.toAlignmentRelative(delta)
-                        } ?: "Waiting for compass…"
+                        val deltaText =
+                            state.alignmentRelativeDeg?.let { delta ->
+                                BearingComputer.toAlignmentRelative(delta)
+                            } ?: "Waiting for compass…"
                         Text(
                             "Target: $targetBearingText° — $deltaText",
                             style = MaterialTheme.typography.bodyMedium,
@@ -301,12 +331,16 @@ fun GpsScreen(
             // ── Navigation button ─────────────────────────────────────────────────
             Button(
                 onClick = {
-                    if (state.navigationActive) onAction(GpsAction.StopNavigation)
-                    else onAction(GpsAction.StartNavigation)
+                    if (state.navigationActive) {
+                        onAction(GpsAction.StopNavigation)
+                    } else {
+                        onAction(GpsAction.StartNavigation)
+                    }
                 },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
             ) {
                 Text(if (state.navigationActive) "Stop Audio Navigation" else "Start Audio Navigation")
             }
@@ -361,12 +395,17 @@ fun GpsScreen(
 }
 
 @Composable
-private fun TelemetryRow(label: String, value: String, contentDesc: String) {
+private fun TelemetryRow(
+    label: String,
+    value: String,
+    contentDesc: String,
+) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp)
-            .clearAndSetSemantics { contentDescription = contentDesc },
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 2.dp)
+                .clearAndSetSemantics { contentDescription = contentDesc },
     ) {
         Text(
             "$label:",
@@ -391,9 +430,10 @@ private fun WaypointScopePanel(
     ExposedDropdownMenuBox(
         expanded = expanded,
         onExpandedChange = { expanded = it },
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp),
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
     ) {
         OutlinedTextField(
             value = selectedName,
@@ -401,10 +441,11 @@ private fun WaypointScopePanel(
             readOnly = true,
             label = { Text("Waypoint") },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier
-                .menuAnchor(androidx.compose.material3.MenuAnchorType.PrimaryNotEditable)
-                .fillMaxWidth()
-                .semantics { contentDescription = "Selected waypoint: $selectedName" },
+            modifier =
+                Modifier
+                    .menuAnchor(androidx.compose.material3.MenuAnchorType.PrimaryNotEditable)
+                    .fillMaxWidth()
+                    .semantics { contentDescription = "Selected waypoint: $selectedName" },
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             if (waypoints.isEmpty()) {
@@ -416,7 +457,10 @@ private fun WaypointScopePanel(
                 waypoints.forEach { wp ->
                     DropdownMenuItem(
                         text = { Text(wp.name) },
-                        onClick = { onAction(GpsAction.SelectWaypoint(wp.id)); expanded = false },
+                        onClick = {
+                            onAction(GpsAction.SelectWaypoint(wp.id))
+                            expanded = false
+                        },
                         modifier = Modifier.semantics { contentDescription = "Select waypoint ${wp.name}" },
                     )
                 }
@@ -447,17 +491,20 @@ private fun CollectionScopePanel(
     val active = explorerState as? CollectionExplorerState.Active
 
     fun pointLabel(point: CollectionPoint): String {
-        val baseName = when (point) {
-            is CollectionPoint.Standalone -> point.waypoint.name
-            is CollectionPoint.TrailEnd -> "${point.trail.name} (${if (point.isStart) "start" else "end"})"
-        }
-        val distStr = location?.let { loc ->
-            val dist = haversineDistanceMeters(
-                LatLng(loc.lat, loc.lon),
-                LatLng(point.waypoint.lat, point.waypoint.lon),
-            )
-            BearingComputer.formatDistance(dist, settings.units)
-        }
+        val baseName =
+            when (point) {
+                is CollectionPoint.Standalone -> point.waypoint.name
+                is CollectionPoint.TrailEnd -> "${point.trail.name} (${if (point.isStart) "start" else "end"})"
+            }
+        val distStr =
+            location?.let { loc ->
+                val dist =
+                    haversineDistanceMeters(
+                        LatLng(loc.lat, loc.lon),
+                        LatLng(point.waypoint.lat, point.waypoint.lon),
+                    )
+                BearingComputer.formatDistance(dist, settings.units)
+            }
         return if (distStr != null) "$baseName — $distStr" else baseName
     }
 
@@ -474,10 +521,11 @@ private fun CollectionScopePanel(
                 readOnly = true,
                 label = { Text("Collection") },
                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = collectionExpanded) },
-                modifier = Modifier
-                    .menuAnchor(androidx.compose.material3.MenuAnchorType.PrimaryNotEditable)
-                    .fillMaxWidth()
-                    .semantics { contentDescription = "Selected collection: $selectedName" },
+                modifier =
+                    Modifier
+                        .menuAnchor(androidx.compose.material3.MenuAnchorType.PrimaryNotEditable)
+                        .fillMaxWidth()
+                        .semantics { contentDescription = "Selected collection: $selectedName" },
             )
             ExposedDropdownMenu(expanded = collectionExpanded, onDismissRequest = { collectionExpanded = false }) {
                 if (collections.isEmpty()) {
@@ -489,7 +537,10 @@ private fun CollectionScopePanel(
                     collections.forEach { collection ->
                         DropdownMenuItem(
                             text = { Text(collection.name) },
-                            onClick = { onAction(GpsAction.SelectCollection(collection.id)); collectionExpanded = false },
+                            onClick = {
+                                onAction(GpsAction.SelectCollection(collection.id))
+                                collectionExpanded = false
+                            },
                         )
                     }
                 }
@@ -501,10 +552,11 @@ private fun CollectionScopePanel(
             Text(
                 if (selectedId == null) "No collection selected" else "Loading…",
                 style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.semantics {
-                    liveRegion = LiveRegionMode.Polite
-                    contentDescription = if (selectedId == null) "No collection selected" else "Loading collection"
-                },
+                modifier =
+                    Modifier.semantics {
+                        liveRegion = LiveRegionMode.Polite
+                        contentDescription = if (selectedId == null) "No collection selected" else "Loading collection"
+                    },
             )
             return@Column
         }
@@ -531,11 +583,12 @@ private fun CollectionScopePanel(
                 modifier = Modifier.semantics { contentDescription = "Collection has no points" },
             )
         } else {
-            val targetLabel = when (val targeting = active.targeting) {
-                is CollectionTargeting.Auto -> targeting.target?.let { pointLabel(it) } ?: "Nearest (auto)"
-                is CollectionTargeting.Manual -> pointLabel(targeting.target)
-                CollectionTargeting.Paused -> "No target"
-            }
+            val targetLabel =
+                when (val targeting = active.targeting) {
+                    is CollectionTargeting.Auto -> targeting.target?.let { pointLabel(it) } ?: "Nearest (auto)"
+                    is CollectionTargeting.Manual -> pointLabel(targeting.target)
+                    CollectionTargeting.Paused -> "No target"
+                }
             val pointScrollState = rememberScrollState()
             LaunchedEffect(pointExpanded) {
                 if (pointExpanded) pointScrollState.scrollTo(0)
@@ -551,10 +604,11 @@ private fun CollectionScopePanel(
                     readOnly = true,
                     label = { Text("Target") },
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = pointExpanded) },
-                    modifier = Modifier
-                        .menuAnchor(androidx.compose.material3.MenuAnchorType.PrimaryNotEditable)
-                        .fillMaxWidth()
-                        .semantics { contentDescription = "Current target: $targetLabel" },
+                    modifier =
+                        Modifier
+                            .menuAnchor(androidx.compose.material3.MenuAnchorType.PrimaryNotEditable)
+                            .fillMaxWidth()
+                            .semantics { contentDescription = "Current target: $targetLabel" },
                 )
                 ExposedDropdownMenu(
                     expanded = pointExpanded,
@@ -563,7 +617,10 @@ private fun CollectionScopePanel(
                 ) {
                     DropdownMenuItem(
                         text = { Text("Nearest (auto)") },
-                        onClick = { onAction(GpsAction.ClearCollectionTarget); pointExpanded = false },
+                        onClick = {
+                            onAction(GpsAction.ClearCollectionTarget)
+                            pointExpanded = false
+                        },
                         modifier = Modifier.semantics { contentDescription = "Let system pick nearest point" },
                     )
                     active.points.forEach { point ->
@@ -573,16 +630,22 @@ private fun CollectionScopePanel(
                             text = {
                                 Text(
                                     label,
-                                    color = if (isVisited)
-                                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                                    else
-                                        MaterialTheme.colorScheme.onSurface,
+                                    color =
+                                        if (isVisited) {
+                                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurface
+                                        },
                                 )
                             },
-                            onClick = { onAction(GpsAction.SelectCollectionPoint(point)); pointExpanded = false },
-                            modifier = Modifier.semantics {
-                                contentDescription = "$label${if (isVisited) ", visited" else ""}"
+                            onClick = {
+                                onAction(GpsAction.SelectCollectionPoint(point))
+                                pointExpanded = false
                             },
+                            modifier =
+                                Modifier.semantics {
+                                    contentDescription = "$label${if (isVisited) ", visited" else ""}"
+                                },
                         )
                     }
                 }
@@ -592,9 +655,10 @@ private fun CollectionScopePanel(
                 Spacer(Modifier.height(4.dp))
                 TextButton(
                     onClick = { onAction(GpsAction.SkipCollectionTarget) },
-                    modifier = Modifier.semantics {
-                        contentDescription = "Skip current target and pick something else"
-                    },
+                    modifier =
+                        Modifier.semantics {
+                            contentDescription = "Skip current target and pick something else"
+                        },
                 ) {
                     Text("Not this")
                 }
@@ -606,12 +670,13 @@ private fun CollectionScopePanel(
                 Spacer(Modifier.height(4.dp))
                 Button(
                     onClick = { onAction(GpsAction.FollowTrailFromCollectionEnd(currentTarget)) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .semantics {
-                            contentDescription = "Follow ${currentTarget.trail.name}" +
-                                if (currentTarget.isStart) "" else " in reverse"
-                        },
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .semantics {
+                                contentDescription = "Follow ${currentTarget.trail.name}" +
+                                    if (currentTarget.isStart) "" else " in reverse"
+                            },
                 ) {
                     Text("Follow ${currentTarget.trail.name}")
                 }
@@ -628,9 +693,10 @@ private fun CollectionScopePanel(
                 androidx.compose.material3.Switch(
                     checked = active.exploreMode,
                     onCheckedChange = { onAction(GpsAction.SetCollectionExploreMode(it)) },
-                    modifier = Modifier.semantics {
-                        contentDescription = if (active.exploreMode) "Explore mode, on" else "Explore mode, off"
-                    },
+                    modifier =
+                        Modifier.semantics {
+                            contentDescription = if (active.exploreMode) "Explore mode, on" else "Explore mode, off"
+                        },
                 )
             }
             if (active.exploreMode && active.visitedIds.isNotEmpty()) {
@@ -644,15 +710,22 @@ private fun CollectionScopePanel(
 
     if (showAddWaypoints) {
         val existingIds = collectionWaypoints.map { it.id }.toSet()
-        val candidates = allWaypoints.filter { it.id !in existingIds }.let { wps ->
-            val loc = location
-            if (loc == null) wps
-            else wps.sortedBy { haversineDistanceMeters(LatLng(loc.lat, loc.lon), LatLng(it.lat, it.lon)) }
-        }
+        val candidates =
+            allWaypoints.filter { it.id !in existingIds }.let { wps ->
+                val loc = location
+                if (loc == null) {
+                    wps
+                } else {
+                    wps.sortedBy { haversineDistanceMeters(LatLng(loc.lat, loc.lon), LatLng(it.lat, it.lon)) }
+                }
+            }
         MultiSelectItemDialog(
             title = "Add Waypoints",
             entries = candidates.map { it.id to it.name },
-            onConfirm = { ids -> onAction(GpsAction.AddWaypointsToCollection(ids)); showAddWaypoints = false },
+            onConfirm = { ids ->
+                onAction(GpsAction.AddWaypointsToCollection(ids))
+                showAddWaypoints = false
+            },
             onDismiss = { showAddWaypoints = false },
             emptyMessage = "No waypoints available",
         )
@@ -664,13 +737,15 @@ private fun CollectionScopePanel(
         MultiSelectItemDialog(
             title = "Add Trails",
             entries = candidates.map { it.id to it.name },
-            onConfirm = { ids -> onAction(GpsAction.AddTrailsToCollection(ids)); showAddTrails = false },
+            onConfirm = { ids ->
+                onAction(GpsAction.AddTrailsToCollection(ids))
+                showAddTrails = false
+            },
             onDismiss = { showAddTrails = false },
             emptyMessage = "No trails available",
         )
     }
 }
-
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -698,10 +773,11 @@ private fun TrailScopePanel(
                 readOnly = true,
                 label = { Text("Trail") },
                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                modifier = Modifier
-                    .menuAnchor(androidx.compose.material3.MenuAnchorType.PrimaryNotEditable)
-                    .fillMaxWidth()
-                    .semantics { contentDescription = "Selected trail: $selectedName" },
+                modifier =
+                    Modifier
+                        .menuAnchor(androidx.compose.material3.MenuAnchorType.PrimaryNotEditable)
+                        .fillMaxWidth()
+                        .semantics { contentDescription = "Selected trail: $selectedName" },
             )
             ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 if (trails.isEmpty()) {
@@ -713,7 +789,10 @@ private fun TrailScopePanel(
                     trails.forEach { trail ->
                         DropdownMenuItem(
                             text = { Text(trail.name) },
-                            onClick = { onAction(GpsAction.SelectTrail(trail.id)); expanded = false },
+                            onClick = {
+                                onAction(GpsAction.SelectTrail(trail.id))
+                                expanded = false
+                            },
                             modifier = Modifier.semantics { contentDescription = "Select trail ${trail.name}" },
                         )
                     }
@@ -723,23 +802,31 @@ private fun TrailScopePanel(
 
         Spacer(Modifier.height(8.dp))
 
-        val statusText = when (followState) {
-            is TrailFollowerState.Idle -> "Not following"
-            is TrailFollowerState.Active -> {
-                val total = followState.waypoints.size
-                val current = followState.currentIndex + 1
-                val name = followState.waypoints.getOrNull(followState.currentIndex)?.name ?: ""
-                "Waypoint $current of $total: $name"
+        val statusText =
+            when (followState) {
+                is TrailFollowerState.Idle -> {
+                    "Not following"
+                }
+
+                is TrailFollowerState.Active -> {
+                    val total = followState.waypoints.size
+                    val current = followState.currentIndex + 1
+                    val name = followState.waypoints.getOrNull(followState.currentIndex)?.name ?: ""
+                    "Waypoint $current of $total: $name"
+                }
+
+                is TrailFollowerState.Complete -> {
+                    "Trail complete"
+                }
             }
-            is TrailFollowerState.Complete -> "Trail complete"
-        }
         Text(
             statusText,
             style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.semantics {
-                liveRegion = LiveRegionMode.Polite
-                contentDescription = "Trail status: $statusText"
-            },
+            modifier =
+                Modifier.semantics {
+                    liveRegion = LiveRegionMode.Polite
+                    contentDescription = "Trail status: $statusText"
+                },
         )
 
         Spacer(Modifier.height(4.dp))
@@ -747,9 +834,10 @@ private fun TrailScopePanel(
         // Record new trail button (always shown)
         Button(
             onClick = { onAction(GpsAction.RecordNewTrail) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .semantics { contentDescription = "Create a new trail with current timestamp" },
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .semantics { contentDescription = "Create a new trail with current timestamp" },
         ) { Text("Record New Trail") }
 
         Spacer(Modifier.height(4.dp))
@@ -765,16 +853,18 @@ private fun TrailScopePanel(
                 )
                 Button(
                     onClick = { onAction(GpsAction.StopAutoRecord) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .semantics { contentDescription = "Stop auto-recording GPS track" },
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .semantics { contentDescription = "Stop auto-recording GPS track" },
                 ) { Text("Stop Auto-Record") }
             } else {
                 Button(
                     onClick = { onAction(GpsAction.StartAutoRecord) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .semantics { contentDescription = "Start auto-recording GPS track points every 10 meters" },
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .semantics { contentDescription = "Start auto-recording GPS track points every 10 meters" },
                 ) { Text("Start Auto-Record") }
             }
         }
@@ -785,31 +875,42 @@ private fun TrailScopePanel(
         if (followState is TrailFollowerState.Active) {
             Button(
                 onClick = { onAction(GpsAction.StopFollowTrail) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .semantics { contentDescription = "Stop trail navigation" },
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .semantics { contentDescription = "Stop trail navigation" },
             ) { Text("Stop Navigation") }
         } else {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 Button(
                     onClick = { onAction(GpsAction.StartFollowTrail) },
                     enabled = hasTrail,
-                    modifier = Modifier
-                        .weight(1f)
-                        .semantics {
-                            contentDescription = if (!hasTrail) "Select a trail first"
-                            else "Follow trail forward from nearest point"
-                        },
+                    modifier =
+                        Modifier
+                            .weight(1f)
+                            .semantics {
+                                contentDescription =
+                                    if (!hasTrail) {
+                                        "Select a trail first"
+                                    } else {
+                                        "Follow trail forward from nearest point"
+                                    }
+                            },
                 ) { Text("Follow") }
                 Button(
                     onClick = { onAction(GpsAction.StartFollowTrailReversed) },
                     enabled = hasTrail,
-                    modifier = Modifier
-                        .weight(1f)
-                        .semantics {
-                            contentDescription = if (!hasTrail) "Select a trail first"
-                            else "Follow trail in reverse from nearest point"
-                        },
+                    modifier =
+                        Modifier
+                            .weight(1f)
+                            .semantics {
+                                contentDescription =
+                                    if (!hasTrail) {
+                                        "Select a trail first"
+                                    } else {
+                                        "Follow trail in reverse from nearest point"
+                                    }
+                            },
                 ) { Text("Reverse") }
             }
         }

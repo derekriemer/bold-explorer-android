@@ -1,7 +1,7 @@
 package com.boldexplorer.shared.audio
 
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -11,24 +11,25 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 
 class AudioCueSchedulerTest {
-
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
-    fun start_returnsCancellableJob() = runTest {
-        val scheduler = AudioCueScheduler()
-        val schedulerScope = TestScope(testScheduler)
-        val job = scheduler.start(
-            scope = schedulerScope,
-            accuracyM = MutableStateFlow<Double?>(null),
-            relativeDeg = MutableStateFlow<Double?>(null),
-            alignmentActive = MutableStateFlow(false),
-            beaconCuesEnabled = MutableStateFlow(true),
-        )
+    fun start_returnsCancellableJob() =
+        runTest {
+            val scheduler = AudioCueScheduler()
+            val schedulerScope = TestScope(testScheduler)
+            val job =
+                scheduler.start(
+                    scope = schedulerScope,
+                    accuracyM = MutableStateFlow<Double?>(null),
+                    relativeDeg = MutableStateFlow<Double?>(null),
+                    alignmentActive = MutableStateFlow(false),
+                    beaconCuesEnabled = MutableStateFlow(true),
+                )
 
-        assertNotNull(job)
-        job.cancel()
-        advanceUntilIdle()
-        assertFalse(job.isActive)
-        schedulerScope.cancel()
-    }
+            assertNotNull(job)
+            job.cancel()
+            advanceUntilIdle()
+            assertFalse(job.isActive)
+            schedulerScope.cancel()
+        }
 }

@@ -10,7 +10,6 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object AudioModule {
-
     // AudioCueScheduler lives in :shared (no Android deps, no @Inject annotation),
     // so we provide it explicitly here with the default config.
     @Provides

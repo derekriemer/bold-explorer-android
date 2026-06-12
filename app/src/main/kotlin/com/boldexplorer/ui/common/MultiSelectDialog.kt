@@ -42,10 +42,11 @@ fun MultiSelectItemDialog(
                         val checked = id in selected
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { selected = if (checked) selected - id else selected + id }
-                                .semantics { contentDescription = "$name, ${if (checked) "checked" else "unchecked"}" },
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable { selected = if (checked) selected - id else selected + id }
+                                    .semantics { contentDescription = "$name, ${if (checked) "checked" else "unchecked"}" },
                         ) {
                             Checkbox(
                                 checked = checked,

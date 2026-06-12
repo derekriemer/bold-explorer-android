@@ -96,7 +96,12 @@ class CollectionExplorerTest {
         assertEquals(east.id, state.target?.id)
     }
 
-    private fun point(id: Long, name: String, lat: Double, lon: Double): CollectionPoint.Standalone =
+    private fun point(
+        id: Long,
+        name: String,
+        lat: Double,
+        lon: Double,
+    ): CollectionPoint.Standalone =
         CollectionPoint.Standalone(
             Waypoint(
                 id = id,

@@ -45,13 +45,13 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.boldexplorer.shared.model.Collection as ExplorerCollection
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.Waypoint
 import com.boldexplorer.shared.navigation.BearingComputer
 import com.boldexplorer.ui.common.MultiSelectItemDialog
 import com.boldexplorer.ui.common.ToastMessage
 import com.boldexplorer.ui.common.useToast
+import com.boldexplorer.shared.model.Collection as ExplorerCollection
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,17 +82,19 @@ fun WaypointsScreen(
         collectionTarget?.let { viewModel.loadWaypointCollections(it.id) }
     }
 
-    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri?.let { viewModel.importGpx(it) }
-    }
+    val importLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+            uri?.let { viewModel.importGpx(it) }
+        }
 
     Column(modifier = Modifier.padding(paddingValues)) {
         // ── Header ────────────────────────────────────────────────────────────────
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
             Text("Waypoints", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
             TextButton(
@@ -113,18 +115,20 @@ fun WaypointsScreen(
             onValueChange = { viewModel.setQuery(it) },
             label = { Text("Search waypoints") },
             singleLine = true,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
         )
 
         Spacer(Modifier.height(8.dp))
 
         // ── Sort ──────────────────────────────────────────────────────────────────
         SingleChoiceSegmentedButtonRow(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
         ) {
             SegmentedButton(
                 selected = sortMode == WaypointSortMode.DISTANCE,
@@ -144,9 +148,10 @@ fun WaypointsScreen(
 
         // ── Radius + Collection filters ───────────────────────────────────────────
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             RadiusDropdown(
@@ -167,10 +172,11 @@ fun WaypointsScreen(
         // ── List ──────────────────────────────────────────────────────────────────
         if (waypoints.isEmpty()) {
             Text(
-                if (query.isNotBlank() || radiusFilterM != null || collectionFilter != null)
+                if (query.isNotBlank() || radiusFilterM != null || collectionFilter != null) {
                     "No waypoints match your filters"
-                else
-                    "No waypoints yet",
+                } else {
+                    "No waypoints yet"
+                },
                 modifier = Modifier.padding(16.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -228,7 +234,10 @@ fun WaypointsScreen(
             text = { Text("Delete \"${wp.name}\"? This cannot be undone.") },
             confirmButton = {
                 TextButton(
-                    onClick = { viewModel.delete(wp.id); deleteTarget = null },
+                    onClick = {
+                        viewModel.delete(wp.id)
+                        deleteTarget = null
+                    },
                     modifier = Modifier.semantics { contentDescription = "Confirm delete waypoint ${wp.name}" },
                 ) { Text("Delete") }
             },
@@ -290,16 +299,20 @@ private fun RadiusDropdown(
             readOnly = true,
             label = { Text("Radius") },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
-            modifier = Modifier
-                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                .fillMaxWidth()
-                .semantics { contentDescription = "Radius filter: $label" },
+            modifier =
+                Modifier
+                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                    .fillMaxWidth()
+                    .semantics { contentDescription = "Radius filter: $label" },
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             RADIUS_OPTIONS.forEach { (name, value) ->
                 DropdownMenuItem(
                     text = { Text(name) },
-                    onClick = { onSelect(value); expanded = false },
+                    onClick = {
+                        onSelect(value)
+                        expanded = false
+                    },
                     modifier = Modifier.semantics { contentDescription = name },
                 )
             }
@@ -316,8 +329,12 @@ private fun CollectionDropdown(
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val label = if (selectedId == null) "All collections"
-    else collections.firstOrNull { it.id == selectedId }?.name ?: "All collections"
+    val label =
+        if (selectedId == null) {
+            "All collections"
+        } else {
+            collections.firstOrNull { it.id == selectedId }?.name ?: "All collections"
+        }
 
     ExposedDropdownMenuBox(
         expanded = expanded,
@@ -330,21 +347,28 @@ private fun CollectionDropdown(
             readOnly = true,
             label = { Text("Collection") },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
-            modifier = Modifier
-                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                .fillMaxWidth()
-                .semantics { contentDescription = "Collection filter: $label" },
+            modifier =
+                Modifier
+                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                    .fillMaxWidth()
+                    .semantics { contentDescription = "Collection filter: $label" },
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(
                 text = { Text("All collections") },
-                onClick = { onSelect(null); expanded = false },
+                onClick = {
+                    onSelect(null)
+                    expanded = false
+                },
                 modifier = Modifier.semantics { contentDescription = "All collections" },
             )
             collections.forEach { col ->
                 DropdownMenuItem(
                     text = { Text(col.name) },
-                    onClick = { onSelect(col.id); expanded = false },
+                    onClick = {
+                        onSelect(col.id)
+                        expanded = false
+                    },
                     modifier = Modifier.semantics { contentDescription = col.name },
                 )
             }
@@ -368,13 +392,14 @@ private fun WaypointItem(
     val waypoint = item.waypoint
     Card(
         onClick = onToggle,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp)
-            .semantics {
-                val dist = item.distanceM?.let { ", ${BearingComputer.formatDistance(it, units)}" } ?: ""
-                contentDescription = "${waypoint.name}$dist, ${if (expanded) "expanded" else "collapsed"}"
-            },
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+                .semantics {
+                    val dist = item.distanceM?.let { ", ${BearingComputer.formatDistance(it, units)}" } ?: ""
+                    contentDescription = "${waypoint.name}$dist, ${if (expanded) "expanded" else "collapsed"}"
+                },
         elevation = CardDefaults.cardElevation(defaultElevation = if (expanded) 4.dp else 1.dp),
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
@@ -515,9 +540,10 @@ private fun AttachToTrailDialog(
                 trails.forEach { trail ->
                     TextButton(
                         onClick = { onConfirm(trail.id) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .semantics { contentDescription = "Attach to trail ${trail.name}" },
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .semantics { contentDescription = "Attach to trail ${trail.name}" },
                     ) { Text(trail.name) }
                 }
             }

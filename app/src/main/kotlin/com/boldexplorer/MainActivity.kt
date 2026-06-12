@@ -4,29 +4,30 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import com.boldexplorer.ui.NavGraph
 import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
-
-    private val permissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions(),
-    ) { grants ->
-        // After foreground/notification grants resolve, check if we still need background.
-        if (hasAnyForegroundLocationPermission() && !hasBackgroundLocationPermission()) {
-            promptForBackgroundLocation()
+    private val permissionLauncher =
+        registerForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions(),
+        ) { grants ->
+            // After foreground/notification grants resolve, check if we still need background.
+            if (hasAnyForegroundLocationPermission() && !hasBackgroundLocationPermission()) {
+                promptForBackgroundLocation()
+            }
         }
-    }
 
     // Separate launcher for background location — Android requires it to be requested alone.
-    private val backgroundPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { /* result handled in onResume */ }
+    private val backgroundPermissionLauncher =
+        registerForActivityResult(
+            ActivityResultContracts.RequestPermission(),
+        ) { /* result handled in onResume */ }
 
     // Prevents showing the rationale dialog more than once per session (e.g. on repeated onResume).
     private var backgroundLocationPrompted = false
@@ -51,21 +52,22 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestStartupPermissions() {
-        val permissions = buildList {
-            if (!hasAnyForegroundLocationPermission()) {
-                add(Manifest.permission.ACCESS_FINE_LOCATION)
-                add(Manifest.permission.ACCESS_COARSE_LOCATION)
+        val permissions =
+            buildList {
+                if (!hasAnyForegroundLocationPermission()) {
+                    add(Manifest.permission.ACCESS_FINE_LOCATION)
+                    add(Manifest.permission.ACCESS_COARSE_LOCATION)
+                }
+                if (
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    ContextCompat.checkSelfPermission(
+                        this@MainActivity,
+                        Manifest.permission.POST_NOTIFICATIONS,
+                    ) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    add(Manifest.permission.POST_NOTIFICATIONS)
+                }
             }
-            if (
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                ContextCompat.checkSelfPermission(
-                    this@MainActivity,
-                    Manifest.permission.POST_NOTIFICATIONS,
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                add(Manifest.permission.POST_NOTIFICATIONS)
-            }
-        }
 
         if (permissions.isNotEmpty()) {
             permissionLauncher.launch(permissions.toTypedArray())
@@ -85,17 +87,16 @@ class MainActivity : ComponentActivity() {
     private fun promptForBackgroundLocation() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
         backgroundLocationPrompted = true
-        android.app.AlertDialog.Builder(this)
+        android.app.AlertDialog
+            .Builder(this)
             .setTitle("Background location needed")
             .setMessage(
                 "Bold Explorer needs \"Allow all the time\" location access so it can keep " +
-                "guiding you when the screen is off. Tap OK, then choose " +
-                "\"Allow all the time\" on the next screen."
-            )
-            .setPositiveButton("OK") { _, _ ->
+                    "guiding you when the screen is off. Tap OK, then choose " +
+                    "\"Allow all the time\" on the next screen.",
+            ).setPositiveButton("OK") { _, _ ->
                 backgroundPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
-            }
-            .setNegativeButton("Not now", null)
+            }.setNegativeButton("Not now", null)
             .show()
     }
 
@@ -108,6 +109,7 @@ class MainActivity : ComponentActivity() {
     private fun hasBackgroundLocationPermission(): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
             ContextCompat.checkSelfPermission(
-                this, Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+                this,
+                Manifest.permission.ACCESS_BACKGROUND_LOCATION,
             ) == PackageManager.PERMISSION_GRANTED
 }
