@@ -53,6 +53,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.Waypoint
 import com.boldexplorer.shared.navigation.BearingComputer
+import com.boldexplorer.ui.common.CreateItemDialog
 import com.boldexplorer.ui.common.MultiSelectItemDialog
 import com.boldexplorer.ui.common.ToastMessage
 import com.boldexplorer.ui.common.useToast
@@ -81,6 +82,8 @@ fun WaypointsScreen(
     var deleteTarget by remember { mutableStateOf<Waypoint?>(null) }
     var attachTarget by remember { mutableStateOf<Waypoint?>(null) }
     var collectionTarget by remember { mutableStateOf<Waypoint?>(null) }
+    var moveTarget by remember { mutableStateOf<Waypoint?>(null) }
+    var showCreateCollection by remember { mutableStateOf(false) }
     val toastMessage = useToast(toast, viewModel::clearToast)
 
     LaunchedEffect(collectionTarget) {
@@ -113,6 +116,20 @@ fun WaypointsScreen(
         }
 
         ToastMessage(toastMessage)
+
+        // ── Collection scope (required — mirrors the GPS screen) ────────────────────
+        CollectionDropdown(
+            collections = collections,
+            selectedId = collectionFilter,
+            onSelect = { viewModel.setCollectionFilter(it) },
+            onCreateNew = { showCreateCollection = true },
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+        )
+
+        Spacer(Modifier.height(8.dp))
 
         // ── Search ────────────────────────────────────────────────────────────────
         OutlinedTextField(
@@ -151,38 +168,30 @@ fun WaypointsScreen(
 
         Spacer(Modifier.height(8.dp))
 
-        // ── Radius + Collection filters ───────────────────────────────────────────
-        Row(
+        // ── Radius filter ───────────────────────────────────────────────────────────
+        RadiusDropdown(
+            selected = radiusFilterM,
+            onSelect = { viewModel.setRadiusFilter(it) },
             modifier =
                 Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            RadiusDropdown(
-                selected = radiusFilterM,
-                onSelect = { viewModel.setRadiusFilter(it) },
-                modifier = Modifier.weight(1f),
-            )
-            CollectionDropdown(
-                collections = collections,
-                selectedId = collectionFilter,
-                onSelect = { viewModel.setCollectionFilter(it) },
-                modifier = Modifier.weight(1f),
-            )
-        }
+        )
 
         Spacer(Modifier.height(8.dp))
 
         // ── List ──────────────────────────────────────────────────────────────────
         if (waypoints.isEmpty()) {
             Text(
-                if (query.isNotBlank() || radiusFilterM != null || collectionFilter != null) {
-                    "No waypoints match your filters"
-                } else {
-                    "No waypoints yet"
+                when {
+                    collectionFilter == null -> "Select a collection to view waypoints"
+                    query.isNotBlank() || radiusFilterM != null -> "No waypoints match your filters"
+                    else -> "No waypoints in this collection yet"
                 },
-                modifier = Modifier.padding(16.dp),
+                modifier =
+                    Modifier
+                        .padding(16.dp)
+                        .semantics { liveRegion = LiveRegionMode.Polite },
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
@@ -198,6 +207,8 @@ fun WaypointsScreen(
                         onAttach = { attachTarget = item.waypoint },
                         onAddToCollection = { collectionTarget = item.waypoint },
                         onFixPoint = { viewModel.fixPoint(item.waypoint.id) },
+                        onSetTarget = { viewModel.setAsTarget(item.waypoint.id) },
+                        onMoveCollection = { moveTarget = item.waypoint },
                     )
                 }
             }
@@ -281,6 +292,32 @@ fun WaypointsScreen(
             emptyMessage = "This waypoint is already in every collection.",
         )
     }
+
+    // ── Move to another collection ──────────────────────────────────────────────────
+    moveTarget?.let { wp ->
+        MoveToCollectionDialog(
+            waypointName = wp.name,
+            collections = collections.filter { it.id != collectionFilter },
+            onConfirm = { targetId ->
+                viewModel.moveToCollection(wp.id, targetId)
+                moveTarget = null
+            },
+            onDismiss = { moveTarget = null },
+        )
+    }
+
+    // ── Create a new collection and scope to it ─────────────────────────────────────
+    if (showCreateCollection) {
+        CreateItemDialog(
+            title = "New collection",
+            confirmLabel = "Create",
+            onConfirm = { name, _ ->
+                viewModel.createCollection(name)
+                showCreateCollection = false
+            },
+            onDismiss = { showCreateCollection = false },
+        )
+    }
 }
 
 // ── Filter controls ───────────────────────────────────────────────────────────────
@@ -333,14 +370,15 @@ private fun CollectionDropdown(
     collections: List<ExplorerCollection>,
     selectedId: Long?,
     onSelect: (Long?) -> Unit,
+    onCreateNew: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val label =
         if (selectedId == null) {
-            "All collections"
+            "Select collection"
         } else {
-            collections.firstOrNull { it.id == selectedId }?.name ?: "All collections"
+            collections.firstOrNull { it.id == selectedId }?.name ?: "Select collection"
         }
 
     ExposedDropdownMenuBox(
@@ -358,17 +396,9 @@ private fun CollectionDropdown(
                 Modifier
                     .menuAnchor(MenuAnchorType.PrimaryNotEditable)
                     .fillMaxWidth()
-                    .semantics { contentDescription = "Collection filter: $label" },
+                    .semantics { contentDescription = "Selected collection: $label" },
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            DropdownMenuItem(
-                text = { Text("All collections") },
-                onClick = {
-                    onSelect(null)
-                    expanded = false
-                },
-                modifier = Modifier.semantics { contentDescription = "All collections" },
-            )
             collections.forEach { col ->
                 DropdownMenuItem(
                     text = { Text(col.name) },
@@ -376,9 +406,17 @@ private fun CollectionDropdown(
                         onSelect(col.id)
                         expanded = false
                     },
-                    modifier = Modifier.semantics { contentDescription = col.name },
+                    modifier = Modifier.semantics { contentDescription = "Select collection ${col.name}" },
                 )
             }
+            DropdownMenuItem(
+                text = { Text("Create new collection…") },
+                onClick = {
+                    expanded = false
+                    onCreateNew()
+                },
+                modifier = Modifier.semantics { contentDescription = "Create new collection" },
+            )
         }
     }
 }
@@ -396,6 +434,8 @@ private fun WaypointItem(
     onAttach: () -> Unit,
     onAddToCollection: () -> Unit,
     onFixPoint: () -> Unit,
+    onSetTarget: () -> Unit,
+    onMoveCollection: () -> Unit,
 ) {
     val waypoint = item.waypoint
     val distLabel = item.distanceM?.let { ", ${BearingComputer.formatDistance(it, units)}" } ?: ""
@@ -403,6 +443,10 @@ private fun WaypointItem(
     // act without hunting for the visible buttons. Collapsed = a single focus stop with no actions.
     val expandedActions =
         listOf(
+            CustomAccessibilityAction("Set as GPS target") {
+                onSetTarget()
+                true
+            },
             CustomAccessibilityAction("Edit") {
                 onEdit()
                 true
@@ -417,6 +461,10 @@ private fun WaypointItem(
             },
             CustomAccessibilityAction("Add to collection") {
                 onAddToCollection()
+                true
+            },
+            CustomAccessibilityAction("Move to collection") {
+                onMoveCollection()
                 true
             },
             CustomAccessibilityAction("Delete") {
@@ -460,6 +508,10 @@ private fun WaypointItem(
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(
+                        onClick = onSetTarget,
+                        modifier = Modifier.semantics { contentDescription = "Set ${waypoint.name} as GPS target" },
+                    ) { Text("Set as target") }
+                    TextButton(
                         onClick = onEdit,
                         modifier = Modifier.semantics { contentDescription = "Edit waypoint ${waypoint.name}" },
                     ) { Text("Edit") }
@@ -475,6 +527,10 @@ private fun WaypointItem(
                         onClick = onAddToCollection,
                         modifier = Modifier.semantics { contentDescription = "Add ${waypoint.name} to collection" },
                     ) { Text("Add to collection") }
+                    TextButton(
+                        onClick = onMoveCollection,
+                        modifier = Modifier.semantics { contentDescription = "Move ${waypoint.name} to another collection" },
+                    ) { Text("Move") }
                     TextButton(
                         onClick = onDelete,
                         modifier = Modifier.semantics { contentDescription = "Delete waypoint ${waypoint.name}" },
@@ -571,6 +627,44 @@ private fun WaypointEditDialog(
                 }
             }) { Text(confirmLabel) }
         },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun MoveToCollectionDialog(
+    waypointName: String,
+    collections: List<ExplorerCollection>,
+    onConfirm: (collectionId: Long) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    if (collections.isEmpty()) {
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("Move to Collection") },
+            text = { Text("No other collection to move to. Create one first.") },
+            confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
+        )
+        return
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Move $waypointName to…") },
+        text = {
+            Column {
+                collections.forEach { col ->
+                    TextButton(
+                        onClick = { onConfirm(col.id) },
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .semantics { contentDescription = "Move to ${col.name}" },
+                    ) { Text(col.name) }
+                }
+            }
+        },
+        confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

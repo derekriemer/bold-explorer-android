@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.boldexplorer.gpx.GpxParser
 import com.boldexplorer.location.FusedLocationProviderImpl
+import com.boldexplorer.location.TargetingStateHolder
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.haversineDistanceMeters
 import com.boldexplorer.shared.model.Trail
@@ -57,6 +58,7 @@ class WaypointsViewModel
         private val waypointRepo: WaypointRepository,
         private val trailRepo: TrailRepository,
         private val collectionRepo: CollectionRepository,
+        private val targetingStateHolder: TargetingStateHolder,
         settingsRepo: SettingsRepository,
         locationProvider: FusedLocationProviderImpl,
     ) : ViewModel() {
@@ -133,8 +135,11 @@ class WaypointsViewModel
                 // 1. Text filter
                 var filtered = if (q.isBlank()) all else all.filter { it.name.contains(q, ignoreCase = true) }
 
-                // 2. Collection filter
-                if (collectionIds != null) filtered = filtered.filter { it.id in collectionIds }
+                // 2. Collection scoping: a collection MUST be selected. Null ids = nothing selected yet,
+                //    so show nothing and let the UI prompt for a selection. A selected-but-empty
+                //    collection yields an empty set and correctly shows no waypoints.
+                if (collectionIds == null) return@combine emptyList()
+                filtered = filtered.filter { it.id in collectionIds }
 
                 // 3. Attach distances
                 val center = loc?.let { LatLng(it.lat, it.lon) }
@@ -246,6 +251,46 @@ class WaypointsViewModel
             viewModelScope.launch {
                 waypointRepo.update(id, lat = pos.lat, lon = pos.lon)
                 _toast.value = "Point corrected"
+            }
+        }
+
+        /**
+         * Set this waypoint as the GPS navigation target without leaving the Waypoints screen. Writes
+         * to the shared [TargetingStateHolder]; the GPS ViewModel observes it and re-points the explorer.
+         */
+        fun setAsTarget(id: Long) {
+            val name = _allWaypoints.value.firstOrNull { it.id == id }?.name
+            targetingStateHolder.requestWaypointTarget(id)
+            _toast.value = name?.let { "$it set as GPS target" } ?: "Set as GPS target"
+        }
+
+        /**
+         * Move a waypoint out of the currently-viewed collection and into [targetCollectionId]. A no-op
+         * if no collection is currently selected (the screen requires one before any waypoint shows).
+         */
+        fun moveToCollection(
+            id: Long,
+            targetCollectionId: Long,
+        ) {
+            val from =
+                _collectionFilter.value ?: run {
+                    _toast.value = "Select a collection first"
+                    return
+                }
+            if (from == targetCollectionId) return
+            viewModelScope.launch {
+                collectionRepo.attachWaypoint(targetCollectionId, id)
+                collectionRepo.detachWaypoint(from, id)
+                _toast.value = "Waypoint moved"
+            }
+        }
+
+        /** Create a new collection and immediately scope the screen to it. */
+        fun createCollection(name: String) {
+            viewModelScope.launch {
+                val id = collectionRepo.create(name, null)
+                _collectionFilter.value = id
+                _toast.value = "Collection created"
             }
         }
 

@@ -16,6 +16,7 @@ import com.boldexplorer.location.BeaconAudioInputs
 import com.boldexplorer.location.GpsBackgroundMode
 import com.boldexplorer.location.GpsBackgroundSession
 import com.boldexplorer.location.LocationForegroundService
+import com.boldexplorer.location.TargetingStateHolder
 import com.boldexplorer.shared.audio.AudioCueScheduler
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.deltaAngle
@@ -56,11 +57,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -247,6 +251,7 @@ class GpsViewModel
         private val waypointRepo: WaypointRepository,
         private val trailRepo: TrailRepository,
         private val collectionRepo: CollectionRepository,
+        private val targetingStateHolder: TargetingStateHolder,
         private val backgroundSession: GpsBackgroundSession,
         private val spokenGuidancePlayer: SpokenGuidancePlayer,
         private val settingsRepo: SettingsRepository,
@@ -683,6 +688,14 @@ class GpsViewModel
                         collectionExplorer.load(standalones + trailEnds, currentExploreMode)
                     }
             }
+            // Bridge: honour "set as GPS target" requests made from the Waypoints/Trails screens so the
+            // user can re-point navigation without leaving the screen they are on.
+            viewModelScope.launch {
+                targetingStateHolder.waypointTargetId.filterNotNull().collect { wpId ->
+                    applyExternalWaypointTarget(wpId)
+                    targetingStateHolder.clear()
+                }
+            }
             // Drive TrailFollower and CollectionExplorer on every GPS fix; surface events as announcements + audio.
             // Also handle auto-recording.
             viewModelScope.launch {
@@ -827,6 +840,30 @@ class GpsViewModel
             collectionExplorer.selectTarget(point)
             backgroundSession.setModeActive(GpsBackgroundMode.CollectionFollow, true)
             startLocationService()
+        }
+
+        /**
+         * Apply a cross-screen "set as GPS target" request: ensure a collection containing [waypointId]
+         * is selected (so the explorer loads it), then wait for the matching standalone point to appear
+         * and select it. Bounded wait so a missing/slow load never hangs the bridge.
+         */
+        private suspend fun applyExternalWaypointTarget(waypointId: Long) {
+            val collections = collectionRepo.collectionsForWaypoint(waypointId)
+            if (collections.isEmpty()) return
+            val current = _selectedCollectionId.value
+            if (current == null || collections.none { it.id == current }) {
+                selectCollection(collections.first().id)
+            }
+            val point =
+                withTimeoutOrNull(2_000L) {
+                    collectionExplorer.state
+                        .mapNotNull { st ->
+                            (st as? CollectionExplorerState.Active)
+                                ?.points
+                                ?.firstOrNull { it is CollectionPoint.Standalone && it.waypoint.id == waypointId }
+                        }.first()
+                }
+            point?.let { selectCollectionPoint(it) }
         }
 
         fun clearCollectionTarget() {
