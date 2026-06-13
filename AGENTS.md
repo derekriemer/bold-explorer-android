@@ -207,4 +207,10 @@ Coordination points that require sequencing:
 
 ## Rules
 
+### Version control
+
 - Use jujutsu over git when available. When possible use jujutsu commands if we are in a jujutsu repository.
+
+### Shell tool preferences
+Always prefer `rg` over `grep` and `fd` over `find` when available. 
+Never use bare `grep -r` for code search unless there are no other options, and tell the user you had to do so. performance is horrid with grep -R.
