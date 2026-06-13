@@ -38,11 +38,11 @@ import com.boldexplorer.shared.navigation.TrailFollower
 import com.boldexplorer.shared.navigation.TrailFollowerEvent
 import com.boldexplorer.shared.navigation.TrailFollowerState
 import com.boldexplorer.shared.navigation.TrailGuidance
+import com.boldexplorer.shared.navigation.TrailGuidanceCoordinator
 import com.boldexplorer.shared.navigation.TrailGuidanceState
 import com.boldexplorer.shared.navigation.TrailPoint
 import com.boldexplorer.shared.navigation.TrailRecordingMachine
 import com.boldexplorer.shared.navigation.TrailRecordingState
-import com.boldexplorer.shared.navigation.TrustedCourse
 import com.boldexplorer.shared.repository.CollectionRepository
 import com.boldexplorer.shared.repository.SettingsRepository
 import com.boldexplorer.shared.repository.TrailRepository
@@ -412,22 +412,13 @@ class GpsViewModel
 
         private val trailFollower = TrailFollower()
         val trailFollowState: StateFlow<TrailFollowerState> = trailFollower.state
-        private var lastTrustedCourse: TrustedCourse? = null
-        private val _trailGuidance = MutableStateFlow<TrailGuidanceState?>(null)
-        private val trailGuidance: StateFlow<TrailGuidanceState?> = _trailGuidance.asStateFlow()
-        private val trailGuidanceRelativeDeg: StateFlow<Double?> =
-            _trailGuidance
-                .map { it?.relativeDeg }
-                .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-        private var lastOrdinaryGuidanceAtMs = Long.MIN_VALUE
-        private var lastOrdinaryGuidanceLocation: LatLng? = null
-        private var consecutiveOffTrailCount = 0
-        private var offTrailAlertFiredAt = 0L
-        private var offTrailGraceUntilMs = 0L
-        private var consecutiveBacktrackCount = 0
-        private var prevDistToTargetM: Double? = null
-        private var backtrackAlertFiredAt = 0L
-        private var backtrackGraceUntilMs = 0L
+
+        // Guidance state + the off-trail/backtrack/ordinary-guidance detection state machine live in a
+        // dedicated coordinator (pure, JVM-tested in :shared). It decides *whether* to alert; this
+        // ViewModel performs the effects (TTS, audio event log, wrong-vector beep, on-screen text).
+        private val guidanceCoordinator = TrailGuidanceCoordinator(viewModelScope)
+        private val trailGuidance: StateFlow<TrailGuidanceState?> = guidanceCoordinator.guidance
+        private val trailGuidanceRelativeDeg: StateFlow<Double?> = guidanceCoordinator.relativeDeg
 
         // ── Collection explorer ───────────────────────────────────────────────────────
 
@@ -518,11 +509,19 @@ class GpsViewModel
 
         // ── Alignment ─────────────────────────────────────────────────────────────────
 
-        private val _alignmentActive = MutableStateFlow(false)
-        val alignmentActive: StateFlow<Boolean> = _alignmentActive.asStateFlow()
-
-        private val _alignmentBearingDeg = MutableStateFlow<Double?>(null)
-        val alignmentBearingDeg: StateFlow<Double?> = _alignmentBearingDeg.asStateFlow()
+        // Bearing-alignment state + math + speech live in a dedicated delegate; the ViewModel keeps
+        // only the audio-session wiring (start/stop the directional beacon), since that depends on
+        // navigation state. The public flows below are thin facades over the controller so existing
+        // consumers (uiState, AlignmentDialog) are unchanged.
+        private val alignmentController =
+            AlignmentController(
+                scope = viewModelScope,
+                headingDeg = headingDeg,
+                targetBearingDeg = bearingDeg,
+                spokenGuidancePlayer = spokenGuidancePlayer,
+            )
+        val alignmentActive: StateFlow<Boolean> = alignmentController.active
+        val alignmentBearingDeg: StateFlow<Double?> = alignmentController.bearingDeg
 
         // When alignment is active, audio uses compass heading vs the stored alignment bearing.
         // Waypoint targeting uses GPS course (navHeadingDeg); alignment uses compass (headingDeg)
@@ -530,8 +529,8 @@ class GpsViewModel
         private val audioAlignmentGroup =
             combine(
                 headingDeg,
-                _alignmentBearingDeg,
-                _alignmentActive,
+                alignmentController.bearingDeg,
+                alignmentController.active,
             ) { heading, alignBearing, alignActive ->
                 AudioAlignmentGroup(heading, alignBearing, alignActive)
             }
@@ -559,18 +558,7 @@ class GpsViewModel
             }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
         // Signed delta between current compass heading and alignment target.
-        val alignmentRelativeDeg: StateFlow<Double?> =
-            combine(
-                headingDeg,
-                _alignmentBearingDeg,
-                _alignmentActive,
-            ) { heading, alignBearing, alignActive ->
-                if (alignActive && heading != null && alignBearing != null) {
-                    deltaAngle(heading, alignBearing)
-                } else {
-                    null
-                }
-            }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
+        val alignmentRelativeDeg: StateFlow<Double?> = alignmentController.relativeDeg
 
         // ── TalkBack announcements ────────────────────────────────────────────────────
 
@@ -722,7 +710,7 @@ class GpsViewModel
             // Also handle auto-recording.
             viewModelScope.launch {
                 location.filterNotNull().collect { sample ->
-                    lastTrustedCourse = TrailGuidance.updateTrustedCourse(lastTrustedCourse, sample)
+                    guidanceCoordinator.updateTrustedCourse(sample)
                     when (
                         val event =
                             trailFollower.onLocationUpdate(
@@ -735,23 +723,24 @@ class GpsViewModel
                             )
                     ) {
                         is TrailFollowerEvent.WaypointReached -> {
-                            val guidance = updateTrailGuidance(sample)
+                            val guidance = guidanceCoordinator.computeGuidance(trailFollower.state.value, sample)
                             val text = buildTrailAdvanceAnnouncement(event, guidance)
                             announce(text, speakInBackground = true, trigger = "WaypointReached", sample = sample, guidance = guidance)
-                            resetOrdinaryGuidanceThrottle(sample)
+                            guidanceCoordinator.resetThrottle(sample)
                         }
 
                         is TrailFollowerEvent.TrailComplete -> {
-                            clearTrailGuidance()
+                            guidanceCoordinator.clear()
                             announce("Trail complete", speakInBackground = true, trigger = "TrailComplete", sample = sample)
                             trailFollower.stop()
                         }
 
                         null -> {
-                            val guidance = updateTrailGuidance(sample)
-                            maybeAnnounceOrdinaryTrailGuidance(sample, guidance)
-                            maybeAnnounceOffTrail(sample, guidance)
-                            maybeAnnounceBacktrack(sample, guidance)
+                            val followState = trailFollower.state.value
+                            val guidance = guidanceCoordinator.computeGuidance(followState, sample)
+                            announceOrdinaryTrailGuidance(followState, sample, guidance)
+                            announceOffTrail(followState, sample, guidance)
+                            announceBacktrack(followState, sample, guidance)
                         }
                     }
 
@@ -1048,7 +1037,7 @@ class GpsViewModel
             val active = trailFollower.state.value as? TrailFollowerState.Active
             val firstWp = active?.waypoints?.getOrNull(active.currentIndex)
             val total = active?.waypoints?.size ?: points.size
-            val guidance = _trailGuidance.value
+            val guidance = guidanceCoordinator.guidance.value
             return buildString {
                 val checkpointN = active?.currentIndex?.plus(1) ?: 1
                 append("$prefix. Checkpoint $checkpointN of $total.")
@@ -1068,7 +1057,7 @@ class GpsViewModel
         fun stopFollowTrail() {
             trailFollower.stop()
             recordingMachine.stop()
-            clearTrailGuidance()
+            guidanceCoordinator.clear()
             backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, false)
             stopLocationServiceIfIdle()
             announce("Trail navigation stopped", speakInBackground = true, trigger = "TrailStopped")
@@ -1094,8 +1083,7 @@ class GpsViewModel
         // ── Alignment ─────────────────────────────────────────────────────────────────
 
         fun startAlignment() {
-            _alignmentBearingDeg.value = headingDeg.value ?: _alignmentBearingDeg.value ?: 0.0
-            _alignmentActive.value = true
+            alignmentController.start()
             if (!_navigationActive.value) {
                 backgroundSession.startAlignment(beaconAudioInputs())
                 _audioStartedForAlignment.value = true
@@ -1105,38 +1093,25 @@ class GpsViewModel
         }
 
         fun stopAlignment() {
-            _alignmentActive.value = false
+            alignmentController.stop()
             if (!_navigationActive.value) {
                 backgroundSession.stopAlignment()
             }
             _audioStartedForAlignment.value = false
         }
 
-        fun resetAlignmentToCurrent() {
-            headingDeg.value?.let { setAlignmentBearing(it) }
-        }
+        fun resetAlignmentToCurrent() = alignmentController.resetToCurrentHeading()
 
-        fun setAlignmentBearing(deg: Double) {
-            _alignmentBearingDeg.value = ((deg % 360) + 360) % 360
-        }
+        fun setAlignmentBearing(deg: Double) = alignmentController.setBearing(deg)
 
-        fun setAlignmentToBearing() {
-            bearingDeg.value?.let { setAlignmentBearing(it) }
-        }
+        fun setAlignmentToBearing() = alignmentController.alignToTarget()
 
         /**
-         * Speak the current alignment delta on demand. Driven by the alignment modal's focus-gated
-         * ticker: the modal only requests this while TalkBack focus rests on the delta readout, so the
-         * app never talks over the rest of the UI uninvited.
+         * Speak the current alignment delta on demand. Driven by the alignment modal's opt-in ticker:
+         * the modal only requests this while auto-read is on, so the app never talks over the rest of
+         * the UI uninvited.
          */
-        fun speakAlignmentDelta() {
-            if (!_alignmentActive.value) return
-            val delta = alignmentRelativeDeg.value ?: return
-            spokenGuidancePlayer.speak(
-                com.boldexplorer.shared.navigation.BearingComputer
-                    .toAlignmentRelative(delta),
-            )
-        }
+        fun speakAlignmentDelta() = alignmentController.speakDelta()
 
         // ── Collection editing from GPS screen ───────────────────────────────────────
 
@@ -1235,36 +1210,15 @@ class GpsViewModel
             BeaconAudioInputs(
                 accuracyM = accuracyM,
                 relativeDeg = audioRelativeDeg,
-                alignmentActive = _alignmentActive,
+                alignmentActive = alignmentController.active,
                 beaconCuesEnabled = beaconCuesEnabled,
                 location = location,
                 trailGuidance = trailGuidance,
             )
 
-        private fun updateTrailGuidance(sample: LocationSample): TrailGuidanceState? {
-            val guidance = TrailGuidance.compute(trailFollower.state.value, sample, lastTrustedCourse)
-            _trailGuidance.value = guidance
-            return guidance
-        }
-
         private fun refreshTrailGuidanceFromLatestLocation(resetOrdinaryThrottle: Boolean = false) {
             val sample = location.value ?: return
-            lastTrustedCourse = TrailGuidance.updateTrustedCourse(lastTrustedCourse, sample)
-            updateTrailGuidance(sample)
-            if (resetOrdinaryThrottle) resetOrdinaryGuidanceThrottle(sample)
-        }
-
-        private fun clearTrailGuidance() {
-            _trailGuidance.value = null
-            lastOrdinaryGuidanceAtMs = Long.MIN_VALUE
-            lastOrdinaryGuidanceLocation = null
-            consecutiveOffTrailCount = 0
-            offTrailAlertFiredAt = 0L
-            offTrailGraceUntilMs = 0L
-            consecutiveBacktrackCount = 0
-            prevDistToTargetM = null
-            backtrackAlertFiredAt = 0L
-            backtrackGraceUntilMs = 0L
+            guidanceCoordinator.refreshFromLocation(trailFollower.state.value, sample, resetOrdinaryThrottle)
         }
 
         private fun buildTrailAdvanceAnnouncement(
@@ -1291,29 +1245,19 @@ class GpsViewModel
             }
         }
 
-        private fun maybeAnnounceOrdinaryTrailGuidance(
+        // The detection logic (counts, grace/cooldown windows, noise floor) lives in
+        // [TrailGuidanceCoordinator]; these wrappers apply the effects — speak, beep, and write the
+        // audio event log — when it decides an alert is warranted.
+
+        private fun announceOrdinaryTrailGuidance(
+            followState: TrailFollowerState,
             sample: LocationSample,
             guidance: TrailGuidanceState?,
         ) {
-            if (trailFollower.state.value !is TrailFollowerState.Active) return
-            val relative = guidance?.relativeDeg ?: return
-            if (!TrailGuidance.isMajorCorrection(relative)) return
-            if (sample.timestamp - lastOrdinaryGuidanceAtMs < ORDINARY_GUIDANCE_INTERVAL_MS) return
-
-            val current = LatLng(sample.lat, sample.lon)
-            val lastLocation = lastOrdinaryGuidanceLocation
-            if (lastLocation != null &&
-                haversineDistanceMeters(lastLocation, current) < ORDINARY_GUIDANCE_DISTANCE_M
-            ) {
-                return
-            }
-
-            lastOrdinaryGuidanceAtMs = sample.timestamp
-            lastOrdinaryGuidanceLocation = current
-            val checkpointN = guidance.targetIndex + 1
-            val distLabel = formatDistanceM(guidance.distanceToTargetM, settings.value.units)
+            val decision = guidanceCoordinator.evaluateOrdinaryGuidance(followState, sample, guidance) ?: return
+            val distLabel = formatDistanceM(decision.distanceToTargetM, settings.value.units)
             announce(
-                "Checkpoint $checkpointN of ${guidance.total}. $distLabel, ${directionHint(relative)}.",
+                "Checkpoint ${decision.checkpointN} of ${decision.total}. $distLabel, ${directionHint(decision.relativeDeg)}.",
                 speakInBackground = true,
                 trigger = "OrdinaryTrailGuidance",
                 sample = sample,
@@ -1322,23 +1266,12 @@ class GpsViewModel
         }
 
         // BUG-3: alert when consecutive GPS fixes show |relativeDeg| >= 60° (user is off trail).
-        private fun maybeAnnounceOffTrail(
+        private fun announceOffTrail(
+            followState: TrailFollowerState,
             sample: LocationSample,
             guidance: TrailGuidanceState?,
         ) {
-            if (trailFollower.state.value !is TrailFollowerState.Active) return
-            if (sample.timestamp < offTrailGraceUntilMs) return
-
-            val relative = guidance?.relativeDeg
-            val sinceLastAlertMs = sample.timestamp - offTrailAlertFiredAt
-
-            if (relative != null && TrailGuidance.isMajorCorrection(relative)) {
-                consecutiveOffTrailCount++
-            } else {
-                consecutiveOffTrailCount = 0
-                offTrailAlertFiredAt = 0L
-            }
-
+            val eval = guidanceCoordinator.evaluateOffTrail(followState, sample, guidance) ?: return
             viewModelScope.launch {
                 audioEventLog.append(
                     AudioLogEntry(
@@ -1346,65 +1279,25 @@ class GpsViewModel
                         kind = AudioLogEntry.Kind.DETECTION_STATE,
                         trigger = "OffTrailCheck",
                         inputs =
-                            "relativeDeg=${relative?.let { "%.1f°".format(it) } ?: "null"}" +
-                                ", followerActive=${trailFollower.state.value is TrailFollowerState.Active}",
-                        outputs = "consecutiveOffTrail=$consecutiveOffTrailCount, sinceLastAlertMs=$sinceLastAlertMs",
-                        played =
-                            when {
-                                relative == null -> {
-                                    "bail:no_relative_deg"
-                                }
-
-                                consecutiveOffTrailCount < OFF_TRAIL_CONSECUTIVE_THRESHOLD -> {
-                                    "bail:count_${consecutiveOffTrailCount}_of_$OFF_TRAIL_CONSECUTIVE_THRESHOLD"
-                                }
-
-                                sinceLastAlertMs < OFF_TRAIL_ALERT_INTERVAL_MS -> {
-                                    "bail:cooldown_${sinceLastAlertMs}ms"
-                                }
-
-                                else -> {
-                                    "FIRING"
-                                }
-                            },
+                            "relativeDeg=${eval.relativeDeg?.let { "%.1f°".format(it) } ?: "null"}" +
+                                ", followerActive=${eval.followerActive}",
+                        outputs = "consecutiveOffTrail=${eval.consecutiveCount}, sinceLastAlertMs=${eval.sinceLastAlertMs}",
+                        played = eval.disposition,
                     ),
                 )
             }
-
-            if (relative == null) return
-            if (consecutiveOffTrailCount < OFF_TRAIL_CONSECUTIVE_THRESHOLD) return
-            if (sinceLastAlertMs < OFF_TRAIL_ALERT_INTERVAL_MS) return
-
-            offTrailAlertFiredAt = sample.timestamp
+            if (!eval.fired) return
             announce("You may be off trail.", speakInBackground = true, trigger = "OffTrailAlert", sample = sample, guidance = guidance)
             viewModelScope.launch { scheduler.emitWrongVector() }
         }
 
         // BUG-9: alert when consecutive GPS fixes show distance to target steadily increasing (backtracking).
-        private fun maybeAnnounceBacktrack(
+        private fun announceBacktrack(
+            followState: TrailFollowerState,
             sample: LocationSample,
             guidance: TrailGuidanceState?,
         ) {
-            if (trailFollower.state.value !is TrailFollowerState.Active) return
-            if (sample.timestamp < backtrackGraceUntilMs) return
-
-            val distM = guidance?.distanceToTargetM
-            val prev = prevDistToTargetM
-            val sinceLastAlertMs = sample.timestamp - backtrackAlertFiredAt
-
-            if (distM == null) {
-                consecutiveBacktrackCount = 0
-                prevDistToTargetM = null
-            } else {
-                if (prev != null && distM > prev + BACKTRACK_NOISE_FLOOR_M) {
-                    consecutiveBacktrackCount++
-                } else {
-                    consecutiveBacktrackCount = 0
-                    backtrackAlertFiredAt = 0L
-                }
-                prevDistToTargetM = distM
-            }
-
+            val eval = guidanceCoordinator.evaluateBacktrack(followState, sample, guidance) ?: return
             viewModelScope.launch {
                 audioEventLog.append(
                     AudioLogEntry(
@@ -1412,36 +1305,14 @@ class GpsViewModel
                         kind = AudioLogEntry.Kind.DETECTION_STATE,
                         trigger = "BacktrackCheck",
                         inputs =
-                            "distToTarget=${distM?.let { "%.1fm".format(it) } ?: "null"}" +
-                                ", prevDist=${prev?.let { "%.1fm".format(it) } ?: "null"}",
-                        outputs = "consecutiveBacktrack=$consecutiveBacktrackCount, sinceLastAlertMs=$sinceLastAlertMs",
-                        played =
-                            when {
-                                distM == null -> {
-                                    "bail:no_guidance"
-                                }
-
-                                consecutiveBacktrackCount < BACKTRACK_CONSECUTIVE_THRESHOLD -> {
-                                    "bail:count_${consecutiveBacktrackCount}_of_$BACKTRACK_CONSECUTIVE_THRESHOLD"
-                                }
-
-                                sinceLastAlertMs < BACKTRACK_ALERT_INTERVAL_MS -> {
-                                    "bail:cooldown_${sinceLastAlertMs}ms"
-                                }
-
-                                else -> {
-                                    "FIRING"
-                                }
-                            },
+                            "distToTarget=${eval.distanceToTargetM?.let { "%.1fm".format(it) } ?: "null"}" +
+                                ", prevDist=${eval.prevDistanceToTargetM?.let { "%.1fm".format(it) } ?: "null"}",
+                        outputs = "consecutiveBacktrack=${eval.consecutiveCount}, sinceLastAlertMs=${eval.sinceLastAlertMs}",
+                        played = eval.disposition,
                     ),
                 )
             }
-
-            if (distM == null) return
-            if (consecutiveBacktrackCount < BACKTRACK_CONSECUTIVE_THRESHOLD) return
-            if (sinceLastAlertMs < BACKTRACK_ALERT_INTERVAL_MS) return
-
-            backtrackAlertFiredAt = sample.timestamp
+            if (!eval.fired) return
             announce(
                 "You may be going the wrong way.",
                 speakInBackground = true,
@@ -1449,18 +1320,6 @@ class GpsViewModel
                 sample = sample,
                 guidance = guidance,
             )
-        }
-
-        private fun resetOrdinaryGuidanceThrottle(sample: LocationSample) {
-            lastOrdinaryGuidanceAtMs = sample.timestamp
-            lastOrdinaryGuidanceLocation = LatLng(sample.lat, sample.lon)
-            consecutiveOffTrailCount = 0
-            offTrailAlertFiredAt = 0L
-            offTrailGraceUntilMs = sample.timestamp + OFF_TRAIL_GRACE_MS
-            consecutiveBacktrackCount = 0
-            prevDistToTargetM = null
-            backtrackAlertFiredAt = 0L
-            backtrackGraceUntilMs = sample.timestamp + BACKTRACK_GRACE_MS
         }
 
         private fun announce(
@@ -1756,14 +1615,5 @@ class GpsViewModel
 
             // Minimum speed (m/s) before GPS course-over-ground is trusted for direction-aware selection.
             private const val MIN_TRAVEL_HEADING_SPEED_MPS = 1.0
-            private const val ORDINARY_GUIDANCE_INTERVAL_MS = 30_000L
-            private const val ORDINARY_GUIDANCE_DISTANCE_M = 25.0
-            private const val OFF_TRAIL_CONSECUTIVE_THRESHOLD = 2
-            private const val OFF_TRAIL_ALERT_INTERVAL_MS = 45_000L
-            private const val OFF_TRAIL_GRACE_MS = 30_000L
-            private const val BACKTRACK_CONSECUTIVE_THRESHOLD = 3
-            private const val BACKTRACK_NOISE_FLOOR_M = 2.0
-            private const val BACKTRACK_ALERT_INTERVAL_MS = 45_000L
-            private const val BACKTRACK_GRACE_MS = 20_000L
         }
     }
