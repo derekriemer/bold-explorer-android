@@ -206,10 +206,29 @@ Coordination points that require sequencing:
 - When architecture or commands change, update only `AGENTS.md`. `CLAUDE.md` defers to it and needs no sync.
 
 ## Rules
+### Commit guidelines
+
+- Write commit messages in imperative mood, present tense (e.g. "Add punctuation delegation layer", not "Added" or "Adding").
+- One commit per logical unit of work — roughly corresponding to a phase in a plan, or a discrete feature/fix that someone might want to inspect or revert independently.
+- Commit message format:
+  - **Subject line**: 50–72 characters, summarizing what the commit does
+  - **Body** (optional but encouraged for non-trivial work): explain *why*, not just *what*. Note any tradeoffs, alternatives considered, or follow-up work needed.
+- Before committing, run `jj diff` and confirm the change matches the intended scope. If unrelated changes crept in, split them with `jj split` before committing.
+- Do not bundle unrelated fixes or features into a single commit even if they are small.
+- If work spans multiple phases of a plan, each phase gets its own commit unless a phase is trivially small (e.g. a one-line config change directly enabling the next phase — squash that in).
+
 
 ### Version control
 
 - Use jujutsu over git when available. When possible use jujutsu commands if we are in a jujutsu repository.
+- When using jujutsu, always start work by jj new, unless we are 
+    1. On a new commit already.
+    2. squashing a quick fix into existing work.
+    3. performing work on the graph, such as resolving merge conflicts, investigating the app without changes.
+    4. Editing a commit that is not a head.
+
+- Commit work when ideally starting a new jj commit with `jj describe`, or `jj commit` if making new work. Use `jj describe` again if needed as things change with the commit message based on the work completed.
+- If an unrelated refactor is done during other work, split it out with `jj split`, rebase it onto a separate bookmark off of the parent commit, and note it to the user for review or integration later.
 
 ### Shell tool preferences
 Always prefer `rg` over `grep` and `fd` over `find` when available. 

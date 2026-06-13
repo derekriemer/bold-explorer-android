@@ -669,25 +669,7 @@ class GpsViewModel
             // Reload collection explorer whenever the selected collection's waypoints or trails change.
             viewModelScope.launch {
                 combine(collectionWaypoints, collectionTrails) { wps, trails -> wps to trails }
-                    .collect { (wps, trails) ->
-                        if (_selectedCollectionId.value == null) return@collect
-                        val standalones = wps.map { CollectionPoint.Standalone(it) }
-                        val trailEnds =
-                            trails.flatMap { trail ->
-                                val ordered = trailRepo.waypointsForTrail(trail.id)
-                                listOfNotNull(
-                                    ordered.firstOrNull()?.let { CollectionPoint.TrailEnd(it, trail, isStart = true) },
-                                    ordered
-                                        .lastOrNull()
-                                        ?.takeIf { ordered.size > 1 }
-                                        ?.let { CollectionPoint.TrailEnd(it, trail, isStart = false) },
-                                )
-                            }
-                        val currentExploreMode =
-                            (collectionExplorer.state.value as? CollectionExplorerState.Active)
-                                ?.exploreMode ?: false
-                        collectionExplorer.load(standalones + trailEnds, currentExploreMode)
-                    }
+                    .collect { (wps, trails) -> reloadCollectionExplorer(wps, trails) }
             }
             // Bridge: honour "set as GPS target" requests made from the Waypoints/Trails screens so the
             // user can re-point navigation without leaving the screen they are on.
@@ -711,118 +693,12 @@ class GpsViewModel
             viewModelScope.launch {
                 location.filterNotNull().collect { sample ->
                     guidanceCoordinator.updateTrustedCourse(sample)
-                    when (
-                        val event =
-                            trailFollower.onLocationUpdate(
-                                location = LatLng(sample.lat, sample.lon),
-                                altitudeM = sample.altitude,
-                                bearingDeg =
-                                    sample.heading
-                                        ?.takeIf { (sample.speed ?: 0.0) >= TrailGuidance.MIN_TRUSTED_SPEED_MPS }
-                                        ?.toFloat(),
-                            )
-                    ) {
-                        is TrailFollowerEvent.WaypointReached -> {
-                            val guidance = guidanceCoordinator.computeGuidance(trailFollower.state.value, sample)
-                            val text = buildTrailAdvanceAnnouncement(event, guidance)
-                            announce(text, speakInBackground = true, trigger = "WaypointReached", sample = sample, guidance = guidance)
-                            guidanceCoordinator.resetThrottle(sample)
-                        }
-
-                        is TrailFollowerEvent.TrailComplete -> {
-                            guidanceCoordinator.clear()
-                            announce("Trail complete", speakInBackground = true, trigger = "TrailComplete", sample = sample)
-                            trailFollower.stop()
-                        }
-
-                        null -> {
-                            val followState = trailFollower.state.value
-                            val guidance = guidanceCoordinator.computeGuidance(followState, sample)
-                            announceOrdinaryTrailGuidance(followState, sample, guidance)
-                            announceOffTrail(followState, sample, guidance)
-                            announceBacktrack(followState, sample, guidance)
-                        }
-                    }
-
+                    announceTrailFollowerEvent(sample)
                     // Drive CollectionExplorer on every fix; it is the primary navigator. When no
                     // collection is loaded its state is Idle and onLocationUpdate is a no-op.
-                    run {
-                        val travelHeadingDeg = sample.heading?.takeIf { (sample.speed ?: 0.0) >= MIN_TRAVEL_HEADING_SPEED_MPS }
-                        when (val event = collectionExplorer.onLocationUpdate(LatLng(sample.lat, sample.lon), travelHeadingDeg)) {
-                            is CollectionExplorerEvent.PointReached -> {
-                                val name =
-                                    when (val p = event.reached) {
-                                        is CollectionPoint.Standalone -> p.waypoint.name
-                                        is CollectionPoint.TrailEnd -> "${p.trail.name} (${if (p.isStart) "start" else "end"})"
-                                    }
-                                val nextName =
-                                    event.next?.let { p ->
-                                        when (p) {
-                                            is CollectionPoint.Standalone -> p.waypoint.name
-                                            is CollectionPoint.TrailEnd -> "${p.trail.name} (${if (p.isStart) "start" else "end"})"
-                                        }
-                                    }
-                                val text =
-                                    buildString {
-                                        append("Reached $name.")
-                                        if (nextName != null) {
-                                            append(" Next: $nextName.")
-                                        } else if ((collectionExplorer.state.value as? CollectionExplorerState.Active)?.exploreMode ==
-                                            false
-                                        ) {
-                                            append(" Choose another target or tap Nearest.")
-                                        } else {
-                                            append(" No more unvisited points.")
-                                        }
-                                    }
-                                announce(text, speakInBackground = true, trigger = "CollectionPointReached")
-                            }
-
-                            is CollectionExplorerEvent.NearTrailEnd -> {
-                                // UI reacts to state change; no audio needed here.
-                            }
-
-                            is CollectionExplorerEvent.TargetSkipped -> {
-                                // Skip is emitted only by the user action path, not by GPS updates.
-                            }
-
-                            is CollectionExplorerEvent.NearbyPoint -> {
-                                val name =
-                                    when (val p = event.point) {
-                                        is CollectionPoint.Standalone -> p.waypoint.name
-                                        is CollectionPoint.TrailEnd -> "${p.trail.name} (${if (p.isStart) "start" else "end"})"
-                                    }
-                                val dist = formatDistanceM(event.distanceM, settings.value.units)
-                                announce("Nearby: $name, $dist", speakInBackground = true, trigger = "NearbyPoint")
-                            }
-
-                            null -> {
-                                Unit
-                            }
-                        }
-                    }
-
-                    // Auto-record: attach a GPS point to the active trail every AUTO_RECORD_DISTANCE_M.
-                    // Runs only while the state machine is in Recording — the single source of truth.
-                    val recording = recordingMachine.state.value as? TrailRecordingState.Recording
-                    if (recording != null) {
-                        val trailId = recording.trailId
-                        val current = LatLng(sample.lat, sample.lon)
-                        val last = _lastAutoRecordLoc
-                        if (last == null || haversineDistanceMeters(last, current) >= AUTO_RECORD_DISTANCE_M) {
-                            _lastAutoRecordLoc = current
-                            val name = "Track ${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())}"
-                            launch {
-                                waypointRepo.createTrackPoint(trailId, name, sample.lat, sample.lon, sample.altitude)
-                                recordingMachine.addPoint()
-                                val count = (recordingMachine.state.value as? TrailRecordingState.Recording)?.pointCount ?: 0
-                                if (count % AUTO_RECORD_TTS_INTERVAL == 0) {
-                                    spokenGuidancePlayer.speak("$count track points recorded")
-                                }
-                                // trailWaypoints updates automatically via observeWaypointsForTrail
-                            }
-                        }
-                    }
+                    val travelHeadingDeg = sample.heading?.takeIf { (sample.speed ?: 0.0) >= MIN_TRAVEL_HEADING_SPEED_MPS }
+                    announceCollectionEvent(collectionExplorer.onLocationUpdate(LatLng(sample.lat, sample.lon), travelHeadingDeg))
+                    maybeRecordTrackPoint(sample)
                 }
             }
         }
@@ -1221,6 +1097,46 @@ class GpsViewModel
             guidanceCoordinator.refreshFromLocation(trailFollower.state.value, sample, resetOrdinaryThrottle)
         }
 
+        /**
+         * Drive the TrailFollower with a fresh fix and speak the resulting event: an advance cue on
+         * arrival, "Trail complete" on completion, or — when no event fires — the ordinary-guidance,
+         * off-trail, and backtrack checks.
+         */
+        private fun announceTrailFollowerEvent(sample: LocationSample) {
+            when (
+                val event =
+                    trailFollower.onLocationUpdate(
+                        location = LatLng(sample.lat, sample.lon),
+                        altitudeM = sample.altitude,
+                        bearingDeg =
+                            sample.heading
+                                ?.takeIf { (sample.speed ?: 0.0) >= TrailGuidance.MIN_TRUSTED_SPEED_MPS }
+                                ?.toFloat(),
+                    )
+            ) {
+                is TrailFollowerEvent.WaypointReached -> {
+                    val guidance = guidanceCoordinator.computeGuidance(trailFollower.state.value, sample)
+                    val text = buildTrailAdvanceAnnouncement(event, guidance)
+                    announce(text, speakInBackground = true, trigger = "WaypointReached", sample = sample, guidance = guidance)
+                    guidanceCoordinator.resetThrottle(sample)
+                }
+
+                is TrailFollowerEvent.TrailComplete -> {
+                    guidanceCoordinator.clear()
+                    announce("Trail complete", speakInBackground = true, trigger = "TrailComplete", sample = sample)
+                    trailFollower.stop()
+                }
+
+                null -> {
+                    val followState = trailFollower.state.value
+                    val guidance = guidanceCoordinator.computeGuidance(followState, sample)
+                    announceOrdinaryTrailGuidance(followState, sample, guidance)
+                    announceOffTrail(followState, sample, guidance)
+                    announceBacktrack(followState, sample, guidance)
+                }
+            }
+        }
+
         private fun buildTrailAdvanceAnnouncement(
             event: TrailFollowerEvent.WaypointReached,
             guidance: TrailGuidanceState?,
@@ -1320,6 +1236,118 @@ class GpsViewModel
                 sample = sample,
                 guidance = guidance,
             )
+        }
+
+        /**
+         * Rebuild the CollectionExplorer's point list — standalone waypoints plus each trail's
+         * start/end points — for the selected collection, preserving the current explore-mode flag.
+         * No-op when no collection is selected.
+         */
+        private suspend fun reloadCollectionExplorer(
+            wps: List<Waypoint>,
+            trails: List<Trail>,
+        ) {
+            if (_selectedCollectionId.value == null) return
+            val standalones = wps.map { CollectionPoint.Standalone(it) }
+            val trailEnds =
+                trails.flatMap { trail ->
+                    val ordered = trailRepo.waypointsForTrail(trail.id)
+                    listOfNotNull(
+                        ordered.firstOrNull()?.let { CollectionPoint.TrailEnd(it, trail, isStart = true) },
+                        ordered
+                            .lastOrNull()
+                            ?.takeIf { ordered.size > 1 }
+                            ?.let { CollectionPoint.TrailEnd(it, trail, isStart = false) },
+                    )
+                }
+            val currentExploreMode =
+                (collectionExplorer.state.value as? CollectionExplorerState.Active)
+                    ?.exploreMode ?: false
+            collectionExplorer.load(standalones + trailEnds, currentExploreMode)
+        }
+
+        /**
+         * Speak the cue for a CollectionExplorer event from a GPS fix (arrival, nearby point).
+         * [CollectionExplorerEvent.NearTrailEnd] and [CollectionExplorerEvent.TargetSkipped] are
+         * intentionally silent here: the UI reacts to the state change, and skips are user-driven.
+         */
+        private fun announceCollectionEvent(event: CollectionExplorerEvent?) {
+            when (event) {
+                is CollectionExplorerEvent.PointReached -> {
+                    val name =
+                        when (val p = event.reached) {
+                            is CollectionPoint.Standalone -> p.waypoint.name
+                            is CollectionPoint.TrailEnd -> "${p.trail.name} (${if (p.isStart) "start" else "end"})"
+                        }
+                    val nextName =
+                        event.next?.let { p ->
+                            when (p) {
+                                is CollectionPoint.Standalone -> p.waypoint.name
+                                is CollectionPoint.TrailEnd -> "${p.trail.name} (${if (p.isStart) "start" else "end"})"
+                            }
+                        }
+                    val text =
+                        buildString {
+                            append("Reached $name.")
+                            if (nextName != null) {
+                                append(" Next: $nextName.")
+                            } else if ((collectionExplorer.state.value as? CollectionExplorerState.Active)?.exploreMode ==
+                                false
+                            ) {
+                                append(" Choose another target or tap Nearest.")
+                            } else {
+                                append(" No more unvisited points.")
+                            }
+                        }
+                    announce(text, speakInBackground = true, trigger = "CollectionPointReached")
+                }
+
+                is CollectionExplorerEvent.NearTrailEnd -> {
+                    // UI reacts to state change; no audio needed here.
+                }
+
+                is CollectionExplorerEvent.TargetSkipped -> {
+                    // Skip is emitted only by the user action path, not by GPS updates.
+                }
+
+                is CollectionExplorerEvent.NearbyPoint -> {
+                    val name =
+                        when (val p = event.point) {
+                            is CollectionPoint.Standalone -> p.waypoint.name
+                            is CollectionPoint.TrailEnd -> "${p.trail.name} (${if (p.isStart) "start" else "end"})"
+                        }
+                    val dist = formatDistanceM(event.distanceM, settings.value.units)
+                    announce("Nearby: $name, $dist", speakInBackground = true, trigger = "NearbyPoint")
+                }
+
+                null -> {
+                    Unit
+                }
+            }
+        }
+
+        /**
+         * While recording, attach a track point to the active trail once the user has moved
+         * [AUTO_RECORD_DISTANCE_M] from the last recorded point. No-op in any other state. The
+         * recording machine is the single source of truth for whether recording is active.
+         */
+        private fun maybeRecordTrackPoint(sample: LocationSample) {
+            val recording = recordingMachine.state.value as? TrailRecordingState.Recording ?: return
+            val current = LatLng(sample.lat, sample.lon)
+            val last = _lastAutoRecordLoc
+            if (last != null && haversineDistanceMeters(last, current) < AUTO_RECORD_DISTANCE_M) return
+            _lastAutoRecordLoc = current
+            val trailId = recording.trailId
+            val name = "Track ${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())}"
+            viewModelScope.launch {
+                waypointRepo.createTrackPoint(trailId, name, sample.lat, sample.lon, sample.altitude)
+                recordingMachine.addPoint()
+                val count = (recordingMachine.state.value as? TrailRecordingState.Recording)?.pointCount ?: 0
+                if (count % AUTO_RECORD_TTS_INTERVAL == 0) {
+                    spokenGuidancePlayer.speak("$count track points recorded")
+                }
+                // trailWaypoints updates automatically via observeWaypointsForTrail
+            }
         }
 
         private fun announce(
