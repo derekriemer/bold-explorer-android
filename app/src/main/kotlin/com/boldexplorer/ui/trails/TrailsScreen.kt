@@ -49,11 +49,18 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.boldexplorer.shared.geo.LatLng
+import com.boldexplorer.shared.geo.haversineDistanceMeters
 import com.boldexplorer.shared.model.Collection
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.Waypoint
+import com.boldexplorer.ui.common.SpeakButton
 import com.boldexplorer.ui.common.ToastMessage
+import com.boldexplorer.ui.common.rememberSttLauncher
 import com.boldexplorer.ui.common.useToast
+
+/** Distance, in metres, within which a trail endpoint is treated as "here" for follow-from-end. */
+private const val END_PROXIMITY_M = 10.0
 
 @Composable
 fun TrailsScreen(
@@ -70,6 +77,7 @@ fun TrailsScreen(
     val collections by viewModel.collections.collectAsStateWithLifecycle()
     val toast by viewModel.toast.collectAsStateWithLifecycle()
     val exportStatus by viewModel.exportStatus.collectAsStateWithLifecycle()
+    val currentLocation by viewModel.currentLocation.collectAsStateWithLifecycle()
 
     val importLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -128,6 +136,7 @@ fun TrailsScreen(
                             trackPointCount = trackCount,
                             expanded = expanded,
                             trackExpanded = trackExpanded,
+                            currentLocation = currentLocation,
                             onToggle = { viewModel.toggleExpand(trail.id) },
                             onToggleTrackPoints = { viewModel.toggleTrackExpand(trail.id) },
                             onRename = { renameTarget = trail },
@@ -138,6 +147,9 @@ fun TrailsScreen(
                             onDetach = { wpId -> viewModel.detachWaypoint(trail.id, wpId) },
                             onMoveUp = { idx, wpId -> viewModel.moveUp(trail.id, wpId, idx) },
                             onMoveDown = { idx, wpId -> viewModel.moveDown(trail.id, wpId, idx, wps.size) },
+                            onFollow = { reversed -> viewModel.followTrail(trail.id, reversed) },
+                            onRecord = { viewModel.recordTrail(trail.id) },
+                            onNavigateToWaypoint = { wpId, label -> viewModel.navigateToWaypoint(wpId, label) },
                         )
                     }
 
@@ -256,6 +268,7 @@ private fun TrailItem(
     trackPointCount: Long,
     expanded: Boolean,
     trackExpanded: Boolean,
+    currentLocation: LatLng?,
     onToggle: () -> Unit,
     onToggleTrackPoints: () -> Unit,
     onRename: () -> Unit,
@@ -266,6 +279,9 @@ private fun TrailItem(
     onDetach: (waypointId: Long) -> Unit,
     onMoveUp: (index: Int, waypointId: Long) -> Unit,
     onMoveDown: (index: Int, waypointId: Long) -> Unit,
+    onFollow: (reversed: Boolean) -> Unit,
+    onRecord: () -> Unit,
+    onNavigateToWaypoint: (waypointId: Long, label: String) -> Unit,
 ) {
     Card(
         modifier =
@@ -275,19 +291,78 @@ private fun TrailItem(
         elevation = CardDefaults.cardElevation(defaultElevation = if (expanded) 4.dp else 1.dp),
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
-            // Collapsed = a single focus stop: no visible header buttons. Rename/Delete live as
-            // TalkBack custom actions (and as visible buttons once expanded).
+            // Collapsed = a single focus stop: navigation, rename, and delete all live as TalkBack
+            // custom actions (and as visible buttons once expanded). Within END_PROXIMITY_M of an
+            // endpoint we offer "Follow from this end"; otherwise we offer explicit start/end navigation.
+            val start = namedWaypoints.firstOrNull()
+            val end = namedWaypoints.lastOrNull()
+            val distStart = currentLocation?.let { loc -> start?.let { haversineDistanceMeters(loc, LatLng(it.lat, it.lon)) } }
+            val distEnd = currentLocation?.let { loc -> end?.let { haversineDistanceMeters(loc, LatLng(it.lat, it.lon)) } }
+            val nearStart = distStart != null && distStart <= END_PROXIMITY_M
+            val nearEnd = distEnd != null && distEnd <= END_PROXIMITY_M
             val headerActions =
-                listOf(
-                    CustomAccessibilityAction("Rename") {
-                        onRename()
-                        true
-                    },
-                    CustomAccessibilityAction("Delete") {
-                        onDelete()
-                        true
-                    },
-                )
+                buildList {
+                    if (start != null) {
+                        add(
+                            CustomAccessibilityAction("Follow") {
+                                onFollow(false)
+                                true
+                            },
+                        )
+                        if (start.id != end?.id) {
+                            add(
+                                CustomAccessibilityAction("Follow in reverse") {
+                                    onFollow(true)
+                                    true
+                                },
+                            )
+                        }
+                        // Within range of an end → resume following from the nearest end; the nearer end
+                        // wins when both are in range. Otherwise expose explicit point-navigation to either end.
+                        if (nearStart || nearEnd) {
+                            val reversed = nearEnd && (!nearStart || (distEnd!! < distStart!!))
+                            add(
+                                CustomAccessibilityAction("Follow from this end") {
+                                    onFollow(reversed)
+                                    true
+                                },
+                            )
+                        } else {
+                            add(
+                                CustomAccessibilityAction("Navigate to start") {
+                                    onNavigateToWaypoint(start.id, start.name)
+                                    true
+                                },
+                            )
+                            if (end != null && end.id != start.id) {
+                                add(
+                                    CustomAccessibilityAction("Navigate to end") {
+                                        onNavigateToWaypoint(end.id, end.name)
+                                        true
+                                    },
+                                )
+                            }
+                        }
+                    }
+                    add(
+                        CustomAccessibilityAction("Start recording") {
+                            onRecord()
+                            true
+                        },
+                    )
+                    add(
+                        CustomAccessibilityAction("Rename") {
+                            onRename()
+                            true
+                        },
+                    )
+                    add(
+                        CustomAccessibilityAction("Delete") {
+                            onDelete()
+                            true
+                        },
+                    )
+                }
             val wpCount = namedWaypoints.size
             val wpLabel = "$wpCount waypoint" + if (wpCount == 1) "" else "s"
             val tpLabel = if (trackPointCount > 0) ", $trackPointCount track points" else ""
@@ -312,6 +387,24 @@ private fun TrailItem(
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
                 // ── Trail-level actions (visible counterparts to the header custom actions) ──
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (start != null) {
+                        TextButton(
+                            onClick = { onFollow(false) },
+                            modifier = Modifier.semantics { contentDescription = "Follow trail ${trail.name}" },
+                        ) { Text("Follow") }
+                        if (start.id != end?.id) {
+                            TextButton(
+                                onClick = { onFollow(true) },
+                                modifier = Modifier.semantics { contentDescription = "Follow trail ${trail.name} in reverse" },
+                            ) { Text("Reverse") }
+                        }
+                    }
+                    TextButton(
+                        onClick = onRecord,
+                        modifier = Modifier.semantics { contentDescription = "Start recording trail ${trail.name}" },
+                    ) { Text("Record") }
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(
                         onClick = onRename,
@@ -541,19 +634,27 @@ private fun SingleFieldDialog(
 ) {
     var value by remember { mutableStateOf(initial) }
     var error by remember { mutableStateOf<String?>(null) }
+    val stt =
+        rememberSttLauncher(prompt = title) {
+            value = it
+            error = null
+        }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
             Column {
-                OutlinedTextField(
-                    value = value,
-                    onValueChange = { value = it },
-                    label = { Text(label) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = value,
+                        onValueChange = { value = it },
+                        label = { Text(label) },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    SpeakButton(controller = stt)
+                }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },

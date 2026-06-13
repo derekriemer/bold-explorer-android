@@ -6,6 +6,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.boldexplorer.gpx.GpxFileWriter
 import com.boldexplorer.gpx.GpxParser
+import com.boldexplorer.location.FusedLocationProviderImpl
+import com.boldexplorer.location.TargetingStateHolder
+import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.gpx.GpxExporter
 import com.boldexplorer.shared.model.Collection
 import com.boldexplorer.shared.model.Trail
@@ -37,7 +40,15 @@ class TrailsViewModel
         private val trailRepo: TrailRepository,
         private val waypointRepo: WaypointRepository,
         private val collectionRepo: CollectionRepository,
+        private val targetingStateHolder: TargetingStateHolder,
+        locationProvider: FusedLocationProviderImpl,
     ) : ViewModel() {
+        // Current fix, used to decide which trail end is nearest for the end-proximity actions.
+        val currentLocation: StateFlow<LatLng?> =
+            locationProvider.locationFlow
+                .map { it?.let { s -> LatLng(s.lat, s.lon) } }
+                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
+
         val trails: StateFlow<List<Trail>> =
             trailRepo
                 .observeAll()
@@ -167,6 +178,32 @@ class TrailsViewModel
                 _trackExpandedTrailIds.value = _trackExpandedTrailIds.value - id
                 _toast.value = "Trail deleted"
             }
+        }
+
+        // ── GPS navigation requests (routed to the GPS screen via TargetingStateHolder) ──
+
+        /** Follow [trailId] from its start ([reversed] = false) or its end ([reversed] = true). */
+        fun followTrail(
+            trailId: Long,
+            reversed: Boolean,
+        ) {
+            targetingStateHolder.requestTrailFollow(trailId, reversed)
+            _toast.value = if (reversed) "Following trail in reverse" else "Following trail"
+        }
+
+        /** Begin auto-recording track points onto [trailId]. */
+        fun recordTrail(trailId: Long) {
+            targetingStateHolder.requestTrailRecord(trailId)
+            _toast.value = "Recording trail"
+        }
+
+        /** Set an endpoint waypoint as the GPS target (point navigation, not trail follow). */
+        fun navigateToWaypoint(
+            waypointId: Long,
+            label: String,
+        ) {
+            targetingStateHolder.requestWaypointTarget(waypointId)
+            _toast.value = "Navigating to $label"
         }
 
         fun addWaypointToTrail(
