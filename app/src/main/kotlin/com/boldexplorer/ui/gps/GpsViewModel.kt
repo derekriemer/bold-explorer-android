@@ -23,7 +23,6 @@ import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.deltaAngle
 import com.boldexplorer.shared.geo.distanceToSegmentMeters
 import com.boldexplorer.shared.geo.haversineDistanceMeters
-import com.boldexplorer.shared.geo.initialBearingDeg
 import com.boldexplorer.shared.geo.segmentFraction
 import com.boldexplorer.shared.location.LocationProvider
 import com.boldexplorer.shared.model.Collection
@@ -34,6 +33,7 @@ import com.boldexplorer.shared.navigation.CollectionExplorer
 import com.boldexplorer.shared.navigation.CollectionExplorerEvent
 import com.boldexplorer.shared.navigation.CollectionExplorerState
 import com.boldexplorer.shared.navigation.CollectionPoint
+import com.boldexplorer.shared.navigation.NavigationTargetResolver
 import com.boldexplorer.shared.navigation.TrailFollower
 import com.boldexplorer.shared.navigation.TrailFollowerEvent
 import com.boldexplorer.shared.navigation.TrailFollowerState
@@ -43,6 +43,7 @@ import com.boldexplorer.shared.navigation.TrailGuidanceState
 import com.boldexplorer.shared.navigation.TrailPoint
 import com.boldexplorer.shared.navigation.TrailRecordingMachine
 import com.boldexplorer.shared.navigation.TrailRecordingState
+import com.boldexplorer.shared.navigation.displayName
 import com.boldexplorer.shared.repository.CollectionRepository
 import com.boldexplorer.shared.repository.SettingsRepository
 import com.boldexplorer.shared.repository.TrailRepository
@@ -449,63 +450,22 @@ class GpsViewModel
 
         // ── Derived navigation values ─────────────────────────────────────────────────
 
-        // The active target is the trail follower's current waypoint while following a trail; otherwise
-        // it is the collection explorer's target. Trail follow takes precedence so audio/telemetry track
-        // the segment being walked rather than the nearest collection point.
-        val targetCoord: StateFlow<LatLng?> =
-            combine(
-                trailFollowState,
-                collectionExplorer.state,
-            ) { fs, explorer ->
-                val trailWp = (fs as? TrailFollowerState.Active)?.waypoints?.getOrNull(fs.currentIndex)
-                if (trailWp != null) {
-                    LatLng(trailWp.lat, trailWp.lon)
-                } else {
-                    (explorer as? CollectionExplorerState.Active)?.target?.waypoint?.let { LatLng(it.lat, it.lon) }
-                }
-            }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
-
-        val targetName: StateFlow<String?> =
-            combine(
-                trailFollowState,
-                collectionExplorer.state,
-            ) { fs, explorer ->
-                val trailWp = (fs as? TrailFollowerState.Active)?.waypoints?.getOrNull(fs.currentIndex)
-                if (trailWp != null) {
-                    trailWp.name
-                } else {
-                    (explorer as? CollectionExplorerState.Active)?.target?.let { collectionPointName(it) }
-                }
-            }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
-
-        val bearingDeg: StateFlow<Double?> =
-            combine(location, targetCoord) { loc, target ->
-                if (loc == null || target == null) {
-                    null
-                } else {
-                    initialBearingDeg(LatLng(loc.lat, loc.lon), target)
-                }
-            }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
-
-        val distanceM: StateFlow<Double?> =
-            combine(location, targetCoord) { loc, target ->
-                if (loc == null || target == null) {
-                    null
-                } else {
-                    haversineDistanceMeters(LatLng(loc.lat, loc.lon), target)
-                }
-            }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
-
-        // Uses GPS course-over-ground for target-relative display. Trail-follow beacons/speech use
-        // TrailGuidance instead so they point along the trail segment, not necessarily direct-to-target.
-        val relativeDeg: StateFlow<Double?> =
-            combine(navHeadingDeg, bearingDeg) { heading, bearing ->
-                if (heading == null || bearing == null) {
-                    null
-                } else {
-                    deltaAngle(heading, bearing)
-                }
-            }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
+        // The active-target precedence rule (trail-follow waypoint wins over the explorer target) and
+        // the bearing/distance/relative geometry live in a dedicated, JVM-tested resolver. The public
+        // flows below are thin facades so existing consumers (uiState, audio, alignment) are unchanged.
+        private val targetResolver =
+            NavigationTargetResolver(
+                scope = viewModelScope,
+                trailFollowState = trailFollowState,
+                explorerState = collectionExplorer.state,
+                location = location,
+                navHeadingDeg = navHeadingDeg,
+            )
+        val targetCoord: StateFlow<LatLng?> = targetResolver.targetCoord
+        val targetName: StateFlow<String?> = targetResolver.targetName
+        val bearingDeg: StateFlow<Double?> = targetResolver.bearingDeg
+        val distanceM: StateFlow<Double?> = targetResolver.distanceM
+        val relativeDeg: StateFlow<Double?> = targetResolver.relativeDeg
 
         // ── Alignment ─────────────────────────────────────────────────────────────────
 
@@ -775,12 +735,12 @@ class GpsViewModel
                             )
                         }
                     buildString {
-                        append(" Next: ${collectionPointName(next)}")
+                        append(" Next: ${next.displayName()}")
                         if (distanceText != null) append(", $distanceText")
                         append(".")
                     }
                 } ?: " No more unvisited points."
-            announce("Skipping ${collectionPointName(event.skipped)}.$nextText", speakInBackground = true, trigger = "CollectionSkip")
+            announce("Skipping ${event.skipped.displayName()}.$nextText", speakInBackground = true, trigger = "CollectionSkip")
         }
 
         fun clearCollectionVisited() {
@@ -1274,18 +1234,8 @@ class GpsViewModel
         private fun announceCollectionEvent(event: CollectionExplorerEvent?) {
             when (event) {
                 is CollectionExplorerEvent.PointReached -> {
-                    val name =
-                        when (val p = event.reached) {
-                            is CollectionPoint.Standalone -> p.waypoint.name
-                            is CollectionPoint.TrailEnd -> "${p.trail.name} (${if (p.isStart) "start" else "end"})"
-                        }
-                    val nextName =
-                        event.next?.let { p ->
-                            when (p) {
-                                is CollectionPoint.Standalone -> p.waypoint.name
-                                is CollectionPoint.TrailEnd -> "${p.trail.name} (${if (p.isStart) "start" else "end"})"
-                            }
-                        }
+                    val name = event.reached.displayName()
+                    val nextName = event.next?.displayName()
                     val text =
                         buildString {
                             append("Reached $name.")
@@ -1311,13 +1261,8 @@ class GpsViewModel
                 }
 
                 is CollectionExplorerEvent.NearbyPoint -> {
-                    val name =
-                        when (val p = event.point) {
-                            is CollectionPoint.Standalone -> p.waypoint.name
-                            is CollectionPoint.TrailEnd -> "${p.trail.name} (${if (p.isStart) "start" else "end"})"
-                        }
                     val dist = formatDistanceM(event.distanceM, settings.value.units)
-                    announce("Nearby: $name, $dist", speakInBackground = true, trigger = "NearbyPoint")
+                    announce("Nearby: ${event.point.displayName()}, $dist", speakInBackground = true, trigger = "NearbyPoint")
                 }
 
                 null -> {
@@ -1601,12 +1546,6 @@ class GpsViewModel
         private fun directionHint(relativeDeg: Double): String =
             com.boldexplorer.shared.navigation.BearingComputer
                 .toRelative(relativeDeg)
-
-        private fun collectionPointName(point: CollectionPoint): String =
-            when (point) {
-                is CollectionPoint.Standalone -> point.waypoint.name
-                is CollectionPoint.TrailEnd -> "${point.trail.name} (${if (point.isStart) "start" else "end"})"
-            }
 
         private fun formatDistanceM(
             meters: Double,

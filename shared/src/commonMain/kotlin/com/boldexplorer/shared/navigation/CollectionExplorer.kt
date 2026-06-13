@@ -33,6 +33,13 @@ sealed class CollectionPoint {
     }
 }
 
+/** Human-readable label for a collection point — a waypoint's name, or "Trail (start|end)". */
+fun CollectionPoint.displayName(): String =
+    when (this) {
+        is CollectionPoint.Standalone -> waypoint.name
+        is CollectionPoint.TrailEnd -> "${trail.name} (${if (isStart) "start" else "end"})"
+    }
+
 sealed class CollectionExplorerState {
     object Idle : CollectionExplorerState()
 
