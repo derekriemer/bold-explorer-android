@@ -17,6 +17,7 @@ import com.boldexplorer.location.GpsBackgroundMode
 import com.boldexplorer.location.GpsBackgroundSession
 import com.boldexplorer.location.LocationForegroundService
 import com.boldexplorer.location.TargetingStateHolder
+import com.boldexplorer.location.TrailTargetRequest
 import com.boldexplorer.shared.audio.AudioCueScheduler
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.deltaAngle
@@ -157,9 +158,15 @@ sealed interface GpsAction {
 
     data object MarkWaypoint : GpsAction
 
+    /** Open the waypoint naming dialog with speech-to-text launched immediately. */
+    data object MarkWaypointWithSpeech : GpsAction
+
     data object CopyCoordinates : GpsAction
 
     data object RecordNewTrail : GpsAction
+
+    /** Open the trail naming dialog with speech-to-text launched immediately. */
+    data object RecordNewTrailWithSpeech : GpsAction
 
     data object StartAutoRecord : GpsAction
 
@@ -180,11 +187,17 @@ sealed interface GpsAction {
  * confirms a name (see [GpsViewModel.onWaypointNamed] / [GpsViewModel.onTrailNamed]).
  */
 sealed interface PendingCreate {
+    /** When true, the naming dialog launches speech-to-text immediately on open (entry-point action). */
+    val launchStt: Boolean
+
     data class Waypoint(
         val capturedLocation: LocationSample,
+        override val launchStt: Boolean = false,
     ) : PendingCreate
 
-    data object Trail : PendingCreate
+    data class Trail(
+        override val launchStt: Boolean = false,
+    ) : PendingCreate
 }
 
 private data class TelemetryGroup(
@@ -696,6 +709,15 @@ class GpsViewModel
                     targetingStateHolder.clear()
                 }
             }
+            viewModelScope.launch {
+                targetingStateHolder.trailRequest.filterNotNull().collect { req ->
+                    when (req) {
+                        is TrailTargetRequest.Follow -> followTrailById(req.trailId, req.reversed)
+                        is TrailTargetRequest.Record -> recordTrailById(req.trailId)
+                    }
+                    targetingStateHolder.clearTrail()
+                }
+            }
             // Drive TrailFollower and CollectionExplorer on every GPS fix; surface events as announcements + audio.
             // Also handle auto-recording.
             viewModelScope.launch {
@@ -907,32 +929,56 @@ class GpsViewModel
         }
 
         fun startFollowTrailFromCollectionEnd(trailEnd: CollectionPoint.TrailEnd) {
-            val reversed = !trailEnd.isStart
+            followTrailById(trailEnd.trail.id, reversed = !trailEnd.isStart)
+        }
+
+        /**
+         * Follow [trailId] from its start ([reversed] = false) or end ([reversed] = true), fetching the
+         * ordered waypoints directly from the repository. Used both by the collection explore "follow from
+         * end" path and by trail-follow requests raised on the Trails screen (via [TargetingStateHolder]),
+         * so the caller need not have the trail selected first.
+         */
+        private fun followTrailById(
+            trailId: Long,
+            reversed: Boolean,
+        ) {
             viewModelScope.launch {
-                val wps = trailRepo.waypointsForTrail(trailEnd.trail.id)
+                val wps = trailRepo.waypointsForTrail(trailId)
                 val ordered = if (reversed) wps.reversed() else wps
                 if (ordered.isEmpty()) return@launch
+                val name = trailRepo.getById(trailId)?.name ?: "trail"
                 val points = ordered.map { TrailPoint(it.id, it.name, it.lat, it.lon, elevationM = it.elevM, kind = it.kind) }
                 val loc = location.value?.let { LatLng(it.lat, it.lon) }
                 val bearing =
                     location.value?.let { s ->
                         s.heading?.takeIf { (s.speed ?: 0.0) >= TrailGuidance.MIN_TRUSTED_SPEED_MPS }?.toFloat()
                     }
-                _selectedTrailId.value = trailEnd.trail.id
-                enterFollowing(trailEnd.trail.id)
+                _selectedTrailId.value = trailId
+                enterFollowing(trailId)
                 if (loc != null) trailFollower.startNearest(points, loc, bearing) else trailFollower.start(points)
                 refreshTrailGuidanceFromLatestLocation(resetOrdinaryThrottle = true)
                 backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, true)
                 startLocationService()
                 announce(
                     buildTrailStartAnnouncement(
-                        "Following ${trailEnd.trail.name}${if (reversed) " in reverse" else ""}",
+                        "Following $name${if (reversed) " in reverse" else ""}",
                         points,
                         loc,
                     ),
                     speakInBackground = true,
                     trigger = "TrailStartedFromCollection",
                 )
+            }
+        }
+
+        /** Select [trailId] and begin auto-recording onto it; used by Trails-screen record requests. */
+        private fun recordTrailById(trailId: Long) {
+            viewModelScope.launch {
+                val hasPoints = trailRepo.waypointsForTrail(trailId).isNotEmpty()
+                _selectedTrailId.value = trailId
+                recordingMachine.stop()
+                recordingMachine.selectTrail(trailId, hasPoints)
+                startAutoRecord()
             }
         }
 
@@ -1111,10 +1157,10 @@ class GpsViewModel
          * waypoint is created only once the user confirms a name in [onWaypointNamed]. Guarded on a
          * selected collection (the FAB is also greyed out when none is selected).
          */
-        fun markWaypoint() {
+        fun markWaypoint(launchStt: Boolean = false) {
             val loc = location.value ?: return
             if (_selectedCollectionId.value == null) return
-            _pendingCreate.value = PendingCreate.Waypoint(loc)
+            _pendingCreate.value = PendingCreate.Waypoint(loc, launchStt)
         }
 
         fun onWaypointNamed(
@@ -1482,9 +1528,9 @@ class GpsViewModel
 
         // ── Trail recording ───────────────────────────────────────────────────────────
 
-        fun recordNewTrail() {
+        fun recordNewTrail(launchStt: Boolean = false) {
             if (_selectedCollectionId.value == null) return
-            _pendingCreate.value = PendingCreate.Trail
+            _pendingCreate.value = PendingCreate.Trail(launchStt)
         }
 
         fun onTrailNamed(
@@ -1631,12 +1677,20 @@ class GpsViewModel
                     markWaypoint()
                 }
 
+                GpsAction.MarkWaypointWithSpeech -> {
+                    markWaypoint(launchStt = true)
+                }
+
                 GpsAction.CopyCoordinates -> {
                     copyCoordinates()
                 }
 
                 GpsAction.RecordNewTrail -> {
                     recordNewTrail()
+                }
+
+                GpsAction.RecordNewTrailWithSpeech -> {
+                    recordNewTrail(launchStt = true)
                 }
 
                 GpsAction.StartAutoRecord -> {

@@ -1,6 +1,5 @@
 package com.boldexplorer.ui.gps
 
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -16,12 +15,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.semantics.CustomAccessibilityAction
-import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
-import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.boldexplorer.shared.navigation.BearingComputer
@@ -29,9 +25,15 @@ import kotlinx.coroutines.delay
 
 /**
  * Modal that owns all bearing-alignment controls, replacing the inline alignment row on the GPS
- * screen. The live delta readout re-speaks every 5 s, but **only while TalkBack focus rests on it**,
- * so the modal never talks over the rest of the UI. Dismissing the modal does not stop alignment —
- * only the explicit "Stop alignment" action does.
+ * screen. TalkBack reads the delta once when focus lands on it (ordinary contentDescription, no live
+ * region — so it never spams as the compass drifts). For continuous guidance the user opts in via the
+ * "Automatically read alignment every 5 seconds" action/toggle; "Read alignment now" gives a one-shot.
+ *
+ * (We deliberately do NOT gate the ticker on input focus: Compose `onFocusChanged` tracks input focus,
+ * not TalkBack accessibility focus, so a focus-gated loop never fires for the screen-reader users this
+ * screen is built for. An explicit opt-in toggle is the reliable equivalent.)
+ *
+ * Dismissing the modal does not stop alignment — only the explicit "Stop alignment" action does.
  */
 @Composable
 fun AlignmentDialog(
@@ -42,13 +44,13 @@ fun AlignmentDialog(
     var showBearingInput by remember { mutableStateOf(false) }
     var bearingInput by remember { mutableStateOf("") }
     var bearingInputError by remember { mutableStateOf(false) }
-    var deltaFocused by remember { mutableStateOf(false) }
+    var autoRead by remember { mutableStateOf(false) }
 
-    // Focus-gated ticker: TalkBack reads the delta once when focus lands (via the polite live region);
-    // thereafter the app re-speaks it every 5 s for as long as focus stays put. Losing focus or
-    // alignment going inactive cancels the loop.
-    LaunchedEffect(deltaFocused, state.alignmentActive) {
-        if (deltaFocused && state.alignmentActive) {
+    // Opt-in ticker: while auto-read is on and alignment is active, speak the delta immediately and then
+    // every 5 s. Turning auto-read off or alignment going inactive cancels the loop.
+    LaunchedEffect(autoRead, state.alignmentActive) {
+        if (autoRead && state.alignmentActive) {
+            onAction(GpsAction.SpeakAlignmentDelta)
             while (true) {
                 delay(5_000L)
                 onAction(GpsAction.SpeakAlignmentDelta)
@@ -65,6 +67,21 @@ fun AlignmentDialog(
 
     val deltaActions =
         listOf(
+            CustomAccessibilityAction("Read alignment now") {
+                onAction(GpsAction.SpeakAlignmentDelta)
+                true
+            },
+            if (autoRead) {
+                CustomAccessibilityAction("Stop automatic alignment readout") {
+                    autoRead = false
+                    true
+                }
+            } else {
+                CustomAccessibilityAction("Automatically read alignment every 5 seconds") {
+                    autoRead = true
+                    true
+                }
+            },
             CustomAccessibilityAction("Align to compass heading") {
                 onAction(GpsAction.ResetAlignment)
                 true
@@ -101,14 +118,25 @@ fun AlignmentDialog(
                     modifier =
                         Modifier
                             .fillMaxWidth()
-                            .focusable()
-                            .onFocusChanged { deltaFocused = it.isFocused }
                             .semantics {
-                                liveRegion = LiveRegionMode.Polite
                                 contentDescription = "Alignment target $targetBearingText degrees, $deltaText"
                                 customActions = deltaActions
                             },
                 )
+
+                // Visible toggle for the opt-in 5 s readout (counterpart to the custom action).
+                TextButton(
+                    onClick = { autoRead = !autoRead },
+                    modifier =
+                        Modifier.semantics {
+                            contentDescription =
+                                if (autoRead) {
+                                    "Stop automatic alignment readout"
+                                } else {
+                                    "Automatically read alignment every 5 seconds"
+                                }
+                        },
+                ) { Text(if (autoRead) "Auto-read: On" else "Auto-read: Off") }
 
                 // Visible counterparts to the custom actions on the delta readout.
                 TextButton(

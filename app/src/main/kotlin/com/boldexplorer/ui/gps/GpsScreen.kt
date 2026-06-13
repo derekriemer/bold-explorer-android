@@ -66,20 +66,22 @@ fun GpsRoute(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val pendingCreate by viewModel.pendingCreate.collectAsStateWithLifecycle()
 
-    when (pendingCreate) {
+    when (val pending = pendingCreate) {
         is PendingCreate.Waypoint -> {
             CreateItemDialog(
                 title = "Name waypoint",
                 confirmLabel = "Mark",
+                launchSttOnOpen = pending.launchStt,
                 onConfirm = { name, tentative -> viewModel.onWaypointNamed(name, tentative) },
                 onDismiss = { viewModel.cancelPendingCreate() },
             )
         }
 
-        PendingCreate.Trail -> {
+        is PendingCreate.Trail -> {
             CreateItemDialog(
                 title = "Name trail",
                 confirmLabel = "Create",
+                launchSttOnOpen = pending.launchStt,
                 onConfirm = { name, tentative -> viewModel.onTrailNamed(name, tentative) },
                 onDismiss = { viewModel.cancelPendingCreate() },
             )
@@ -148,6 +150,17 @@ fun GpsScreen(
                                 state.location == null -> "Mark waypoint — no GPS fix yet"
                                 else -> "Mark waypoint at current location"
                             }
+                        // Speak-to-name is an entry-point action: it opens the naming dialog straight into
+                        // voice input (no custom actions on the dialog itself — it is a plain form).
+                        if (canMark) {
+                            customActions =
+                                listOf(
+                                    CustomAccessibilityAction("Speak new waypoint name") {
+                                        onAction(GpsAction.MarkWaypointWithSpeech)
+                                        true
+                                    },
+                                )
+                        }
                     },
             ) {
                 Text("+", style = MaterialTheme.typography.titleLarge)
@@ -641,6 +654,15 @@ private fun ContextualTrailActions(
                                         } else {
                                             "Record a new trail in the selected collection"
                                         }
+                                    if (state.selectedCollectionId != null) {
+                                        customActions =
+                                            listOf(
+                                                CustomAccessibilityAction("Speak new trail name") {
+                                                    onAction(GpsAction.RecordNewTrailWithSpeech)
+                                                    true
+                                                },
+                                            )
+                                    }
                                 },
                     ) { Text("Record New Trail") }
                     if (state.selectedTrailId != null) {
