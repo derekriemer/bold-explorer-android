@@ -149,6 +149,8 @@ sealed interface GpsAction {
 
     data object AlignToTarget : GpsAction
 
+    data object SpeakAlignmentDelta : GpsAction
+
     data object MarkWaypoint : GpsAction
 
     data object CopyCoordinates : GpsAction
@@ -1039,6 +1041,20 @@ class GpsViewModel
             bearingDeg.value?.let { setAlignmentBearing(it) }
         }
 
+        /**
+         * Speak the current alignment delta on demand. Driven by the alignment modal's focus-gated
+         * ticker: the modal only requests this while TalkBack focus rests on the delta readout, so the
+         * app never talks over the rest of the UI uninvited.
+         */
+        fun speakAlignmentDelta() {
+            if (!_alignmentActive.value) return
+            val delta = alignmentRelativeDeg.value ?: return
+            spokenGuidancePlayer.speak(
+                com.boldexplorer.shared.navigation.BearingComputer
+                    .toAlignmentRelative(delta),
+            )
+        }
+
         // ── Collection editing from GPS screen ───────────────────────────────────────
 
         fun addWaypointsToCollection(ids: Set<Long>) {
@@ -1568,6 +1584,10 @@ class GpsViewModel
                 GpsAction.AlignToTarget -> {
                     setAlignmentToBearing()
                     startAlignment()
+                }
+
+                GpsAction.SpeakAlignmentDelta -> {
+                    speakAlignmentDelta()
                 }
 
                 GpsAction.MarkWaypoint -> {

@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenuItem
@@ -128,8 +127,6 @@ fun GpsScreen(
     onAction: (GpsAction) -> Unit,
 ) {
     var showAlignmentDialog by remember { mutableStateOf(false) }
-    var alignmentInput by remember { mutableStateOf("") }
-    var alignmentInputError by remember { mutableStateOf(false) }
 
     Scaffold(
         modifier = Modifier.padding(paddingValues),
@@ -175,7 +172,14 @@ fun GpsScreen(
             )
 
             // ── Pinned telemetry (never scrolls off) ────────────────────────────────
-            TelemetryCard(state = state, onAction = onAction)
+            TelemetryCard(
+                state = state,
+                onAction = onAction,
+                onOpenAlignment = {
+                    if (!state.alignmentActive) onAction(GpsAction.StartAlignment)
+                    showAlignmentDialog = true
+                },
+            )
 
             // ── Announcement display (visual only — live region is in NavGraph) ──────
             Text(
@@ -211,17 +215,6 @@ fun GpsScreen(
             // ── Pinned contextual trail actions ─────────────────────────────────────
             ContextualTrailActions(state = state, active = active, onAction = onAction)
 
-            // ── Pinned alignment row ────────────────────────────────────────────────
-            AlignmentRow(
-                state = state,
-                onAction = onAction,
-                onEditBearing = {
-                    alignmentInput = ""
-                    alignmentInputError = false
-                    showAlignmentDialog = true
-                },
-            )
-
             Spacer(Modifier.height(8.dp))
 
             // ── Pinned navigation button ────────────────────────────────────────────
@@ -243,47 +236,12 @@ fun GpsScreen(
         }
     }
 
-    // ── Alignment bearing edit dialog ─────────────────────────────────────────────
+    // ── Alignment modal ───────────────────────────────────────────────────────────
     if (showAlignmentDialog) {
-        AlertDialog(
-            onDismissRequest = { showAlignmentDialog = false },
-            title = { Text("Set Alignment Bearing") },
-            text = {
-                Column {
-                    OutlinedTextField(
-                        value = alignmentInput,
-                        onValueChange = {
-                            alignmentInput = it
-                            alignmentInputError = false
-                        },
-                        label = { Text("Bearing (0–360°)") },
-                        isError = alignmentInputError,
-                        singleLine = true,
-                        modifier = Modifier.semantics { contentDescription = "Bearing in degrees, 0 to 360" },
-                    )
-                    if (alignmentInputError) {
-                        Text(
-                            "Enter a number between 0 and 360",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    val deg = alignmentInput.toDoubleOrNull()
-                    if (deg == null || deg < 0 || deg > 360) {
-                        alignmentInputError = true
-                    } else {
-                        onAction(GpsAction.SetAlignmentBearing(deg))
-                        showAlignmentDialog = false
-                    }
-                }) { Text("Set") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAlignmentDialog = false }) { Text("Cancel") }
-            },
+        AlignmentDialog(
+            state = state,
+            onAction = onAction,
+            onDismiss = { showAlignmentDialog = false },
         )
     }
 }
@@ -292,6 +250,7 @@ fun GpsScreen(
 private fun TelemetryCard(
     state: GpsUiState,
     onAction: (GpsAction) -> Unit,
+    onOpenAlignment: () -> Unit,
 ) {
     Card(
         modifier =
@@ -311,10 +270,18 @@ private fun TelemetryCard(
         Column(modifier = Modifier.padding(16.dp)) {
             val headingText = state.headingDeg?.let { BearingComputer.toCardinal(it) } ?: "—"
             val headingDegText = state.headingDeg?.let { "${"%.0f".format(it)}°" } ?: "—"
+            // The heading row is the entry point to the alignment modal (Open alignment custom action).
             TelemetryRow(
                 label = "Heading",
                 value = "$headingText ($headingDegText) · ${state.compassModeLabel}",
                 contentDesc = "Heading: $headingText $headingDegText, ${state.compassModeLabel}",
+                customActions =
+                    listOf(
+                        CustomAccessibilityAction("Open alignment") {
+                            onOpenAlignment()
+                            true
+                        },
+                    ),
             )
 
             val bearingLabel = state.targetName?.let { "Bearing to $it" } ?: "Bearing"
@@ -692,68 +659,21 @@ private fun ContextualTrailActions(
 }
 
 @Composable
-private fun AlignmentRow(
-    state: GpsUiState,
-    onAction: (GpsAction) -> Unit,
-    onEditBearing: () -> Unit,
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.padding(horizontal = 16.dp),
-    ) {
-        if (!state.alignmentActive) {
-            TextButton(
-                onClick = { onAction(GpsAction.StartAlignment) },
-                modifier = Modifier.semantics { contentDescription = "Start bearing alignment guidance" },
-            ) { Text("Set Bearing") }
-            if (state.bearingDeg != null) {
-                TextButton(
-                    onClick = { onAction(GpsAction.AlignToTarget) },
-                    modifier = Modifier.semantics { contentDescription = "Align audio to waypoint bearing" },
-                ) { Text("Align to Target") }
-            }
-        } else {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                val targetBearingText = "%.0f".format(state.alignmentBearingDeg ?: 0.0)
-                val deltaText =
-                    state.alignmentRelativeDeg?.let { delta ->
-                        BearingComputer.toAlignmentRelative(delta)
-                    } ?: "Waiting for compass…"
-                Text(
-                    "Target: $targetBearingText° — $deltaText",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Row {
-                    TextButton(
-                        onClick = { onAction(GpsAction.ResetAlignment) },
-                        modifier = Modifier.semantics { contentDescription = "Reset alignment to current compass heading" },
-                    ) { Text("Reset") }
-                    TextButton(
-                        onClick = onEditBearing,
-                        modifier = Modifier.semantics { contentDescription = "Edit alignment bearing" },
-                    ) { Text("Edit") }
-                    TextButton(
-                        onClick = { onAction(GpsAction.StopAlignment) },
-                        modifier = Modifier.semantics { contentDescription = "Stop alignment guidance" },
-                    ) { Text("Stop") }
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun TelemetryRow(
     label: String,
     value: String,
     contentDesc: String,
+    customActions: List<CustomAccessibilityAction> = emptyList(),
 ) {
     Row(
         modifier =
             Modifier
                 .fillMaxWidth()
                 .padding(vertical = 2.dp)
-                .clearAndSetSemantics { contentDescription = contentDesc },
+                .clearAndSetSemantics {
+                    contentDescription = contentDesc
+                    if (customActions.isNotEmpty()) this.customActions = customActions
+                },
     ) {
         Text(
             "$label:",
