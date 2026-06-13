@@ -141,9 +141,10 @@ class TrailsViewModel
             collectionId: Long,
             name: String,
             description: String?,
+            tentative: Boolean = false,
         ) {
             viewModelScope.launch {
-                val id = trailRepo.create(collectionId, name, description)
+                val id = trailRepo.create(collectionId, name, description, tentative)
                 _expandedTrailIds.value = _expandedTrailIds.value + id
                 _toast.value = "Trail created"
             }

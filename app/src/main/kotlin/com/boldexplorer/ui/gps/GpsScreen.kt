@@ -53,6 +53,7 @@ import com.boldexplorer.shared.navigation.CollectionExplorerState
 import com.boldexplorer.shared.navigation.CollectionPoint
 import com.boldexplorer.shared.navigation.CollectionTargeting
 import com.boldexplorer.shared.navigation.TrailFollowerState
+import com.boldexplorer.ui.common.CreateItemDialog
 import com.boldexplorer.ui.common.MultiSelectItemDialog
 
 @Composable
@@ -61,6 +62,31 @@ fun GpsRoute(
     viewModel: GpsViewModel,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val pendingCreate by viewModel.pendingCreate.collectAsStateWithLifecycle()
+
+    when (pendingCreate) {
+        is PendingCreate.Waypoint -> {
+            CreateItemDialog(
+                title = "Name waypoint",
+                confirmLabel = "Mark",
+                onConfirm = { name, tentative -> viewModel.onWaypointNamed(name, tentative) },
+                onDismiss = { viewModel.cancelPendingCreate() },
+            )
+        }
+
+        PendingCreate.Trail -> {
+            CreateItemDialog(
+                title = "Name trail",
+                confirmLabel = "Create",
+                onConfirm = { name, tentative -> viewModel.onTrailNamed(name, tentative) },
+                onDismiss = { viewModel.cancelPendingCreate() },
+            )
+        }
+
+        null -> {
+            Unit
+        }
+    }
 
     val permissionLauncher =
         rememberLauncherForActivityResult(
@@ -105,10 +131,11 @@ fun GpsScreen(
     Scaffold(
         modifier = Modifier.padding(paddingValues),
         floatingActionButton = {
+            val canMark = state.selectedCollectionId != null
             FloatingActionButton(
-                onClick = { onAction(GpsAction.MarkWaypoint) },
+                onClick = { if (canMark) onAction(GpsAction.MarkWaypoint) },
                 containerColor =
-                    if (state.location != null) {
+                    if (canMark && state.location != null) {
                         MaterialTheme.colorScheme.primaryContainer
                     } else {
                         MaterialTheme.colorScheme.surfaceVariant
@@ -116,10 +143,10 @@ fun GpsScreen(
                 modifier =
                     Modifier.semantics {
                         contentDescription =
-                            if (state.location != null) {
-                                "Mark waypoint at current location"
-                            } else {
-                                "Mark waypoint — no GPS fix yet"
+                            when {
+                                !canMark -> "Mark waypoint — select a collection first"
+                                state.location == null -> "Mark waypoint — no GPS fix yet"
+                                else -> "Mark waypoint at current location"
                             }
                     },
             ) {

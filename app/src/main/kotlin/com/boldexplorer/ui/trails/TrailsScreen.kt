@@ -17,6 +17,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -37,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -176,8 +178,8 @@ fun TrailsScreen(
             title = "New Trail",
             confirmLabel = "Create",
             collections = collections,
-            onConfirm = { collectionId, name, desc ->
-                viewModel.create(collectionId, name, desc)
+            onConfirm = { collectionId, name, desc, tentative ->
+                viewModel.create(collectionId, name, desc, tentative)
                 showAddDialog = false
             },
             onDismiss = { showAddDialog = false },
@@ -395,11 +397,12 @@ private fun NameDescDialog(
     title: String,
     confirmLabel: String,
     collections: List<Collection>,
-    onConfirm: (collectionId: Long, name: String, description: String?) -> Unit,
+    onConfirm: (collectionId: Long, name: String, description: String?, tentative: Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var name by remember { mutableStateOf("") }
     var desc by remember { mutableStateOf("") }
+    var tentative by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var selectedCollectionId by remember(collections) { mutableStateOf(collections.firstOrNull()?.id) }
     var expanded by remember { mutableStateOf(false) }
@@ -455,6 +458,21 @@ private fun NameDescDialog(
                         }
                     }
                 }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = tentative, onCheckedChange = { tentative = it })
+                    Text(
+                        "Mark as tentative",
+                        modifier =
+                            Modifier.clearAndSetSemantics {
+                                contentDescription =
+                                    if (tentative) {
+                                        "Mark as tentative, checked"
+                                    } else {
+                                        "Mark as tentative, not checked"
+                                    }
+                            },
+                    )
+                }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },
@@ -466,7 +484,7 @@ private fun NameDescDialog(
                 } else if (collectionId == null) {
                     error = "Select a collection"
                 } else {
-                    onConfirm(collectionId, name.trim(), desc.trim().ifBlank { null })
+                    onConfirm(collectionId, name.trim(), desc.trim().ifBlank { null }, tentative)
                 }
             }) { Text(confirmLabel) }
         },

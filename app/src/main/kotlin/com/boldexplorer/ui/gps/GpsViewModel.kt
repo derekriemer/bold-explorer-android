@@ -181,6 +181,19 @@ sealed interface GpsAction {
     ) : GpsAction
 }
 
+/**
+ * A creation the user has initiated but not yet named. Marking a waypoint or starting a trail captures
+ * the necessary context and opens the naming dialog; nothing is written to the database until the user
+ * confirms a name (see [GpsViewModel.onWaypointNamed] / [GpsViewModel.onTrailNamed]).
+ */
+sealed interface PendingCreate {
+    data class Waypoint(
+        val capturedLocation: LocationSample,
+    ) : PendingCreate
+
+    data object Trail : PendingCreate
+}
+
 private data class TelemetryGroup(
     val location: LocationSample?,
     val headingDeg: Double?,
@@ -329,6 +342,11 @@ class GpsViewModel
 
         private val _selectedCollectionId = MutableStateFlow<Long?>(null)
         val selectedCollectionId: StateFlow<Long?> = _selectedCollectionId.asStateFlow()
+
+        // ── Pending creation (drives the naming dialog; no DB write until named) ──────
+
+        private val _pendingCreate = MutableStateFlow<PendingCreate?>(null)
+        val pendingCreate: StateFlow<PendingCreate?> = _pendingCreate.asStateFlow()
 
         // ── Trail recording state (declared early; used in targetInputs below) ────────
 
@@ -1057,20 +1075,40 @@ class GpsViewModel
 
         // ── Waypoint marking ──────────────────────────────────────────────────────────
 
+        /**
+         * Capture the current location and open the naming dialog. No DB write happens here — the
+         * waypoint is created only once the user confirms a name in [onWaypointNamed]. Guarded on a
+         * selected collection (the FAB is also greyed out when none is selected).
+         */
         fun markWaypoint() {
             val loc = location.value ?: return
+            if (_selectedCollectionId.value == null) return
+            _pendingCreate.value = PendingCreate.Waypoint(loc)
+        }
+
+        fun onWaypointNamed(
+            name: String,
+            tentative: Boolean,
+        ) {
+            val pending = _pendingCreate.value as? PendingCreate.Waypoint ?: return
             val collectionId = _selectedCollectionId.value ?: return
-            val name = "WP ${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())}"
+            val loc = pending.capturedLocation
+            _pendingCreate.value = null
             viewModelScope.launch {
-                val waypointId = waypointRepo.create(collectionId, name, loc.lat, loc.lon, loc.altitude, null)
-                if (_scope.value == GpsScope.TRAIL) {
-                    _selectedTrailId.value?.let { trailId ->
-                        waypointRepo.attach(trailId, waypointId)
-                    }
+                val waypointId =
+                    waypointRepo.create(collectionId, name, loc.lat, loc.lon, loc.altitude, null, tentative)
+                // While recording, also link this named waypoint to the trail. It stays a user
+                // waypoint (collection-owned); only auto-captured points are kind=track_point.
+                if (_autoRecording.value) {
+                    _selectedTrailId.value?.let { trailId -> waypointRepo.attach(trailId, waypointId) }
                 }
                 _announcement.value = "Waypoint marked: $name"
                 // waypoints StateFlow updates automatically via observeAll()
             }
+        }
+
+        fun cancelPendingCreate() {
+            _pendingCreate.value = null
         }
 
         // ── Permissions ───────────────────────────────────────────────────────────────
@@ -1404,10 +1442,19 @@ class GpsViewModel
         // ── Trail recording ───────────────────────────────────────────────────────────
 
         fun recordNewTrail() {
+            if (_selectedCollectionId.value == null) return
+            _pendingCreate.value = PendingCreate.Trail
+        }
+
+        fun onTrailNamed(
+            name: String,
+            tentative: Boolean,
+        ) {
+            if (_pendingCreate.value !is PendingCreate.Trail) return
             val collectionId = _selectedCollectionId.value ?: return
+            _pendingCreate.value = null
             viewModelScope.launch {
-                val name = "Trail ${SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()).format(Date())}"
-                val id = trailRepo.create(collectionId, name, null)
+                val id = trailRepo.create(collectionId, name, null, tentative)
                 _selectedTrailId.value = id
                 // trails and trailWaypoints update automatically via observe flows
                 _announcement.value = "New trail: $name. Tap mark to add waypoints, or use auto-record."

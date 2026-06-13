@@ -193,6 +193,7 @@ class WaypointsViewModel
             lat: Double,
             lon: Double,
             elevM: Double?,
+            tentative: Boolean = false,
         ) {
             val collectionId =
                 _collectionFilter.value ?: run {
@@ -200,7 +201,7 @@ class WaypointsViewModel
                     return
                 }
             viewModelScope.launch {
-                waypointRepo.create(collectionId, name, lat, lon, elevM, null)
+                waypointRepo.create(collectionId, name, lat, lon, elevM, null, tentative)
                 _toast.value = "Waypoint added"
             }
         }

@@ -16,6 +16,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -38,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -204,8 +206,9 @@ fun WaypointsScreen(
             title = "Add Waypoint",
             confirmLabel = "Add",
             initial = null,
-            onConfirm = { name, lat, lon, elev ->
-                viewModel.create(name, lat, lon, elev)
+            showTentative = true,
+            onConfirm = { name, lat, lon, elev, tentative ->
+                viewModel.create(name, lat, lon, elev, tentative)
                 showAddDialog = false
             },
             onDismiss = { showAddDialog = false },
@@ -218,7 +221,7 @@ fun WaypointsScreen(
             title = "Edit Waypoint",
             confirmLabel = "Save",
             initial = wp,
-            onConfirm = { name, lat, lon, elev ->
+            onConfirm = { name, lat, lon, elev, _ ->
                 viewModel.update(wp.id, name, lat, lon, elev)
                 editTarget = null
             },
@@ -451,13 +454,15 @@ private fun WaypointEditDialog(
     title: String,
     confirmLabel: String,
     initial: Waypoint?,
-    onConfirm: (name: String, lat: Double, lon: Double, elevM: Double?) -> Unit,
+    showTentative: Boolean = false,
+    onConfirm: (name: String, lat: Double, lon: Double, elevM: Double?, tentative: Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var name by remember { mutableStateOf(initial?.name ?: "") }
     var lat by remember { mutableStateOf(initial?.lat?.toString() ?: "") }
     var lon by remember { mutableStateOf(initial?.lon?.toString() ?: "") }
     var elev by remember { mutableStateOf(initial?.elevM?.toString() ?: "") }
+    var tentative by remember { mutableStateOf(initial?.tentative ?: false) }
     var error by remember { mutableStateOf<String?>(null) }
 
     AlertDialog(
@@ -496,6 +501,23 @@ private fun WaypointEditDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (showTentative) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = tentative, onCheckedChange = { tentative = it })
+                        Text(
+                            "Mark as tentative",
+                            modifier =
+                                Modifier.clearAndSetSemantics {
+                                    contentDescription =
+                                        if (tentative) {
+                                            "Mark as tentative, checked"
+                                        } else {
+                                            "Mark as tentative, not checked"
+                                        }
+                                },
+                        )
+                    }
+                }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },
@@ -507,7 +529,7 @@ private fun WaypointEditDialog(
                     name.isBlank() -> error = "Name required"
                     latD == null || latD !in -90.0..90.0 -> error = "Latitude must be -90 to 90"
                     lonD == null || lonD !in -180.0..180.0 -> error = "Longitude must be -180 to 180"
-                    else -> onConfirm(name.trim(), latD, lonD, elev.toDoubleOrNull())
+                    else -> onConfirm(name.trim(), latD, lonD, elev.toDoubleOrNull(), tentative)
                 }
             }) { Text(confirmLabel) }
         },
