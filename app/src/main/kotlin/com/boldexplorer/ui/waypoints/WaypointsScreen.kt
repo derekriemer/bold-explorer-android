@@ -55,7 +55,9 @@ import com.boldexplorer.shared.model.Waypoint
 import com.boldexplorer.shared.navigation.BearingComputer
 import com.boldexplorer.ui.common.CreateItemDialog
 import com.boldexplorer.ui.common.MultiSelectItemDialog
+import com.boldexplorer.ui.common.SpeakButton
 import com.boldexplorer.ui.common.ToastMessage
+import com.boldexplorer.ui.common.rememberSttLauncher
 import com.boldexplorer.ui.common.useToast
 import com.boldexplorer.shared.model.Collection as ExplorerCollection
 
@@ -558,19 +560,23 @@ private fun WaypointEditDialog(
     var elev by remember { mutableStateOf(initial?.elevM?.toString() ?: "") }
     var tentative by remember { mutableStateOf(initial?.tentative ?: false) }
     var error by remember { mutableStateOf<String?>(null) }
+    val stt = rememberSttLauncher(prompt = title) { name = it }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text("Name") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    SpeakButton(controller = stt)
+                }
                 OutlinedTextField(
                     value = lat,
                     onValueChange = { lat = it },

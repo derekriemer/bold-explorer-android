@@ -1,11 +1,5 @@
 package com.boldexplorer.ui.common
 
-import android.app.Activity
-import android.content.Intent
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -26,10 +20,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
 /**
@@ -53,44 +45,21 @@ fun CreateItemDialog(
     onConfirm: (name: String, tentative: Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val context = LocalContext.current
-    val sttAvailable = remember { SpeechRecognizer.isRecognitionAvailable(context) }
-
     var name by remember { mutableStateOf(initialName) }
     var tentative by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
     val focusRequester = remember { FocusRequester() }
 
-    val sttLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            if (result.resultCode == Activity.RESULT_OK) {
-                result.data
-                    ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
-                    ?.firstOrNull()
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let { spoken ->
-                        name = spoken
-                        error = null
-                    }
-            }
+    val stt =
+        rememberSttLauncher(prompt = title) { spoken ->
+            name = spoken
+            error = null
         }
 
-    fun launchStt() {
-        val intent =
-            Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(
-                    RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
-                )
-                putExtra(RecognizerIntent.EXTRA_PROMPT, title)
-            }
-        sttLauncher.launch(intent)
-    }
-
     LaunchedEffect(Unit) {
-        if (launchSttOnOpen && sttAvailable) {
-            launchStt()
+        if (launchSttOnOpen && stt.available) {
+            stt.launch()
         } else {
             focusRequester.requestFocus()
         }
@@ -119,19 +88,7 @@ fun CreateItemDialog(
                                 .weight(1f)
                                 .focusRequester(focusRequester),
                     )
-                    if (sttAvailable) {
-                        TextButton(
-                            onClick = { launchStt() },
-                            modifier =
-                                Modifier
-                                    .padding(start = 4.dp)
-                                    .semantics {
-                                        contentDescription = "Speak name"
-                                    },
-                        ) {
-                            Text("Speak")
-                        }
-                    }
+                    SpeakButton(controller = stt, modifier = Modifier.padding(start = 4.dp))
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
