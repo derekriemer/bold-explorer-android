@@ -55,6 +55,7 @@ data class AdvancementReason(
     val crossTrackM: Double?, // null for radial/divergence advances
     val headingDifferenceDeg: Double?, // null when bearingDeg was not provided
     val closestApproachM: Double, // closest the user got to this target
+    val smoothedBearingUsed: Boolean = false, // true when projection check fell back to smoothedBearingDeg
 )
 
 // Port of src/composables/useFollowTrail.ts.
@@ -129,16 +130,20 @@ class TrailFollower(
      * Process a GPS fix. Returns a [TrailFollowerEvent] when the user advances past a waypoint,
      * or null when no threshold was crossed.
      *
-     * @param location  Current 2D position.
-     * @param altitudeM GPS altitude in metres (used for 3D distance reporting only). Pass null
-     *                  when unavailable.
-     * @param bearingDeg Course-over-ground from the GPS fix in degrees [0, 360). Only meaningful
-     *                   above ~1 m/s; pass null when speed is insufficient.
+     * @param location          Current 2D position.
+     * @param altitudeM         GPS altitude in metres (used for 3D distance reporting only). Pass
+     *                          null when unavailable.
+     * @param bearingDeg        Course-over-ground from the GPS fix in degrees [0, 360). Only
+     *                          meaningful above ~1 m/s; pass null when speed is insufficient.
+     * @param smoothedBearingDeg Smoothed GPS heading from [GpsHeadingSmoother] in degrees [0, 360).
+     *                          Used as a fallback for the projection heading check when [bearingDeg]
+     *                          is null. No-op for existing callers (defaults to null).
      */
     fun onLocationUpdate(
         location: LatLng,
         altitudeM: Double? = null,
         bearingDeg: Float? = null,
+        smoothedBearingDeg: Float? = null,
     ): TrailFollowerEvent? {
         val current = _state.value as? TrailFollowerState.Active ?: return null
         val target = current.waypoints[current.currentIndex]
@@ -162,13 +167,16 @@ class TrailFollower(
             val t = segmentFraction(location, prevLL, targetLL)
             val crossTrack = distanceToSegmentMeters(location, prevLL, targetLL)
             val segBearing = initialBearingDeg(prevLL, targetLL)
-            val headingDiffDeg = bearingDeg?.let { angleDifferenceDeg(it.toDouble(), segBearing) }
+            // Use per-fix COG when available; fall back to smoothed heading for slow walkers.
+            val effectiveBearing = bearingDeg ?: smoothedBearingDeg
+            val usedSmoothed = bearingDeg == null && smoothedBearingDeg != null
+            val headingDiffDeg = effectiveBearing?.let { angleDifferenceDeg(it.toDouble(), segBearing) }
             val headingOk = headingDiffDeg == null || headingDiffDeg <= HEADING_TOLERANCE_DEG
             if (t >= INCOMING_ADVANCE_FRACTION &&
                 crossTrack <= current.thresholdM * CROSS_TRACK_FACTOR &&
                 headingOk
             ) {
-                return fireAdvance(current, location, altitudeM, t, crossTrack, headingDiffDeg, "projection")
+                return fireAdvance(current, location, altitudeM, t, crossTrack, headingDiffDeg, "projection", usedSmoothed)
             }
         }
 
@@ -199,6 +207,7 @@ class TrailFollower(
         crossTrackM: Double? = null,
         headingDiffDeg: Double? = null,
         mechanism: String = "radial",
+        smoothedBearingUsed: Boolean = false,
     ): TrailFollowerEvent {
         val capturedClosest = closestApproachM
         val dToTarget =
@@ -210,7 +219,7 @@ class TrailFollower(
 
         fun emitCallback() =
             onAdvancement?.invoke(
-                AdvancementReason(mechanism, dToTarget, segFraction, crossTrackM, headingDiffDeg, capturedClosest),
+                AdvancementReason(mechanism, dToTarget, segFraction, crossTrackM, headingDiffDeg, capturedClosest, smoothedBearingUsed),
             )
 
         return if (current.currentIndex < current.waypoints.size - 1) {

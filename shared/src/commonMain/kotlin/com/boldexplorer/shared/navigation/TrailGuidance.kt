@@ -10,6 +10,7 @@ import kotlin.math.abs
 data class TrustedCourse(
     val deg: Double,
     val timestampMs: Long,
+    val isSmoothed: Boolean = false,
 )
 
 data class TrailGuidanceState(
@@ -20,22 +21,35 @@ data class TrailGuidanceState(
     val desiredCourseDeg: Double,
     val relativeDeg: Double?,
     val courseIsFresh: Boolean,
+    val courseIsSmoothed: Boolean = false,
 )
 
 object TrailGuidance {
     const val MIN_TRUSTED_SPEED_MPS = 1.0
     const val TRUSTED_COURSE_HOLD_MS = 10_000L
 
+    /**
+     * Update the trusted course from a new GPS fix.
+     *
+     * Priority:
+     * 1. Instantaneous COG at speed ≥ [MIN_TRUSTED_SPEED_MPS] → fresh, unsmoothed course.
+     * 2. [smoothedHeading] (already confidence-gated by [GpsHeadingSmoother]) → smoothed course,
+     *    timestamped to the newest sample that contributed so hold-expiry reflects motion age.
+     * 3. Neither → hold [previous] (up to [TRUSTED_COURSE_HOLD_MS]).
+     */
     fun updateTrustedCourse(
         previous: TrustedCourse?,
         sample: LocationSample,
+        smoothedHeading: SmoothedHeading? = null,
     ): TrustedCourse? {
         val heading = sample.heading
         val speed = sample.speed ?: 0.0
-        return if (heading != null && speed >= MIN_TRUSTED_SPEED_MPS) {
-            TrustedCourse(((heading % 360.0) + 360.0) % 360.0, sample.timestamp)
-        } else {
-            previous
+        return when {
+            heading != null && speed >= MIN_TRUSTED_SPEED_MPS ->
+                TrustedCourse(((heading % 360.0) + 360.0) % 360.0, sample.timestamp, isSmoothed = false)
+            smoothedHeading != null ->
+                TrustedCourse(smoothedHeading.deg, smoothedHeading.newestTimestampMs, isSmoothed = true)
+            else -> previous
         }
     }
 
@@ -62,6 +76,7 @@ object TrailGuidance {
             desiredCourseDeg = desiredCourse,
             relativeDeg = freshCourse?.let { deltaAngle(it.deg, desiredCourse) },
             courseIsFresh = freshCourse != null,
+            courseIsSmoothed = freshCourse?.isSmoothed ?: false,
         )
     }
 

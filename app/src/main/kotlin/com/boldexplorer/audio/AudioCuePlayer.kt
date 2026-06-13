@@ -8,6 +8,7 @@ import com.boldexplorer.BuildConfig
 import com.boldexplorer.shared.audio.AudioCueEvent
 import com.boldexplorer.shared.audio.AudioCueScheduler
 import com.boldexplorer.shared.model.LocationSample
+import com.boldexplorer.shared.navigation.SmoothedHeading
 import com.boldexplorer.shared.navigation.TrailGuidanceState
 import com.boldexplorer.shared.repository.SettingsRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -59,6 +60,7 @@ class AudioCuePlayer
         private var relativeDegFlow: StateFlow<Double?>? = null
         private var locationFlow: StateFlow<LocationSample?>? = null
         private var trailGuidanceFlow: StateFlow<TrailGuidanceState?>? = null
+        private var smoothedHeadingFlow: StateFlow<SmoothedHeading?>? = null
 
         private val audioManager = context.getSystemService(AudioManager::class.java)
         private val focusAttributes =
@@ -75,6 +77,7 @@ class AudioCuePlayer
             beaconCuesEnabled: StateFlow<Boolean>,
             location: StateFlow<LocationSample?>,
             trailGuidance: StateFlow<TrailGuidanceState?>,
+            smoothedHeading: StateFlow<SmoothedHeading?>,
         ) {
             if (playerJob != null) return
 
@@ -82,6 +85,7 @@ class AudioCuePlayer
             relativeDegFlow = relativeDeg
             locationFlow = location
             trailGuidanceFlow = trailGuidance
+            smoothedHeadingFlow = smoothedHeading
 
             audioEngine.start()
             val schedulerJob = scheduler.start(scope, accuracyM, relativeDeg, alignmentActive, beaconCuesEnabled)
@@ -103,6 +107,7 @@ class AudioCuePlayer
             relativeDegFlow = null
             locationFlow = null
             trailGuidanceFlow = null
+            smoothedHeadingFlow = null
             audioEngine.stop()
             abandonAudioFocus()
         }
@@ -116,11 +121,13 @@ class AudioCuePlayer
             val accM = accuracyMFlow?.value
             val loc = locationFlow?.value
             val guidance = trailGuidanceFlow?.value
+            val smoothed = smoothedHeadingFlow?.value
 
             when (event) {
                 is AudioCueEvent.DirectionalBeacon -> {
                     audioEngine.playDirectionalBeacon(event.pan, event.pitchHz)
                     scope.launch {
+                        val courseIsSmoothed = guidance?.courseIsSmoothed ?: false
                         val extra =
                             buildMap<String, Any?> {
                                 if (BuildConfig.SHOW_DEBUG_FEATURES) {
@@ -131,6 +138,13 @@ class AudioCuePlayer
                                         it.heading?.let { v -> put("userHeading", v) }
                                         it.speed?.let { v -> put("userSpeed_ms", v) }
                                         it.accuracy?.let { v -> put("userAccuracy_m", v) }
+                                    }
+                                    put("courseIsSmoothed", courseIsSmoothed)
+                                    smoothed?.let {
+                                        put("smoothedHeadingDeg", "%.1f".format(it.deg).toDouble())
+                                        put("smoothedConfidence", "%.2f".format(it.confidence).toDouble())
+                                        put("smoothedSampleCount", it.sampleCount)
+                                        put("smoothedAgeMs", nowMs - it.newestTimestampMs)
                                     }
                                 }
                                 guidance?.let {
@@ -147,6 +161,7 @@ class AudioCuePlayer
                                     buildString {
                                         if (relDeg != null) append("relativeDeg=${"%.1f".format(relDeg)}°")
                                         if (accM != null) append(", accuracy=${"%.1f".format(accM)}m")
+                                        if (courseIsSmoothed) append(", smoothed=true")
                                     }.trimStart(',', ' '),
                                 outputs = "pan=${"%.3f".format(event.pan)}, pitchHz=${"%.0f".format(event.pitchHz)} Hz",
                                 played = "Tone @ ${"%.0f".format(event.pitchHz)} Hz",

@@ -5,6 +5,7 @@ import kotlin.math.abs
 import kotlin.math.sqrt
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -414,5 +415,53 @@ class TrailFollowerTest {
         val event = f.onLocationUpdate(LatLng(0.0, 0.0), altitudeM = 100.0) as TrailFollowerEvent.WaypointReached
         // wp2 has no elevationM — should ignore altitudeM and use haversine only (~10m)
         assertTrue(event.distanceToNextM < 20.0, "expected 2D haversine (~10m), got ${event.distanceToNextM}")
+    }
+
+    // ── Smoothed bearing (slow-walker heading fallback) ───────────────────────
+    //
+    // Reuses the spA/spB/spC geometry (~100 m apart going north, threshold = 5 m).
+
+    @Test
+    fun incomingProjection_firesWithSmoothedBearing_whenNoBearingDeg() {
+        val f = TrailFollower()
+        var reason: AdvancementReason? = null
+        f.onAdvancement = { reason = it }
+        f.start(listOf(spA, spB, spC), thresholdM = 5.0)
+        f.onLocationUpdate(LatLng(spA.lat, spA.lon)) // advance to spB target
+
+        val at95pct = LatLng(0.000855, 0.0) // 95% along spA→spB
+        // bearingDeg = null (slow walker), smoothedBearingDeg = 0° (North — agrees with segment)
+        val event = f.onLocationUpdate(at95pct, bearingDeg = null, smoothedBearingDeg = 0f)
+        assertIs<TrailFollowerEvent.WaypointReached>(event)
+        assertNotNull(reason)
+        assertEquals("projection", reason!!.mechanism)
+        assertTrue(reason!!.smoothedBearingUsed)
+    }
+
+    @Test
+    fun incomingProjection_doesNotFire_whenSmoothedBearingOpposesSegment() {
+        val f = TrailFollower()
+        f.start(listOf(spA, spB, spC), thresholdM = 5.0)
+        f.onLocationUpdate(LatLng(spA.lat, spA.lon)) // advance to spB target
+
+        val at95pct = LatLng(0.000855, 0.0)
+        // Smoothed bearing 180° (South) — opposite to Northbound segment
+        val event = f.onLocationUpdate(at95pct, bearingDeg = null, smoothedBearingDeg = 180f)
+        assertNull(event)
+    }
+
+    @Test
+    fun smoothedBearingUsed_isFalse_whenBearingDegProvided() {
+        val f = TrailFollower()
+        var reason: AdvancementReason? = null
+        f.onAdvancement = { reason = it }
+        f.start(listOf(spA, spB, spC), thresholdM = 5.0)
+        f.onLocationUpdate(LatLng(spA.lat, spA.lon))
+
+        val at95pct = LatLng(0.000855, 0.0)
+        // Both bearingDeg and smoothedBearingDeg provided — bearingDeg takes precedence
+        f.onLocationUpdate(at95pct, bearingDeg = 0f, smoothedBearingDeg = 0f)
+        assertNotNull(reason)
+        assertFalse(reason!!.smoothedBearingUsed)
     }
 }

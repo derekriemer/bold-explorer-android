@@ -2,6 +2,7 @@ package com.boldexplorer.location
 
 import com.boldexplorer.audio.AudioCuePlayer
 import com.boldexplorer.shared.model.LocationSample
+import com.boldexplorer.shared.navigation.SmoothedHeading
 import com.boldexplorer.shared.navigation.TrailGuidanceState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -32,6 +33,7 @@ data class BeaconAudioInputs(
     val beaconCuesEnabled: StateFlow<Boolean>,
     val location: StateFlow<LocationSample?>,
     val trailGuidance: StateFlow<TrailGuidanceState?>,
+    val smoothedHeading: StateFlow<SmoothedHeading?>,
 )
 
 /**
@@ -113,6 +115,7 @@ class GpsBackgroundSession
                 beaconCuesEnabled = inputs.beaconCuesEnabled,
                 location = inputs.location,
                 trailGuidance = inputs.trailGuidance,
+                smoothedHeading = inputs.smoothedHeading,
             )
             _state.value = _state.value.copy(beaconPlaybackActive = true)
         }

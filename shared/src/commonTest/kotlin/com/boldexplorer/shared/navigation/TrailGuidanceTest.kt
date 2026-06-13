@@ -104,6 +104,53 @@ class TrailGuidanceTest {
         assertTrue(abs(guidance.relativeDeg ?: 999.0) < 1.0)
     }
 
+    @Test
+    fun updateTrustedCourse_freshCogPreferredOverSmoothed() {
+        val smoothed = SmoothedHeading(deg = 270.0, confidence = 0.9, sampleCount = 4, newestTimestampMs = 1_000)
+        // Fast fix pointing North — should win over smoothed 270°
+        val sample = sample(heading = 0.0, speed = 1.5, timestamp = 2_000)
+        val course = TrailGuidance.updateTrustedCourse(null, sample, smoothed)
+        assertNotNull(course)
+        assertTrue(course.deg < 5.0 || course.deg > 355.0, "Expected North but got ${course.deg}°")
+        assertFalse(course.isSmoothed)
+    }
+
+    @Test
+    fun updateTrustedCourse_smoothedUsedWhenBelowSpeedThreshold() {
+        val smoothed = SmoothedHeading(deg = 90.0, confidence = 0.8, sampleCount = 3, newestTimestampMs = 1_000)
+        val sample = sample(heading = 90.0, speed = 0.5, timestamp = 2_000) // below 1.0 threshold
+        val course = TrailGuidance.updateTrustedCourse(null, sample, smoothed)
+        assertNotNull(course)
+        assertTrue(kotlin.math.abs(course.deg - 90.0) < 1.0)
+        assertTrue(course.isSmoothed)
+        assertEquals(1_000L, course.timestampMs) // newestTimestampMs, not sample.timestamp
+    }
+
+    @Test
+    fun updateTrustedCourse_holdsPreviousWhenNeitherAvailable() {
+        val previous = TrustedCourse(deg = 45.0, timestampMs = 500, isSmoothed = false)
+        val sample = sample(heading = null, speed = 0.0, timestamp = 2_000)
+        val course = TrailGuidance.updateTrustedCourse(previous, sample, null)
+        assertNotNull(course)
+        assertTrue(kotlin.math.abs(course.deg - 45.0) < 0.001)
+    }
+
+    @Test
+    fun compute_courseIsSmoothed_reflectsTrustedCourseProvenance() {
+        val follower = TrailFollower()
+        follower.start(listOf(northA, northB, northC))
+        follower.onLocationUpdate(LatLng(northA.lat, northA.lon))
+
+        val smoothed = SmoothedHeading(deg = 0.0, confidence = 0.85, sampleCount = 4, newestTimestampMs = 500)
+        val sample = sample(lat = 0.0005, lon = 0.0, heading = null, speed = 0.5, timestamp = 1_000)
+        val course = TrailGuidance.updateTrustedCourse(null, sample, smoothed)
+        val guidance = TrailGuidance.compute(follower.state.value, sample, course)
+
+        assertNotNull(guidance)
+        assertTrue(guidance.courseIsSmoothed)
+        assertFalse(guidance.courseIsFresh.not()) // still fresh — within hold window
+    }
+
     private fun sample(
         lat: Double = 0.0,
         lon: Double = 0.0,

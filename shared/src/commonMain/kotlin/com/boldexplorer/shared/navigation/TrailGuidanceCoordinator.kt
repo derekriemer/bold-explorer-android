@@ -35,6 +35,13 @@ class TrailGuidanceCoordinator(
             .map { it?.relativeDeg }
             .stateIn(scope, SharingStarted.Eagerly, null)
 
+    private val headingSmoother = GpsHeadingSmoother()
+    private val _smoothedHeading = MutableStateFlow<SmoothedHeading?>(null)
+    val smoothedHeading: StateFlow<SmoothedHeading?> = _smoothedHeading.asStateFlow()
+
+    private val _navigationHeadingDeg = MutableStateFlow<Double?>(null)
+    val navigationHeadingDeg: StateFlow<Double?> = _navigationHeadingDeg.asStateFlow()
+
     private var lastTrustedCourse: TrustedCourse? = null
 
     // Ordinary-guidance throttle.
@@ -52,10 +59,22 @@ class TrailGuidanceCoordinator(
     private var backtrackAlertFiredAt = 0L
     private var backtrackGraceUntilMs = 0L
 
-    /** Fold a fresh sample into the trusted-course filter. Call before [computeGuidance]. */
-    fun updateTrustedCourse(sample: LocationSample) {
-        lastTrustedCourse = TrailGuidance.updateTrustedCourse(lastTrustedCourse, sample)
+    /**
+     * Fold a fresh sample into the trusted-course filter. Returns the confidence-gated smoothed
+     * heading so callers driving [TrailFollower] can use it for slow-walker advancement.
+     */
+    fun updateTrustedCourse(sample: LocationSample): SmoothedHeading? {
+        headingSmoother.addFix(sample)
+        val smoothed = headingSmoother.smoothedHeading(sample.timestamp)
+        _smoothedHeading.value = smoothed
+        lastTrustedCourse = TrailGuidance.updateTrustedCourse(lastTrustedCourse, sample, smoothed)
+        _navigationHeadingDeg.value = TrailGuidance.freshCourseAt(lastTrustedCourse, sample.timestamp)?.deg
+        return smoothed?.takeIf {
+            sample.timestamp - it.newestTimestampMs <= TrailGuidance.TRUSTED_COURSE_HOLD_MS
+        }
     }
+
+    fun courseIsSmoothed(): Boolean = lastTrustedCourse?.isSmoothed ?: false
 
     /** Recompute and publish guidance for [sample] against [followState]; returns the new value. */
     fun computeGuidance(

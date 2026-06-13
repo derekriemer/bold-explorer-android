@@ -29,6 +29,7 @@ import com.boldexplorer.shared.model.Collection
 import com.boldexplorer.shared.model.LocationSample
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.Waypoint
+import com.boldexplorer.shared.navigation.AdvancementReason
 import com.boldexplorer.shared.navigation.CollectionExplorer
 import com.boldexplorer.shared.navigation.CollectionExplorerEvent
 import com.boldexplorer.shared.navigation.CollectionExplorerState
@@ -318,16 +319,10 @@ class GpsViewModel
                 }
             }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), "Magnetic")
 
-        // Heading used for bearing-to-waypoint and clock/relative display.
-        // GPS course-over-ground only — null when stationary or no fix. Matches Vue useBearingDistance.
-        // No compass fallback: compass bearing is unreliable for targeting (phone orientation unknown,
-        // pocket mode). A future "wand" mode will expose compass-based pointing explicitly.
-        // Speed gate: Android FusedLocation keeps reporting the last bearing even when stationary,
-        // so we null it out below MIN_TRUSTED_SPEED_MPS to suppress the directional beacon at rest.
-        private val navHeadingDeg: StateFlow<Double?> =
-            location
-                .map { sample -> sample?.heading?.takeIf { (sample.speed ?: 0.0) >= TrailGuidance.MIN_TRUSTED_SPEED_MPS } }
-                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
+        // Shared trusted-course state drives both trail guidance and direct-to-waypoint beacons.
+        // It accepts confidence-gated slow-walker samples, then expires shortly after movement stops.
+        private val guidanceCoordinator = TrailGuidanceCoordinator(viewModelScope)
+        private val navHeadingDeg: StateFlow<Double?> = guidanceCoordinator.navigationHeadingDeg
 
         val accuracyM: StateFlow<Double?> =
             location
@@ -411,13 +406,16 @@ class GpsViewModel
 
         // ── Trail follower ────────────────────────────────────────────────────────────
 
-        private val trailFollower = TrailFollower()
+        private val trailFollower =
+            TrailFollower().also { follower ->
+                follower.onAdvancement = { reason -> lastAdvancementReason = reason }
+            }
         val trailFollowState: StateFlow<TrailFollowerState> = trailFollower.state
+        private var lastAdvancementReason: AdvancementReason? = null
 
         // Guidance state + the off-trail/backtrack/ordinary-guidance detection state machine live in a
         // dedicated coordinator (pure, JVM-tested in :shared). It decides *whether* to alert; this
         // ViewModel performs the effects (TTS, audio event log, wrong-vector beep, on-screen text).
-        private val guidanceCoordinator = TrailGuidanceCoordinator(viewModelScope)
         private val trailGuidance: StateFlow<TrailGuidanceState?> = guidanceCoordinator.guidance
         private val trailGuidanceRelativeDeg: StateFlow<Double?> = guidanceCoordinator.relativeDeg
 
@@ -652,8 +650,8 @@ class GpsViewModel
             // Also handle auto-recording.
             viewModelScope.launch {
                 location.filterNotNull().collect { sample ->
-                    guidanceCoordinator.updateTrustedCourse(sample)
-                    announceTrailFollowerEvent(sample)
+                    val smoothedHeading = guidanceCoordinator.updateTrustedCourse(sample)
+                    announceTrailFollowerEvent(sample, smoothedHeading?.deg?.toFloat())
                     // Drive CollectionExplorer on every fix; it is the primary navigator. When no
                     // collection is loaded its state is Idle and onLocationUpdate is a no-op.
                     val travelHeadingDeg = sample.heading?.takeIf { (sample.speed ?: 0.0) >= MIN_TRAVEL_HEADING_SPEED_MPS }
@@ -1050,6 +1048,7 @@ class GpsViewModel
                 beaconCuesEnabled = beaconCuesEnabled,
                 location = location,
                 trailGuidance = trailGuidance,
+                smoothedHeading = guidanceCoordinator.smoothedHeading,
             )
 
         private fun refreshTrailGuidanceFromLatestLocation(resetOrdinaryThrottle: Boolean = false) {
@@ -1062,7 +1061,10 @@ class GpsViewModel
          * arrival, "Trail complete" on completion, or — when no event fires — the ordinary-guidance,
          * off-trail, and backtrack checks.
          */
-        private fun announceTrailFollowerEvent(sample: LocationSample) {
+        private fun announceTrailFollowerEvent(
+            sample: LocationSample,
+            smoothedBearingDeg: Float?,
+        ) {
             when (
                 val event =
                     trailFollower.onLocationUpdate(
@@ -1072,12 +1074,32 @@ class GpsViewModel
                             sample.heading
                                 ?.takeIf { (sample.speed ?: 0.0) >= TrailGuidance.MIN_TRUSTED_SPEED_MPS }
                                 ?.toFloat(),
+                        smoothedBearingDeg = smoothedBearingDeg,
                     )
             ) {
                 is TrailFollowerEvent.WaypointReached -> {
                     val guidance = guidanceCoordinator.computeGuidance(trailFollower.state.value, sample)
                     val text = buildTrailAdvanceAnnouncement(event, guidance)
-                    announce(text, speakInBackground = true, trigger = "WaypointReached", sample = sample, guidance = guidance)
+                    val reason = lastAdvancementReason
+                    lastAdvancementReason = null
+                    announce(
+                        text,
+                        speakInBackground = true,
+                        trigger = "WaypointReached",
+                        sample = sample,
+                        guidance = guidance,
+                        extraOverride =
+                            if (reason == null) {
+                                emptyMap()
+                            } else {
+                                buildMap {
+                                    put("mechanism", reason.mechanism)
+                                    put("closestApproachM", reason.closestApproachM)
+                                    reason.headingDifferenceDeg?.let { put("headingDifferenceDeg", it) }
+                                    put("smoothedBearingUsed", reason.smoothedBearingUsed)
+                                }
+                            },
+                    )
                     guidanceCoordinator.resetThrottle(sample)
                 }
 
@@ -1156,7 +1178,8 @@ class GpsViewModel
                         trigger = "OffTrailCheck",
                         inputs =
                             "relativeDeg=${eval.relativeDeg?.let { "%.1f°".format(it) } ?: "null"}" +
-                                ", followerActive=${eval.followerActive}",
+                                ", followerActive=${eval.followerActive}" +
+                                ", smoothed=${guidanceCoordinator.courseIsSmoothed()}",
                         outputs = "consecutiveOffTrail=${eval.consecutiveCount}, sinceLastAlertMs=${eval.sinceLastAlertMs}",
                         played = eval.disposition,
                     ),
@@ -1182,7 +1205,8 @@ class GpsViewModel
                         trigger = "BacktrackCheck",
                         inputs =
                             "distToTarget=${eval.distanceToTargetM?.let { "%.1fm".format(it) } ?: "null"}" +
-                                ", prevDist=${eval.prevDistanceToTargetM?.let { "%.1fm".format(it) } ?: "null"}",
+                                ", prevDist=${eval.prevDistanceToTargetM?.let { "%.1fm".format(it) } ?: "null"}" +
+                                ", smoothed=${guidanceCoordinator.courseIsSmoothed()}",
                         outputs = "consecutiveBacktrack=${eval.consecutiveCount}, sinceLastAlertMs=${eval.sinceLastAlertMs}",
                         played = eval.disposition,
                     ),
@@ -1301,12 +1325,14 @@ class GpsViewModel
             trigger: String = "unknown",
             sample: LocationSample? = null,
             guidance: TrailGuidanceState? = null,
+            extraOverride: Map<String, Any?> = emptyMap(),
         ) {
             _announcement.value = text
             val ttsDelivered = speakInBackground && spokenGuidancePlayer.speak(text)
             viewModelScope.launch {
                 val extra =
                     buildMap<String, Any?> {
+                        putAll(extraOverride)
                         put("ttsDelivered", ttsDelivered)
                         sample?.let {
                             if (BuildConfig.SHOW_DEBUG_FEATURES) {

@@ -38,7 +38,38 @@ class TrailGuidanceCoordinatorTest {
         timestampMs: Long,
         lat: Double = 0.0,
         lon: Double = 0.0,
-    ) = LocationSample(lat = lat, lon = lon, heading = null, speed = null, timestamp = timestampMs)
+        heading: Double? = null,
+        speed: Double? = null,
+    ) = LocationSample(lat = lat, lon = lon, heading = heading, speed = speed, timestamp = timestampMs)
+
+    // ── Trusted course / slow-walker heading ────────────────────────────────────────
+
+    @Test
+    fun moderateWalkingCourse_becomesAvailableAfterSmoothing() {
+        val c = coordinator()
+
+        assertNull(c.updateTrustedCourse(sample(1_000, heading = 90.0, speed = 0.6)))
+        assertNull(c.updateTrustedCourse(sample(2_000, heading = 90.0, speed = 0.6)))
+        val smoothed = c.updateTrustedCourse(sample(3_000, heading = 90.0, speed = 0.6))
+
+        assertNotNull(smoothed)
+        assertEquals(90.0, c.navigationHeadingDeg.value!!, absoluteTolerance = 0.1)
+        assertTrue(c.courseIsSmoothed())
+    }
+
+    @Test
+    fun moderateWalkingCourse_expiresBeforeSmootherTelemetry() {
+        val c = coordinator()
+        c.updateTrustedCourse(sample(1_000, heading = 90.0, speed = 0.6))
+        c.updateTrustedCourse(sample(2_000, heading = 90.0, speed = 0.6))
+        c.updateTrustedCourse(sample(3_000, heading = 90.0, speed = 0.6))
+
+        val staleSmoothed = c.updateTrustedCourse(sample(13_001, speed = 0.0))
+
+        assertNull(staleSmoothed)
+        assertNull(c.navigationHeadingDeg.value)
+        assertNotNull(c.smoothedHeading.value)
+    }
 
     // ── Inactive / null guards ──────────────────────────────────────────────────────
 
