@@ -629,16 +629,18 @@ private fun ContextualTrailActions(
                                 .semantics { contentDescription = "Follow the selected trail in reverse" },
                     ) { Text("Reverse") }
                 }
-                Button(
-                    onClick = { onAction(GpsAction.StartAutoRecord) },
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .semantics { contentDescription = "Start auto-recording GPS track points every 10 meters" },
-                ) { Text("Auto-Record") }
+                if (!state.canExtendTrailEnd) {
+                    Button(
+                        onClick = { onAction(GpsAction.StartAutoRecord) },
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .semantics { contentDescription = "Start auto-recording GPS track points every 10 meters" },
+                    ) { Text("Auto-Record") }
+                }
             }
 
-            else -> {
+            !state.canExtendTrailEnd -> {
                 // Idle, or a selected trail with no points yet: offer recording.
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     Button(
