@@ -37,11 +37,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -272,6 +275,22 @@ private fun TrailItem(
         elevation = CardDefaults.cardElevation(defaultElevation = if (expanded) 4.dp else 1.dp),
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
+            // Collapsed = a single focus stop: no visible header buttons. Rename/Delete live as
+            // TalkBack custom actions (and as visible buttons once expanded).
+            val headerActions =
+                listOf(
+                    CustomAccessibilityAction("Rename") {
+                        onRename()
+                        true
+                    },
+                    CustomAccessibilityAction("Delete") {
+                        onDelete()
+                        true
+                    },
+                )
+            val wpCount = namedWaypoints.size
+            val wpLabel = "$wpCount waypoint" + if (wpCount == 1) "" else "s"
+            val tpLabel = if (trackPointCount > 0) ", $trackPointCount track points" else ""
             // Clickable header row — mergeDescendants scoped only to this row.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -280,22 +299,29 @@ private fun TrailItem(
                         .fillMaxWidth()
                         .clickable(onClick = onToggle)
                         .semantics(mergeDescendants = true) {
-                            contentDescription = "${trail.name} trail, ${if (expanded) "expanded" else "collapsed"}"
+                            // Expand state via stateDescription so TalkBack localises it; not baked into text.
+                            contentDescription = "${trail.name} trail, $wpLabel$tpLabel"
+                            stateDescription = if (expanded) "Expanded" else "Collapsed"
+                            customActions = headerActions
                         },
             ) {
                 Text(trail.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                TextButton(
-                    onClick = onRename,
-                    modifier = Modifier.semantics { contentDescription = "Rename trail ${trail.name}" },
-                ) { Text("Rename") }
-                TextButton(
-                    onClick = onDelete,
-                    modifier = Modifier.semantics { contentDescription = "Delete trail ${trail.name}" },
-                ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
             }
 
             if (expanded) {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                // ── Trail-level actions (visible counterparts to the header custom actions) ──
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        onClick = onRename,
+                        modifier = Modifier.semantics { contentDescription = "Rename trail ${trail.name}" },
+                    ) { Text("Rename") }
+                    TextButton(
+                        onClick = onDelete,
+                        modifier = Modifier.semantics { contentDescription = "Delete trail ${trail.name}" },
+                    ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                }
 
                 // ── Named waypoints section ───────────────────────────────────
                 Text(
@@ -328,33 +354,45 @@ private fun TrailItem(
                     )
                 } else {
                     namedWaypoints.forEachIndexed { idx, wp ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
+                        // Name-only row = a single focus stop. Reorder/detach are TalkBack custom
+                        // actions, gated so the first/last items omit the impossible move.
+                        val wpActions =
+                            buildList {
+                                if (idx > 0) {
+                                    add(
+                                        CustomAccessibilityAction("Move up") {
+                                            onMoveUp(idx, wp.id)
+                                            true
+                                        },
+                                    )
+                                }
+                                if (idx < namedWaypoints.size - 1) {
+                                    add(
+                                        CustomAccessibilityAction("Move down") {
+                                            onMoveDown(idx, wp.id)
+                                            true
+                                        },
+                                    )
+                                }
+                                add(
+                                    CustomAccessibilityAction("Detach from trail") {
+                                        onDetach(wp.id)
+                                        true
+                                    },
+                                )
+                            }
+                        Text(
+                            "${idx + 1}. ${wp.name}",
+                            style = MaterialTheme.typography.bodyMedium,
                             modifier =
                                 Modifier
                                     .fillMaxWidth()
-                                    .padding(vertical = 2.dp),
-                        ) {
-                            Text(
-                                "${idx + 1}. ${wp.name}",
-                                modifier = Modifier.weight(1f),
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                            TextButton(
-                                onClick = { onMoveUp(idx, wp.id) },
-                                enabled = idx > 0,
-                                modifier = Modifier.semantics { contentDescription = "Move ${wp.name} up" },
-                            ) { Text("Up") }
-                            TextButton(
-                                onClick = { onMoveDown(idx, wp.id) },
-                                enabled = idx < namedWaypoints.size - 1,
-                                modifier = Modifier.semantics { contentDescription = "Move ${wp.name} down" },
-                            ) { Text("Down") }
-                            TextButton(
-                                onClick = { onDetach(wp.id) },
-                                modifier = Modifier.semantics { contentDescription = "Detach ${wp.name} from trail" },
-                            ) { Text("Detach") }
-                        }
+                                    .padding(vertical = 2.dp)
+                                    .semantics {
+                                        contentDescription = "${idx + 1}. ${wp.name}"
+                                        customActions = wpActions
+                                    },
+                        )
                     }
                 }
 
