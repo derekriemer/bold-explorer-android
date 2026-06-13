@@ -38,11 +38,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -194,6 +197,7 @@ fun WaypointsScreen(
                         onDelete = { deleteTarget = item.waypoint },
                         onAttach = { attachTarget = item.waypoint },
                         onAddToCollection = { collectionTarget = item.waypoint },
+                        onFixPoint = { viewModel.fixPoint(item.waypoint.id) },
                     )
                 }
             }
@@ -391,8 +395,35 @@ private fun WaypointItem(
     onDelete: () -> Unit,
     onAttach: () -> Unit,
     onAddToCollection: () -> Unit,
+    onFixPoint: () -> Unit,
 ) {
     val waypoint = item.waypoint
+    val distLabel = item.distanceM?.let { ", ${BearingComputer.formatDistance(it, units)}" } ?: ""
+    // Expanded card exposes its actions as TalkBack custom actions too, so a screen-reader user can
+    // act without hunting for the visible buttons. Collapsed = a single focus stop with no actions.
+    val expandedActions =
+        listOf(
+            CustomAccessibilityAction("Edit") {
+                onEdit()
+                true
+            },
+            CustomAccessibilityAction("Fix point with current position") {
+                onFixPoint()
+                true
+            },
+            CustomAccessibilityAction("Attach to trail") {
+                onAttach()
+                true
+            },
+            CustomAccessibilityAction("Add to collection") {
+                onAddToCollection()
+                true
+            },
+            CustomAccessibilityAction("Delete") {
+                onDelete()
+                true
+            },
+        )
     Card(
         onClick = onToggle,
         modifier =
@@ -400,8 +431,11 @@ private fun WaypointItem(
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 4.dp)
                 .semantics {
-                    val dist = item.distanceM?.let { ", ${BearingComputer.formatDistance(it, units)}" } ?: ""
-                    contentDescription = "${waypoint.name}$dist, ${if (expanded) "expanded" else "collapsed"}"
+                    // Expand state via stateDescription (not baked into the text) so TalkBack localises
+                    // "expanded"/"collapsed" and i18n works.
+                    contentDescription = "${waypoint.name}$distLabel"
+                    stateDescription = if (expanded) "Expanded" else "Collapsed"
+                    if (expanded) customActions = expandedActions
                 },
         elevation = CardDefaults.cardElevation(defaultElevation = if (expanded) 4.dp else 1.dp),
     ) {
@@ -429,6 +463,10 @@ private fun WaypointItem(
                         onClick = onEdit,
                         modifier = Modifier.semantics { contentDescription = "Edit waypoint ${waypoint.name}" },
                     ) { Text("Edit") }
+                    TextButton(
+                        onClick = onFixPoint,
+                        modifier = Modifier.semantics { contentDescription = "Fix ${waypoint.name} to current position" },
+                    ) { Text("Fix point") }
                     TextButton(
                         onClick = onAttach,
                         modifier = Modifier.semantics { contentDescription = "Attach ${waypoint.name} to trail" },

@@ -226,6 +226,29 @@ class WaypointsViewModel
             }
         }
 
+        /**
+         * The current GPS position, isolated so a future N-sample averaging pass can replace this
+         * single read without touching callers (e.g. [fixPoint]). Null when there is no fix yet.
+         */
+        private fun captureCurrentPosition(): LatLng? = location.value?.let { LatLng(it.lat, it.lon) }
+
+        /**
+         * Overwrite a waypoint's coordinates with the current GPS position, leaving name/elevation
+         * untouched. Used to correct a point recorded from the wrong spot (e.g. a doorway logged from
+         * across the street). One-shot today; see [captureCurrentPosition] for the averaging seam.
+         */
+        fun fixPoint(id: Long) {
+            val pos =
+                captureCurrentPosition() ?: run {
+                    _toast.value = "No GPS fix yet"
+                    return
+                }
+            viewModelScope.launch {
+                waypointRepo.update(id, lat = pos.lat, lon = pos.lon)
+                _toast.value = "Point corrected"
+            }
+        }
+
         fun attach(
             waypointId: Long,
             trailId: Long,
