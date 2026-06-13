@@ -136,6 +136,20 @@ class TrailGuidanceTest {
     }
 
     @Test
+    fun freshCourseAt_returnsCourseWithinHoldWindow() {
+        val course = TrustedCourse(deg = 45.0, timestampMs = 1_000, isSmoothed = true)
+
+        assertEquals(course, TrailGuidance.freshCourseAt(course, 11_000))
+    }
+
+    @Test
+    fun freshCourseAt_rejectsCourseAfterHoldWindow() {
+        val course = TrustedCourse(deg = 45.0, timestampMs = 1_000, isSmoothed = true)
+
+        assertNull(TrailGuidance.freshCourseAt(course, 11_001))
+    }
+
+    @Test
     fun compute_courseIsSmoothed_reflectsTrustedCourseProvenance() {
         val follower = TrailFollower()
         follower.start(listOf(northA, northB, northC))

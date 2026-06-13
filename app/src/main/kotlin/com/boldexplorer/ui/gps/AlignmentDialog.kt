@@ -3,6 +3,7 @@ package com.boldexplorer.ui.gps
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -13,11 +14,15 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.boldexplorer.shared.navigation.BearingComputer
@@ -46,24 +51,30 @@ fun AlignmentDialog(
     var bearingInputError by remember { mutableStateOf(false) }
     var autoRead by remember { mutableStateOf(false) }
 
-    // Opt-in ticker: while auto-read is on and alignment is active, speak the delta immediately and then
-    // every 5 s. Turning auto-read off or alignment going inactive cancels the loop.
-    LaunchedEffect(autoRead, state.alignmentActive) {
-        if (autoRead && state.alignmentActive) {
-            onAction(GpsAction.SpeakAlignmentDelta)
-            while (true) {
-                delay(5_000L)
-                onAction(GpsAction.SpeakAlignmentDelta)
-            }
-        }
-    }
-
     val headingCardinal = state.headingDeg?.let { BearingComputer.toCardinal(it) } ?: "—"
     val headingDegText = state.headingDeg?.let { "${"%.0f".format(it)}°" } ?: "—"
     val targetBearingText = "%.0f".format(state.alignmentBearingDeg ?: 0.0)
     val deltaText =
         state.alignmentRelativeDeg?.let { BearingComputer.toAlignmentRelative(it) }
             ?: "Waiting for compass…"
+
+    var autoReadAnnouncement by remember { mutableStateOf("") }
+    val latestDeltaText by rememberUpdatedState(deltaText)
+
+    // Foreground spoken guidance intentionally stays quiet while this dialog is visible. Use an
+    // opt-in live region, changing its raw description each tick even when the rounded delta is stable.
+    LaunchedEffect(autoRead, state.alignmentActive) {
+        if (autoRead && state.alignmentActive) {
+            var tick = 0
+            while (true) {
+                tick++
+                autoReadAnnouncement = latestDeltaText + if (tick % 2 == 0) "" else "."
+                delay(5_000L)
+            }
+        } else {
+            autoReadAnnouncement = ""
+        }
+    }
 
     val deltaActions =
         listOf(
@@ -121,6 +132,18 @@ fun AlignmentDialog(
                             .semantics {
                                 contentDescription = "Alignment target $targetBearingText degrees, $deltaText"
                                 customActions = deltaActions
+                            },
+                )
+
+                Text(
+                    text = autoReadAnnouncement,
+                    modifier =
+                        Modifier
+                            .size(1.dp)
+                            .alpha(0f)
+                            .semantics {
+                                liveRegion = LiveRegionMode.Assertive
+                                contentDescription = autoReadAnnouncement
                             },
                 )
 

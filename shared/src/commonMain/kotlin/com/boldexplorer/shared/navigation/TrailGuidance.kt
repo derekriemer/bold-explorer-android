@@ -45,13 +45,27 @@ object TrailGuidance {
         val heading = sample.heading
         val speed = sample.speed ?: 0.0
         return when {
-            heading != null && speed >= MIN_TRUSTED_SPEED_MPS ->
+            heading != null && speed >= MIN_TRUSTED_SPEED_MPS -> {
                 TrustedCourse(((heading % 360.0) + 360.0) % 360.0, sample.timestamp, isSmoothed = false)
-            smoothedHeading != null ->
+            }
+
+            smoothedHeading != null -> {
                 TrustedCourse(smoothedHeading.deg, smoothedHeading.newestTimestampMs, isSmoothed = true)
-            else -> previous
+            }
+
+            else -> {
+                previous
+            }
         }
     }
+
+    fun freshCourseAt(
+        trustedCourse: TrustedCourse?,
+        timestampMs: Long,
+    ): TrustedCourse? =
+        trustedCourse?.takeIf {
+            timestampMs - it.timestampMs <= TRUSTED_COURSE_HOLD_MS
+        }
 
     fun compute(
         followState: TrailFollowerState,
@@ -63,10 +77,7 @@ object TrailGuidance {
         val location = LatLng(sample.lat, sample.lon)
         val targetLocation = LatLng(target.lat, target.lon)
         val desiredCourse = desiredTrailCourseDeg(active, location) ?: return null
-        val freshCourse =
-            trustedCourse?.takeIf {
-                sample.timestamp - it.timestampMs <= TRUSTED_COURSE_HOLD_MS
-            }
+        val freshCourse = freshCourseAt(trustedCourse, sample.timestamp)
 
         return TrailGuidanceState(
             targetIndex = active.currentIndex,
