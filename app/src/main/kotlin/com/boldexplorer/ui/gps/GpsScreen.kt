@@ -55,7 +55,7 @@ import com.boldexplorer.shared.navigation.BearingComputer
 import com.boldexplorer.shared.navigation.CollectionExplorerState
 import com.boldexplorer.shared.navigation.CollectionPoint
 import com.boldexplorer.shared.navigation.CollectionTargeting
-import com.boldexplorer.shared.navigation.TrailFollowerState
+import com.boldexplorer.shared.navigation.TrailRecordingState
 import com.boldexplorer.shared.settings.AppSettings
 import com.boldexplorer.ui.common.CreateItemDialog
 
@@ -558,21 +558,24 @@ private fun ContextualTrailActions(
     active: CollectionExplorerState.Active?,
     onAction: (GpsAction) -> Unit,
 ) {
+    // The recording state machine is the single source of truth: Follow and Record are never offered
+    // at the same time.
+    val recording = state.recordingState
+    val busy = recording is TrailRecordingState.Recording || recording is TrailRecordingState.Following
+
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
         // Skip the current collection target.
-        if (active?.target != null && state.trailFollowState !is TrailFollowerState.Active) {
+        if (active?.target != null && !busy) {
             TextButton(
                 onClick = { onAction(GpsAction.SkipCollectionTarget) },
                 modifier = Modifier.semantics { contentDescription = "Skip current target and pick something else" },
             ) { Text("Not this") }
         }
 
-        // Follow-from-end: only when the current target is a trail end within approach range.
         val target = active?.target
-        if (target is CollectionPoint.TrailEnd &&
-            active.nearTrailEndM != null &&
-            state.trailFollowState !is TrailFollowerState.Active
-        ) {
+
+        // Follow-from-end: only when the current target is a trail end within approach range.
+        if (target is CollectionPoint.TrailEnd && active.nearTrailEndM != null && !busy) {
             Button(
                 onClick = { onAction(GpsAction.FollowTrailFromCollectionEnd(target)) },
                 modifier =
@@ -587,9 +590,22 @@ private fun ContextualTrailActions(
             }
         }
 
-        // Trail follow / record controls, mutually exclusive by current state.
+        // Extend: resume recording onto a trail from its end, within the accuracy-scaled threshold.
+        if (target is CollectionPoint.TrailEnd && state.canExtendTrailEnd && !busy) {
+            Button(
+                onClick = { onAction(GpsAction.ExtendTrailFromCollectionEnd(target)) },
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .semantics { contentDescription = "Extend ${target.trail.name} by recording from this end" },
+            ) {
+                Text("Extend ${target.trail.name}")
+            }
+        }
+
+        // Trail follow / record controls, mutually exclusive by machine state.
         when {
-            state.trailFollowState is TrailFollowerState.Active -> {
+            recording is TrailRecordingState.Following -> {
                 Button(
                     onClick = { onAction(GpsAction.StopFollowTrail) },
                     modifier =
@@ -599,8 +615,8 @@ private fun ContextualTrailActions(
                 ) { Text("Stop Navigation") }
             }
 
-            state.autoRecording -> {
-                val recordStatusText = "Auto-recording: ${state.autoRecordCount} points captured"
+            recording is TrailRecordingState.Recording -> {
+                val recordStatusText = "Auto-recording: ${recording.pointCount} points captured"
                 Text(
                     recordStatusText,
                     style = MaterialTheme.typography.bodySmall,
@@ -615,7 +631,35 @@ private fun ContextualTrailActions(
                 ) { Text("Stop Auto-Record") }
             }
 
+            recording is TrailRecordingState.Selected && recording.hasPoints -> {
+                // A trail with points: default action is Follow (+ reverse).
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    Button(
+                        onClick = { onAction(GpsAction.StartFollowTrail) },
+                        modifier =
+                            Modifier
+                                .weight(1f)
+                                .semantics { contentDescription = "Follow the selected trail" },
+                    ) { Text("Follow") }
+                    Button(
+                        onClick = { onAction(GpsAction.StartFollowTrailReversed) },
+                        modifier =
+                            Modifier
+                                .weight(1f)
+                                .semantics { contentDescription = "Follow the selected trail in reverse" },
+                    ) { Text("Reverse") }
+                }
+                Button(
+                    onClick = { onAction(GpsAction.StartAutoRecord) },
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .semantics { contentDescription = "Start auto-recording GPS track points every 10 meters" },
+                ) { Text("Auto-Record") }
+            }
+
             else -> {
+                // Idle, or a selected trail with no points yet: offer recording.
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     Button(
                         onClick = { onAction(GpsAction.RecordNewTrail) },

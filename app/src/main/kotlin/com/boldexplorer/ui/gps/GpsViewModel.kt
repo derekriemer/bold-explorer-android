@@ -38,6 +38,8 @@ import com.boldexplorer.shared.navigation.TrailFollowerState
 import com.boldexplorer.shared.navigation.TrailGuidance
 import com.boldexplorer.shared.navigation.TrailGuidanceState
 import com.boldexplorer.shared.navigation.TrailPoint
+import com.boldexplorer.shared.navigation.TrailRecordingMachine
+import com.boldexplorer.shared.navigation.TrailRecordingState
 import com.boldexplorer.shared.navigation.TrustedCourse
 import com.boldexplorer.shared.repository.CollectionRepository
 import com.boldexplorer.shared.repository.SettingsRepository
@@ -90,8 +92,8 @@ data class GpsUiState(
     val alignmentRelativeDeg: Double? = null,
     val announcement: String = "",
     val navigationActive: Boolean = false,
-    val autoRecording: Boolean = false,
-    val autoRecordCount: Int = 0,
+    val recordingState: TrailRecordingState = TrailRecordingState.Idle,
+    val canExtendTrailEnd: Boolean = false,
 )
 
 sealed interface GpsAction {
@@ -118,6 +120,10 @@ sealed interface GpsAction {
     ) : GpsAction
 
     data class FollowTrailFromCollectionEnd(
+        val trailEnd: CollectionPoint.TrailEnd,
+    ) : GpsAction
+
+    data class ExtendTrailFromCollectionEnd(
         val trailEnd: CollectionPoint.TrailEnd,
     ) : GpsAction
 
@@ -197,6 +203,7 @@ private data class SelectionGroup(
     val selectedCollectionId: Long?,
     val trailFollowState: TrailFollowerState,
     val collectionExplorerState: CollectionExplorerState,
+    val canExtendTrailEnd: Boolean,
 )
 
 private data class BearingGroup(
@@ -224,8 +231,7 @@ private data class InteractionGroup(
     val alignmentRelativeDeg: Double?,
     val announcement: String,
     val navigationActive: Boolean,
-    val autoRecording: Boolean,
-    val autoRecordCount: Int,
+    val recordingState: TrailRecordingState,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -320,14 +326,13 @@ class GpsViewModel
         private val _pendingCreate = MutableStateFlow<PendingCreate?>(null)
         val pendingCreate: StateFlow<PendingCreate?> = _pendingCreate.asStateFlow()
 
-        // ── Trail recording state (declared early; used in targetInputs below) ────────
+        // ── Trail recording state machine ────────────────────────────────────────────
+        // Single source of truth that guarantees follow and record are never offered together.
 
-        private val _autoRecording = MutableStateFlow(false)
-        val autoRecording: StateFlow<Boolean> = _autoRecording.asStateFlow()
+        private val recordingMachine = TrailRecordingMachine()
+        val recordingState: StateFlow<TrailRecordingState> = recordingMachine.state
 
-        private val _autoRecordCount = MutableStateFlow(0)
-        val autoRecordCount: StateFlow<Int> = _autoRecordCount.asStateFlow()
-
+        // Distance-throttle geometry for auto-record (not part of the state machine).
         @Volatile private var _lastAutoRecordLoc: LatLng? = null
 
         // ── Reactive data ─────────────────────────────────────────────────────────────
@@ -408,6 +413,28 @@ class GpsViewModel
 
         private val collectionExplorer = CollectionExplorer()
         val collectionExplorerState: StateFlow<CollectionExplorerState> = collectionExplorer.state
+
+        // True when the current explore target is a trail end the user is close enough to extend.
+        // The extension threshold is accuracy-scaled (wider than the 10 m follow-from-end hook) so a
+        // noisy fix doesn't strand the user just out of range. Extend is suppressed while already
+        // following or recording, so follow + record are never offered at once.
+        val canExtendTrailEnd: StateFlow<Boolean> =
+            combine(
+                collectionExplorer.state,
+                location,
+                accuracyM,
+                recordingMachine.state,
+            ) { explorer, loc, acc, recording ->
+                val target = (explorer as? CollectionExplorerState.Active)?.target
+                if (target !is CollectionPoint.TrailEnd || loc == null) {
+                    false
+                } else if (recording is TrailRecordingState.Recording || recording is TrailRecordingState.Following) {
+                    false
+                } else {
+                    val dist = haversineDistanceMeters(LatLng(loc.lat, loc.lon), LatLng(target.waypoint.lat, target.waypoint.lon))
+                    dist <= maxOf(EXTEND_FLOOR_M, EXTEND_ACCURACY_FACTOR * (acc ?: 0.0))
+                }
+            }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), false)
 
         // ── Derived navigation values ─────────────────────────────────────────────────
 
@@ -557,7 +584,8 @@ class GpsViewModel
                 selectedCollectionId,
                 trailFollowState,
                 collectionExplorerState,
-            ) { tr, col, fs, ce -> SelectionGroup(tr, col, fs, ce) }
+                canExtendTrailEnd,
+            ) { tr, col, fs, ce, ext -> SelectionGroup(tr, col, fs, ce, ext) }
         private val bearingGroup =
             combine(
                 combine(targetName, bearingDeg, distanceM, relativeDeg) { tn, bd, dm, rd ->
@@ -574,11 +602,14 @@ class GpsViewModel
             }
         private val interactionGroup =
             combine(
-                combine(alignmentBearingDeg, alignmentRelativeDeg, announcement, navigationActive, autoRecording) { ab, ar, ann, na, rec ->
-                    InteractionGroup(ab, ar, ann, na, rec, 0)
-                },
-                autoRecordCount,
-            ) { i, c -> i.copy(autoRecordCount = c) }
+                alignmentBearingDeg,
+                alignmentRelativeDeg,
+                announcement,
+                navigationActive,
+                recordingState,
+            ) { ab, ar, ann, na, rec ->
+                InteractionGroup(ab, ar, ann, na, rec)
+            }
 
         val uiState: StateFlow<GpsUiState> =
             combine(
@@ -604,6 +635,7 @@ class GpsViewModel
                     selectedCollectionId = sel.selectedCollectionId,
                     trailFollowState = sel.trailFollowState,
                     collectionExplorerState = sel.collectionExplorerState,
+                    canExtendTrailEnd = sel.canExtendTrailEnd,
                     targetName = bear.targetName,
                     bearingDeg = bear.bearingDeg,
                     distanceM = bear.distanceM,
@@ -613,8 +645,7 @@ class GpsViewModel
                     alignmentRelativeDeg = inter.alignmentRelativeDeg,
                     announcement = inter.announcement,
                     navigationActive = inter.navigationActive,
-                    autoRecording = inter.autoRecording,
-                    autoRecordCount = inter.autoRecordCount,
+                    recordingState = inter.recordingState,
                 )
             }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), GpsUiState())
 
@@ -746,8 +777,10 @@ class GpsViewModel
                     }
 
                     // Auto-record: attach a GPS point to the active trail every AUTO_RECORD_DISTANCE_M.
-                    if (_autoRecording.value) {
-                        val trailId = _selectedTrailId.value ?: return@collect
+                    // Runs only while the state machine is in Recording — the single source of truth.
+                    val recording = recordingMachine.state.value as? TrailRecordingState.Recording
+                    if (recording != null) {
+                        val trailId = recording.trailId
                         val current = LatLng(sample.lat, sample.lon)
                         val last = _lastAutoRecordLoc
                         if (last == null || haversineDistanceMeters(last, current) >= AUTO_RECORD_DISTANCE_M) {
@@ -755,8 +788,8 @@ class GpsViewModel
                             val name = "Track ${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())}"
                             launch {
                                 waypointRepo.createTrackPoint(trailId, name, sample.lat, sample.lon, sample.altitude)
-                                val count = _autoRecordCount.value + 1
-                                _autoRecordCount.value = count
+                                recordingMachine.addPoint()
+                                val count = (recordingMachine.state.value as? TrailRecordingState.Recording)?.pointCount ?: 0
                                 if (count % AUTO_RECORD_TTS_INTERVAL == 0) {
                                     spokenGuidancePlayer.speak("$count track points recorded")
                                 }
@@ -772,6 +805,15 @@ class GpsViewModel
 
         fun selectTrail(id: Long) {
             _selectedTrailId.value = id
+            // Drive the state machine to Selected so the UI offers Follow (has points) or Record (empty).
+            // Only while idle/selected — never disrupt an active follow/record session.
+            viewModelScope.launch {
+                val hasPoints = trailRepo.waypointsForTrail(id).isNotEmpty()
+                val current = recordingMachine.state.value
+                if (current is TrailRecordingState.Idle || current is TrailRecordingState.Selected) {
+                    recordingMachine.selectTrail(id, hasPoints)
+                }
+            }
         }
 
         fun selectCollection(id: Long) {
@@ -838,6 +880,7 @@ class GpsViewModel
                         s.heading?.takeIf { (s.speed ?: 0.0) >= TrailGuidance.MIN_TRUSTED_SPEED_MPS }?.toFloat()
                     }
                 _selectedTrailId.value = trailEnd.trail.id
+                enterFollowing(trailEnd.trail.id)
                 if (loc != null) trailFollower.startNearest(points, loc, bearing) else trailFollower.start(points)
                 refreshTrailGuidanceFromLatestLocation(resetOrdinaryThrottle = true)
                 backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, true)
@@ -856,9 +899,27 @@ class GpsViewModel
 
         // ── Trail following ───────────────────────────────────────────────────────────
 
+        /**
+         * Drive the recording state machine into [TrailRecordingState.Following] for [trailId],
+         * stopping any active session first so follow and record are never active together.
+         */
+        private fun enterFollowing(trailId: Long) {
+            val current = recordingMachine.state.value
+            if (current is TrailRecordingState.Following || current is TrailRecordingState.Recording) {
+                recordingMachine.stop()
+            }
+            val now = recordingMachine.state.value
+            if (now !is TrailRecordingState.Selected || now.trailId != trailId) {
+                recordingMachine.selectTrail(trailId, hasPoints = true)
+            }
+            recordingMachine.startFollowing()
+        }
+
         fun startFollowTrail() {
             val wps = trailWaypoints.value
             if (wps.isEmpty()) return
+            val trailId = _selectedTrailId.value ?: return
+            enterFollowing(trailId)
             val points = wps.map { TrailPoint(it.id, it.name, it.lat, it.lon, elevationM = it.elevM, kind = it.kind) }
             val loc = location.value?.let { LatLng(it.lat, it.lon) }
             val bearing =
@@ -875,6 +936,8 @@ class GpsViewModel
         fun startFollowTrailReversed() {
             val wps = trailWaypoints.value
             if (wps.isEmpty()) return
+            val trailId = _selectedTrailId.value ?: return
+            enterFollowing(trailId)
             val points = wps.reversed().map { TrailPoint(it.id, it.name, it.lat, it.lon, elevationM = it.elevM, kind = it.kind) }
             val loc = location.value?.let { LatLng(it.lat, it.lon) }
             val bearing =
@@ -919,6 +982,7 @@ class GpsViewModel
 
         fun stopFollowTrail() {
             trailFollower.stop()
+            recordingMachine.stop()
             clearTrailGuidance()
             backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, false)
             stopLocationServiceIfIdle()
@@ -1013,8 +1077,8 @@ class GpsViewModel
                     waypointRepo.create(collectionId, name, loc.lat, loc.lon, loc.altitude, null, tentative)
                 // While recording, also link this named waypoint to the trail. It stays a user
                 // waypoint (collection-owned); only auto-captured points are kind=track_point.
-                if (_autoRecording.value) {
-                    _selectedTrailId.value?.let { trailId -> waypointRepo.attach(trailId, waypointId) }
+                (recordingMachine.state.value as? TrailRecordingState.Recording)?.let { rec ->
+                    waypointRepo.attach(rec.trailId, waypointId)
                 }
                 _announcement.value = "Waypoint marked: $name"
                 // waypoints StateFlow updates automatically via observeAll()
@@ -1380,31 +1444,49 @@ class GpsViewModel
             viewModelScope.launch {
                 val id = trailRepo.create(collectionId, name, null, tentative)
                 _selectedTrailId.value = id
+                recordingMachine.stop()
+                recordingMachine.selectTrail(id, hasPoints = false)
                 // trails and trailWaypoints update automatically via observe flows
                 _announcement.value = "New trail: $name. Tap mark to add waypoints, or use auto-record."
             }
         }
 
         fun startAutoRecord() {
-            _selectedTrailId.value ?: return
+            val trailId = _selectedTrailId.value ?: return
+            val current = recordingMachine.state.value
+            if (current is TrailRecordingState.Recording || current is TrailRecordingState.Following) return
+            if (current !is TrailRecordingState.Selected || current.trailId != trailId) {
+                recordingMachine.selectTrail(trailId, hasPoints = trailWaypoints.value.isNotEmpty())
+            }
+            recordingMachine.startRecording()
             _lastAutoRecordLoc = location.value?.let { LatLng(it.lat, it.lon) }
-            _autoRecordCount.value = 0
-            _autoRecording.value = true
             backgroundSession.setModeActive(GpsBackgroundMode.AutoRecord, true)
             startLocationService() // keep process alive when screen is off
             announce("Auto-recording started. Move to capture track points.", speakInBackground = true, trigger = "AutoRecordStart")
         }
 
         fun stopAutoRecord() {
-            _autoRecording.value = false
+            val count = (recordingMachine.state.value as? TrailRecordingState.Recording)?.pointCount ?: 0
+            recordingMachine.stop()
             _lastAutoRecordLoc = null
             backgroundSession.setModeActive(GpsBackgroundMode.AutoRecord, false)
             stopLocationServiceIfIdle()
             announce(
-                "Auto-recording stopped. ${_autoRecordCount.value} points recorded.",
+                "Auto-recording stopped. $count points recorded.",
                 speakInBackground = true,
                 trigger = "AutoRecordStop",
             )
+        }
+
+        /**
+         * Resume recording onto a trail from one of its ends. Offered only when the explore target is a
+         * [CollectionPoint.TrailEnd] within the accuracy-scaled extension threshold (see [canExtendTrailEnd]).
+         */
+        fun extendTrailFromCollectionEnd(trailEnd: CollectionPoint.TrailEnd) {
+            _selectedTrailId.value = trailEnd.trail.id
+            recordingMachine.stop()
+            recordingMachine.selectTrail(trailEnd.trail.id, hasPoints = true)
+            startAutoRecord()
         }
 
         // ── Action dispatcher ─────────────────────────────────────────────────────────
@@ -1441,6 +1523,10 @@ class GpsViewModel
 
                 is GpsAction.FollowTrailFromCollectionEnd -> {
                     startFollowTrailFromCollectionEnd(action.trailEnd)
+                }
+
+                is GpsAction.ExtendTrailFromCollectionEnd -> {
+                    extendTrailFromCollectionEnd(action.trailEnd)
                 }
 
                 GpsAction.StartFollowTrail -> {
@@ -1551,6 +1637,11 @@ class GpsViewModel
         companion object {
             private const val AUTO_RECORD_DISTANCE_M = 10.0
             private const val AUTO_RECORD_TTS_INTERVAL = 5
+
+            // Record-extend uses a wider, accuracy-scaled threshold than the 10 m follow-from-end hook
+            // (TRAIL_APPROACH_M) so a noisy fix doesn't strand the user just out of range.
+            private const val EXTEND_FLOOR_M = 15.0
+            private const val EXTEND_ACCURACY_FACTOR = 2.0
 
             // Minimum speed (m/s) before GPS course-over-ground is trusted for direction-aware selection.
             private const val MIN_TRAVEL_HEADING_SPEED_MPS = 1.0
