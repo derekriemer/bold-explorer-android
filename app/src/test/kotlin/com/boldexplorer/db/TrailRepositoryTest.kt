@@ -11,8 +11,9 @@ class TrailRepositoryTest {
         runTest {
             val db = createTestDatabase()
             val trails = TrailRepositoryImpl(db)
+            val cid = db.defaultCollection()
 
-            val id = trails.create("Old", "desc")
+            val id = trails.create(cid, "Old", "desc")
             trails.update(id, name = "New")
 
             assertEquals("New", trails.getById(id)?.name)
@@ -30,9 +31,9 @@ class TrailRepositoryTest {
             val waypoints = WaypointRepositoryImpl(db)
             val collections = CollectionRepositoryImpl(db)
 
-            val trailId = trails.create("Loop", null)
-            val waypointId = waypoints.create("Point", 1.0, 2.0, null, null)
             val collectionId = collections.create("Favorites", null)
+            val trailId = trails.create(collectionId, "Loop", null)
+            val waypointId = waypoints.create(collectionId, "Point", 1.0, 2.0, null, null)
             waypoints.attach(trailId, waypointId)
             collections.attachTrail(collectionId, trailId)
 

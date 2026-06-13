@@ -9,6 +9,7 @@ data class Waypoint(
     val description: String?,
     val createdAt: Long,
     val kind: String = KIND_WAYPOINT,
+    val tentative: Boolean = false,
 ) {
     companion object {
         const val KIND_WAYPOINT = "waypoint"
@@ -21,6 +22,7 @@ data class Trail(
     val name: String,
     val description: String?,
     val createdAt: Long,
+    val tentative: Boolean = false,
 )
 
 data class TrailWaypoint(

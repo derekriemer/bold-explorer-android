@@ -2,7 +2,8 @@ CREATE TABLE trail (
     id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     description TEXT,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    tentative INTEGER NOT NULL DEFAULT 0
 );
 
 getAll:
@@ -12,7 +13,8 @@ getById:
 SELECT * FROM trail WHERE id = :id;
 
 insert:
-INSERT INTO trail (name, description, created_at) VALUES (:name, :description, :createdAt);
+INSERT INTO trail (name, description, created_at, tentative)
+VALUES (:name, :description, :createdAt, :tentative);
 
 lastInsertRowId:
 SELECT last_insert_rowid();

@@ -6,7 +6,8 @@ CREATE TABLE waypoint (
     elev_m REAL,
     description TEXT,
     created_at INTEGER NOT NULL,
-    kind TEXT NOT NULL DEFAULT 'waypoint'
+    kind TEXT NOT NULL DEFAULT 'waypoint',
+    tentative INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX idx_waypoint_lat_lon ON waypoint(lat, lon);
@@ -19,8 +20,8 @@ getById:
 SELECT * FROM waypoint WHERE id = :id;
 
 insert:
-INSERT INTO waypoint (name, lat, lon, elev_m, description, created_at, kind)
-VALUES (:name, :lat, :lon, :elevM, :description, :createdAt, :kind);
+INSERT INTO waypoint (name, lat, lon, elev_m, description, created_at, kind, tentative)
+VALUES (:name, :lat, :lon, :elevM, :description, :createdAt, :kind, :tentative);
 
 lastInsertRowId:
 SELECT last_insert_rowid();

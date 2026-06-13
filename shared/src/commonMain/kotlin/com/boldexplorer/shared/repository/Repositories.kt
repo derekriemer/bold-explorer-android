@@ -14,13 +14,32 @@ interface WaypointRepository {
 
     suspend fun getById(id: Long): Waypoint?
 
+    /**
+     * Create a user waypoint that belongs to [collectionId]. Inserts the waypoint and its
+     * collection membership atomically — every `kind=waypoint` row has ≥1 collection (invariant).
+     */
     suspend fun create(
+        collectionId: Long,
         name: String,
         lat: Double,
         lon: Double,
         elevM: Double?,
         description: String?,
-        kind: String = Waypoint.KIND_WAYPOINT,
+        tentative: Boolean = false,
+    ): Long
+
+    /**
+     * Create a `kind=track_point` waypoint that belongs to a trail (via `trail_waypoint`), NOT a
+     * collection. Track points derive their collection through the trail; they never get a
+     * `collection_waypoint` row.
+     */
+    suspend fun createTrackPoint(
+        trailId: Long,
+        name: String,
+        lat: Double,
+        lon: Double,
+        elevM: Double? = null,
+        position: Int? = null,
     ): Long
 
     suspend fun update(
@@ -80,9 +99,12 @@ interface TrailRepository {
 
     suspend fun getById(id: Long): Trail?
 
+    /** Create a trail that belongs to [collectionId]; inserts trail + collection membership atomically. */
     suspend fun create(
+        collectionId: Long,
         name: String,
         description: String?,
+        tentative: Boolean = false,
     ): Long
 
     suspend fun update(

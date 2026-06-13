@@ -8,3 +8,9 @@ fun createTestDatabase(): BoldExplorerDatabase {
     BoldExplorerDatabase.Schema.create(driver)
     return BoldExplorerDatabase(driver)
 }
+
+/**
+ * Creates a throwaway collection for tests that need a collection id to satisfy the
+ * "every user waypoint/trail belongs to a collection" invariant.
+ */
+suspend fun BoldExplorerDatabase.defaultCollection(name: String = "Test"): Long = CollectionRepositoryImpl(this).create(name, null)

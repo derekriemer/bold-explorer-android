@@ -813,8 +813,7 @@ class GpsViewModel
                             _lastAutoRecordLoc = current
                             val name = "Track ${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())}"
                             launch {
-                                val id = waypointRepo.create(name, sample.lat, sample.lon, sample.altitude, null, Waypoint.KIND_TRACK_POINT)
-                                waypointRepo.attach(trailId, id)
+                                waypointRepo.createTrackPoint(trailId, name, sample.lat, sample.lon, sample.altitude)
                                 val count = _autoRecordCount.value + 1
                                 _autoRecordCount.value = count
                                 if (count % AUTO_RECORD_TTS_INTERVAL == 0) {
@@ -1060,9 +1059,10 @@ class GpsViewModel
 
         fun markWaypoint() {
             val loc = location.value ?: return
+            val collectionId = _selectedCollectionId.value ?: return
             val name = "WP ${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())}"
             viewModelScope.launch {
-                val waypointId = waypointRepo.create(name, loc.lat, loc.lon, loc.altitude, null)
+                val waypointId = waypointRepo.create(collectionId, name, loc.lat, loc.lon, loc.altitude, null)
                 if (_scope.value == GpsScope.TRAIL) {
                     _selectedTrailId.value?.let { trailId ->
                         waypointRepo.attach(trailId, waypointId)
@@ -1404,9 +1404,10 @@ class GpsViewModel
         // ── Trail recording ───────────────────────────────────────────────────────────
 
         fun recordNewTrail() {
+            val collectionId = _selectedCollectionId.value ?: return
             viewModelScope.launch {
                 val name = "Trail ${SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()).format(Date())}"
-                val id = trailRepo.create(name, null)
+                val id = trailRepo.create(collectionId, name, null)
                 _selectedTrailId.value = id
                 // trails and trailWaypoints update automatically via observe flows
                 _announcement.value = "New trail: $name. Tap mark to add waypoints, or use auto-record."

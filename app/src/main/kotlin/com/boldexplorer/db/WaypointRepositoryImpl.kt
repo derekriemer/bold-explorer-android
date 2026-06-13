@@ -47,17 +47,63 @@ class WaypointRepositoryImpl
                 ?.toModel()
 
         override suspend fun create(
+            collectionId: Long,
             name: String,
             lat: Double,
             lon: Double,
             elevM: Double?,
             description: String?,
-            kind: String,
+            tentative: Boolean,
         ): Long {
             var newId = 0L
+            val now = System.currentTimeMillis()
             db.transaction {
-                db.waypointQueries.insert(name, lat, lon, elevM, description, System.currentTimeMillis(), kind)
+                db.waypointQueries.insert(
+                    name = name,
+                    lat = lat,
+                    lon = lon,
+                    elevM = elevM,
+                    description = description,
+                    createdAt = now,
+                    kind = Waypoint.KIND_WAYPOINT,
+                    tentative = if (tentative) 1L else 0L,
+                )
                 newId = db.waypointQueries.lastInsertRowId().executeAsOne()
+                db.collectionWaypointQueries.insert(collectionId, newId, now)
+            }
+            return newId
+        }
+
+        override suspend fun createTrackPoint(
+            trailId: Long,
+            name: String,
+            lat: Double,
+            lon: Double,
+            elevM: Double?,
+            position: Int?,
+        ): Long {
+            var newId = 0L
+            val now = System.currentTimeMillis()
+            db.transaction {
+                db.waypointQueries.insert(
+                    name = name,
+                    lat = lat,
+                    lon = lon,
+                    elevM = elevM,
+                    description = null,
+                    createdAt = now,
+                    kind = Waypoint.KIND_TRACK_POINT,
+                    tentative = 0L,
+                )
+                newId = db.waypointQueries.lastInsertRowId().executeAsOne()
+                val pos =
+                    if (position == null) {
+                        db.trailWaypointQueries.nextPosition(trailId).executeAsOne()
+                    } else {
+                        db.trailWaypointQueries.shiftUpFromPosition(trailId, position.toLong())
+                        position.toLong()
+                    }
+                db.trailWaypointQueries.insert(trailId, newId, pos, now)
             }
             return newId
         }
@@ -218,4 +264,5 @@ private fun com.boldexplorer.db.Waypoint.toModel() =
         description = description,
         createdAt = created_at,
         kind = kind,
+        tentative = tentative != 0L,
     )

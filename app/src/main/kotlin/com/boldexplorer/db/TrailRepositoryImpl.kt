@@ -64,13 +64,17 @@ class TrailRepositoryImpl
                 ?.toModel()
 
         override suspend fun create(
+            collectionId: Long,
             name: String,
             description: String?,
+            tentative: Boolean,
         ): Long {
             var newId = 0L
+            val now = System.currentTimeMillis()
             db.transaction {
-                db.trailQueries.insert(name, description, System.currentTimeMillis())
+                db.trailQueries.insert(name, description, now, if (tentative) 1L else 0L)
                 newId = db.trailQueries.lastInsertRowId().executeAsOne()
+                db.collectionTrailQueries.insert(collectionId, newId, now)
             }
             return newId
         }
@@ -116,6 +120,7 @@ private fun com.boldexplorer.db.Trail.toModel() =
         name = name,
         description = description,
         createdAt = created_at,
+        tentative = tentative != 0L,
     )
 
 private fun com.boldexplorer.db.Waypoint.toModel() =
@@ -128,6 +133,7 @@ private fun com.boldexplorer.db.Waypoint.toModel() =
         description = description,
         createdAt = created_at,
         kind = kind,
+        tentative = tentative != 0L,
     )
 
 private fun com.boldexplorer.db.Trail_waypoint.toModel() =

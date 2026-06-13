@@ -1,0 +1,30 @@
+-- Collection-centred data model: every user waypoint and every trail must belong to a collection.
+-- Adds the `tentative` flag and back-fills a migration collection for any orphaned rows.
+
+ALTER TABLE waypoint ADD COLUMN tentative INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE trail ADD COLUMN tentative INTEGER NOT NULL DEFAULT 0;
+
+-- Create the migration collection only if orphans exist. The sentinel description is the stable
+-- identifier — NOT the name (the user may already have a "General"), NOT created_at.
+INSERT INTO collection (name, description, created_at)
+SELECT 'General', '__bx_migration_general_v4__', strftime('%s','now') * 1000
+WHERE EXISTS (
+    SELECT 1 FROM waypoint
+    WHERE kind = 'waypoint' AND id NOT IN (SELECT waypoint_id FROM collection_waypoint)
+) OR EXISTS (
+    SELECT 1 FROM trail WHERE id NOT IN (SELECT trail_id FROM collection_trail)
+);
+
+-- Attach orphaned user waypoints (NOT track points). Resolve the collection by sentinel description.
+INSERT INTO collection_waypoint (collection_id, waypoint_id, created_at)
+SELECT (SELECT id FROM collection WHERE description = '__bx_migration_general_v4__'),
+       id, strftime('%s','now') * 1000
+FROM waypoint
+WHERE kind = 'waypoint' AND id NOT IN (SELECT waypoint_id FROM collection_waypoint);
+
+-- Attach orphaned trails.
+INSERT INTO collection_trail (collection_id, trail_id, created_at)
+SELECT (SELECT id FROM collection WHERE description = '__bx_migration_general_v4__'),
+       id, strftime('%s','now') * 1000
+FROM trail
+WHERE id NOT IN (SELECT trail_id FROM collection_trail);

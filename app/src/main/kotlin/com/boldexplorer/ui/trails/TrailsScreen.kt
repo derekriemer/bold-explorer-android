@@ -17,8 +17,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -39,6 +44,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.boldexplorer.shared.model.Collection
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.Waypoint
 import com.boldexplorer.ui.common.ToastMessage
@@ -56,6 +62,7 @@ fun TrailsScreen(
     val expandedIds by viewModel.expandedTrailIds.collectAsStateWithLifecycle()
     val trackExpandedIds by viewModel.trackExpandedTrailIds.collectAsStateWithLifecycle()
     val allWaypoints by viewModel.allWaypoints.collectAsStateWithLifecycle()
+    val collections by viewModel.collections.collectAsStateWithLifecycle()
     val toast by viewModel.toast.collectAsStateWithLifecycle()
     val exportStatus by viewModel.exportStatus.collectAsStateWithLifecycle()
 
@@ -168,8 +175,9 @@ fun TrailsScreen(
         NameDescDialog(
             title = "New Trail",
             confirmLabel = "Create",
-            onConfirm = { name, desc ->
-                viewModel.create(name, desc)
+            collections = collections,
+            onConfirm = { collectionId, name, desc ->
+                viewModel.create(collectionId, name, desc)
                 showAddDialog = false
             },
             onDismiss = { showAddDialog = false },
@@ -381,16 +389,21 @@ private fun TrailItem(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun NameDescDialog(
     title: String,
     confirmLabel: String,
-    onConfirm: (name: String, description: String?) -> Unit,
+    collections: List<Collection>,
+    onConfirm: (collectionId: Long, name: String, description: String?) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var name by remember { mutableStateOf("") }
     var desc by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var selectedCollectionId by remember(collections) { mutableStateOf(collections.firstOrNull()?.id) }
+    var expanded by remember { mutableStateOf(false) }
+    val selectedName = collections.firstOrNull { it.id == selectedCollectionId }?.name ?: ""
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -411,15 +424,49 @@ private fun NameDescDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (collections.isEmpty()) {
+                    Text("Create a collection first", color = MaterialTheme.colorScheme.error)
+                } else {
+                    ExposedDropdownMenuBox(
+                        expanded = expanded,
+                        onExpandedChange = { expanded = it },
+                    ) {
+                        OutlinedTextField(
+                            value = selectedName,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Collection") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                            modifier =
+                                Modifier
+                                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                                    .fillMaxWidth(),
+                        )
+                        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                            collections.forEach { c ->
+                                DropdownMenuItem(
+                                    text = { Text(c.name) },
+                                    onClick = {
+                                        selectedCollectionId = c.id
+                                        expanded = false
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },
         confirmButton = {
             TextButton(onClick = {
+                val collectionId = selectedCollectionId
                 if (name.isBlank()) {
                     error = "Name required"
+                } else if (collectionId == null) {
+                    error = "Select a collection"
                 } else {
-                    onConfirm(name.trim(), desc.trim().ifBlank { null })
+                    onConfirm(collectionId, name.trim(), desc.trim().ifBlank { null })
                 }
             }) { Text(confirmLabel) }
         },

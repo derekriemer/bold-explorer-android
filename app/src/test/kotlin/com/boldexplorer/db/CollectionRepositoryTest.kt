@@ -13,7 +13,8 @@ class CollectionRepositoryTest {
             val waypoints = WaypointRepositoryImpl(db)
 
             val collectionId = collections.create("Favorites", null)
-            val waypointId = waypoints.create("Point", 1.0, 2.0, null, null)
+            val homeCollectionId = collections.create("Home", null)
+            val waypointId = waypoints.create(homeCollectionId, "Point", 1.0, 2.0, null, null)
 
             collections.attachWaypoint(collectionId, waypointId)
             assertEquals(listOf("Point"), collections.waypointsForCollection(collectionId).map { it.name })
@@ -30,7 +31,8 @@ class CollectionRepositoryTest {
             val trails = TrailRepositoryImpl(db)
 
             val collectionId = collections.create("Favorites", null)
-            val trailId = trails.create("Loop", null)
+            val homeCollectionId = collections.create("Home", null)
+            val trailId = trails.create(homeCollectionId, "Loop", null)
 
             collections.attachTrail(collectionId, trailId)
             assertEquals(listOf("Loop"), collections.trailsForCollection(collectionId).map { it.name })

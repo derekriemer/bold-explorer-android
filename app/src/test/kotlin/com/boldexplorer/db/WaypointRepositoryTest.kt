@@ -8,14 +8,14 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class WaypointRepositoryTest {
-    private fun repo() = WaypointRepositoryImpl(createTestDatabase())
-
     // ── CRUD ──────────────────────────────────────────────────────────────────
 
     @Test fun `create and getById round-trips`() =
         runTest {
-            val r = repo()
-            val id = r.create("Summit", 47.5, -122.3, 1200.0, "Nice view")
+            val db = createTestDatabase()
+            val r = WaypointRepositoryImpl(db)
+            val cid = db.defaultCollection()
+            val id = r.create(cid, "Summit", 47.5, -122.3, 1200.0, "Nice view")
             val wp = r.getById(id)
             assertNotNull(wp)
             assertEquals("Summit", wp.name)
@@ -25,18 +25,32 @@ class WaypointRepositoryTest {
             assertEquals("Nice view", wp.description)
         }
 
+    @Test fun `create attaches waypoint to its collection`() =
+        runTest {
+            val db = createTestDatabase()
+            val r = WaypointRepositoryImpl(db)
+            val cRepo = CollectionRepositoryImpl(db)
+            val cid = cRepo.create("Trip", null)
+            val id = r.create(cid, "Summit", 47.5, -122.3, null, null)
+            assertEquals(listOf(id), cRepo.waypointsForCollection(cid).map { it.id })
+        }
+
     @Test fun `getAll returns all inserted waypoints`() =
         runTest {
-            val r = repo()
-            r.create("A", 1.0, 2.0, null, null)
-            r.create("B", 3.0, 4.0, null, null)
+            val db = createTestDatabase()
+            val r = WaypointRepositoryImpl(db)
+            val cid = db.defaultCollection()
+            r.create(cid, "A", 1.0, 2.0, null, null)
+            r.create(cid, "B", 3.0, 4.0, null, null)
             assertEquals(2, r.getAll().size)
         }
 
     @Test fun `update partial fields`() =
         runTest {
-            val r = repo()
-            val id = r.create("Old", 10.0, 20.0, null, null)
+            val db = createTestDatabase()
+            val r = WaypointRepositoryImpl(db)
+            val cid = db.defaultCollection()
+            val id = r.create(cid, "Old", 10.0, 20.0, null, null)
             r.update(id, name = "New")
             val wp = r.getById(id)!!
             assertEquals("New", wp.name)
@@ -45,10 +59,31 @@ class WaypointRepositoryTest {
 
     @Test fun `remove deletes waypoint`() =
         runTest {
-            val r = repo()
-            val id = r.create("Gone", 0.0, 0.0, null, null)
+            val db = createTestDatabase()
+            val r = WaypointRepositoryImpl(db)
+            val cid = db.defaultCollection()
+            val id = r.create(cid, "Gone", 0.0, 0.0, null, null)
             r.remove(id)
             assertNull(r.getById(id))
+        }
+
+    // ── Track points ────────────────────────────────────────────────────────
+
+    @Test fun `createTrackPoint links to trail without a collection`() =
+        runTest {
+            val db = createTestDatabase()
+            val wRepo = WaypointRepositoryImpl(db)
+            val tRepo = TrailRepositoryImpl(db)
+            val cRepo = CollectionRepositoryImpl(db)
+            val cid = cRepo.create("C", null)
+            val trailId = tRepo.create(cid, "Loop", null)
+
+            val tpId = wRepo.createTrackPoint(trailId, "Track 1", 1.0, 1.0, null)
+
+            // Track point is on the trail…
+            assertEquals(listOf("Track 1"), wRepo.forTrail(trailId).map { it.name })
+            // …but never a collection member.
+            assertTrue(cRepo.collectionsForWaypoint(tpId).isEmpty())
         }
 
     // ── Trail attachment ──────────────────────────────────────────────────────
@@ -58,10 +93,11 @@ class WaypointRepositoryTest {
             val db = createTestDatabase()
             val wRepo = WaypointRepositoryImpl(db)
             val tRepo = TrailRepositoryImpl(db)
+            val cid = db.defaultCollection()
 
-            val trailId = tRepo.create("Loop", null)
-            val w1 = wRepo.create("A", 1.0, 1.0, null, null)
-            val w2 = wRepo.create("B", 2.0, 2.0, null, null)
+            val trailId = tRepo.create(cid, "Loop", null)
+            val w1 = wRepo.create(cid, "A", 1.0, 1.0, null, null)
+            val w2 = wRepo.create(cid, "B", 2.0, 2.0, null, null)
             wRepo.attach(trailId, w1)
             wRepo.attach(trailId, w2)
 
@@ -74,11 +110,12 @@ class WaypointRepositoryTest {
             val db = createTestDatabase()
             val wRepo = WaypointRepositoryImpl(db)
             val tRepo = TrailRepositoryImpl(db)
+            val cid = db.defaultCollection()
 
-            val trailId = tRepo.create("Loop", null)
-            val w1 = wRepo.create("A", 1.0, 1.0, null, null)
-            val w2 = wRepo.create("B", 2.0, 2.0, null, null)
-            val w3 = wRepo.create("C", 3.0, 3.0, null, null)
+            val trailId = tRepo.create(cid, "Loop", null)
+            val w1 = wRepo.create(cid, "A", 1.0, 1.0, null, null)
+            val w2 = wRepo.create(cid, "B", 2.0, 2.0, null, null)
+            val w3 = wRepo.create(cid, "C", 3.0, 3.0, null, null)
             wRepo.attach(trailId, w1)
             wRepo.attach(trailId, w2)
             wRepo.attach(trailId, w3, position = 1) // insert C at position 1, shifts A and B
@@ -92,11 +129,12 @@ class WaypointRepositoryTest {
             val db = createTestDatabase()
             val wRepo = WaypointRepositoryImpl(db)
             val tRepo = TrailRepositoryImpl(db)
+            val cid = db.defaultCollection()
 
-            val trailId = tRepo.create("Loop", null)
-            val w1 = wRepo.create("A", 1.0, 1.0, null, null)
-            val w2 = wRepo.create("B", 2.0, 2.0, null, null)
-            val w3 = wRepo.create("C", 3.0, 3.0, null, null)
+            val trailId = tRepo.create(cid, "Loop", null)
+            val w1 = wRepo.create(cid, "A", 1.0, 1.0, null, null)
+            val w2 = wRepo.create(cid, "B", 2.0, 2.0, null, null)
+            val w3 = wRepo.create(cid, "C", 3.0, 3.0, null, null)
             wRepo.attach(trailId, w1)
             wRepo.attach(trailId, w2)
             wRepo.attach(trailId, w3)
@@ -113,9 +151,10 @@ class WaypointRepositoryTest {
             val db = createTestDatabase()
             val wRepo = WaypointRepositoryImpl(db)
             val tRepo = TrailRepositoryImpl(db)
+            val cid = db.defaultCollection()
 
-            val trailId = tRepo.create("T", null)
-            val ids = listOf("A", "B", "C", "D").map { wRepo.create(it, 0.0, 0.0, null, null) }
+            val trailId = tRepo.create(cid, "T", null)
+            val ids = listOf("A", "B", "C", "D").map { wRepo.create(cid, it, 0.0, 0.0, null, null) }
             ids.forEach { wRepo.attach(trailId, it) }
 
             // Move A (pos 1) to pos 3 → expected order B C A D
@@ -131,9 +170,10 @@ class WaypointRepositoryTest {
             val db = createTestDatabase()
             val wRepo = WaypointRepositoryImpl(db)
             val tRepo = TrailRepositoryImpl(db)
+            val cid = db.defaultCollection()
 
-            val trailId = tRepo.create("T", null)
-            val ids = listOf("A", "B", "C", "D").map { wRepo.create(it, 0.0, 0.0, null, null) }
+            val trailId = tRepo.create(cid, "T", null)
+            val ids = listOf("A", "B", "C", "D").map { wRepo.create(cid, it, 0.0, 0.0, null, null) }
             ids.forEach { wRepo.attach(trailId, it) }
 
             // Move D (pos 4) to pos 2 → expected order A D B C
@@ -149,9 +189,10 @@ class WaypointRepositoryTest {
             val db = createTestDatabase()
             val wRepo = WaypointRepositoryImpl(db)
             val tRepo = TrailRepositoryImpl(db)
+            val cid = db.defaultCollection()
 
-            val trailId = tRepo.create("T", null)
-            val ids = listOf("A", "B", "C").map { wRepo.create(it, 0.0, 0.0, null, null) }
+            val trailId = tRepo.create(cid, "T", null)
+            val ids = listOf("A", "B", "C").map { wRepo.create(cid, it, 0.0, 0.0, null, null) }
             ids.forEach { wRepo.attach(trailId, it) }
 
             wRepo.setPosition(trailId, ids[1], 2) // B stays at 2
@@ -163,12 +204,14 @@ class WaypointRepositoryTest {
 
     @Test fun `withDistanceFrom returns nearest first`() =
         runTest {
-            val r = repo()
+            val db = createTestDatabase()
+            val r = WaypointRepositoryImpl(db)
+            val cid = db.defaultCollection()
             // All three must be within the 50km default bbox radius.
             // 47.9 lat is ~44km from 47.5 — within the bbox; 48.0 would be ~55km (outside).
-            r.create("Far", 47.9, -122.0, null, null)
-            r.create("Close", 47.5001, -122.3001, null, null)
-            r.create("Medium", 47.6, -122.2, null, null)
+            r.create(cid, "Far", 47.9, -122.0, null, null)
+            r.create(cid, "Close", 47.5001, -122.3001, null, null)
+            r.create(cid, "Medium", 47.6, -122.2, null, null)
 
             val results = r.withDistanceFrom(47.5, -122.3)
             assertEquals(3, results.size)
@@ -179,8 +222,10 @@ class WaypointRepositoryTest {
 
     @Test fun `withDistanceFrom limit is respected`() =
         runTest {
-            val r = repo()
-            repeat(10) { i -> r.create("W$i", 47.5 + i * 0.01, -122.3, null, null) }
+            val db = createTestDatabase()
+            val r = WaypointRepositoryImpl(db)
+            val cid = db.defaultCollection()
+            repeat(10) { i -> r.create(cid, "W$i", 47.5 + i * 0.01, -122.3, null, null) }
             val results = r.withDistanceFrom(47.5, -122.3, limit = 3)
             assertEquals(3, results.size)
         }
@@ -190,10 +235,11 @@ class WaypointRepositoryTest {
             val db = createTestDatabase()
             val wRepo = WaypointRepositoryImpl(db)
             val tRepo = TrailRepositoryImpl(db)
+            val cid = db.defaultCollection()
 
-            val trailId = tRepo.create("T", null)
-            val inTrail = wRepo.create("InTrail", 47.5001, -122.3001, null, null)
-            wRepo.create("NotInTrail", 47.5002, -122.3002, null, null)
+            val trailId = tRepo.create(cid, "T", null)
+            val inTrail = wRepo.create(cid, "InTrail", 47.5001, -122.3001, null, null)
+            wRepo.create(cid, "NotInTrail", 47.5002, -122.3002, null, null)
             wRepo.attach(trailId, inTrail)
 
             val results = wRepo.withDistanceFrom(47.5, -122.3, trailId = trailId)
@@ -203,10 +249,12 @@ class WaypointRepositoryTest {
 
     @Test fun `withDistanceFrom handles anti-meridian crossing`() =
         runTest {
-            val r = repo()
-            r.create("East", 0.0, 179.95, null, null)
-            r.create("West", 0.0, -179.95, null, null)
-            r.create("Far", 0.0, 170.0, null, null)
+            val db = createTestDatabase()
+            val r = WaypointRepositoryImpl(db)
+            val cid = db.defaultCollection()
+            r.create(cid, "East", 0.0, 179.95, null, null)
+            r.create(cid, "West", 0.0, -179.95, null, null)
+            r.create(cid, "Far", 0.0, 170.0, null, null)
 
             val results = r.withDistanceFrom(0.0, 179.99).map { it.waypoint.name }
 
@@ -215,10 +263,12 @@ class WaypointRepositoryTest {
 
     @Test fun `withDistanceFrom near pole skips longitude filter and sorts by distance`() =
         runTest {
-            val r = repo()
-            r.create("Near", 89.99, 90.0, null, null)
-            r.create("AlsoNear", 89.99, -90.0, null, null)
-            r.create("Farther", 89.5, 0.0, null, null)
+            val db = createTestDatabase()
+            val r = WaypointRepositoryImpl(db)
+            val cid = db.defaultCollection()
+            r.create(cid, "Near", 89.99, 90.0, null, null)
+            r.create(cid, "AlsoNear", 89.99, -90.0, null, null)
+            r.create(cid, "Farther", 89.5, 0.0, null, null)
 
             val results = r.withDistanceFrom(89.99, 0.0).map { it.waypoint.name }
 

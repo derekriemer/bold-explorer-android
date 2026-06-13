@@ -222,17 +222,20 @@ class CollectionsViewModel
                     loadContents(collectionId)
 
                     result.waypoints.forEach { p ->
-                        val wpId = waypointRepo.create(p.name, p.lat, p.lon, p.elevM, p.description)
-                        collectionRepo.attachWaypoint(collectionId, wpId)
+                        waypointRepo.create(collectionId, p.name, p.lat, p.lon, p.elevM, p.description)
                     }
                     result.trails.forEach { trail ->
-                        val trailId = trailRepo.create(trail.name, null)
-                        val kind = if (trail.isRoute) Waypoint.KIND_WAYPOINT else Waypoint.KIND_TRACK_POINT
+                        val trailId = trailRepo.create(collectionId, trail.name, null)
                         trail.points.forEach { p ->
-                            val wpId = waypointRepo.create(p.name, p.lat, p.lon, p.elevM, p.description, kind)
-                            waypointRepo.attach(trailId, wpId)
+                            if (trail.isRoute) {
+                                // Route points are named, collection-owned waypoints linked to the trail.
+                                val wpId = waypointRepo.create(collectionId, p.name, p.lat, p.lon, p.elevM, p.description)
+                                waypointRepo.attach(trailId, wpId)
+                            } else {
+                                // Track points derive their collection through the trail.
+                                waypointRepo.createTrackPoint(trailId, p.name, p.lat, p.lon, p.elevM)
+                            }
                         }
-                        collectionRepo.attachTrail(collectionId, trailId)
                     }
                     _toast.value = "Imported \"$collectionName\" — ${result.summary}"
                 } catch (e: Exception) {

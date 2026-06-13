@@ -12,7 +12,8 @@ class AutoWaypointRepositoryTest {
             val trails = TrailRepositoryImpl(db)
             val autoWaypoints = AutoWaypointRepositoryImpl(db)
 
-            val trailId = trails.create("Loop", null)
+            val cid = db.defaultCollection()
+            val trailId = trails.create(cid, "Loop", null)
             autoWaypoints.create(
                 trailId = trailId,
                 name = "Cue",

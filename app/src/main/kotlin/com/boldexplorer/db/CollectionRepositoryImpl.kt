@@ -140,6 +140,8 @@ private fun com.boldexplorer.db.Waypoint.toModel() =
         elevM = elev_m,
         description = description,
         createdAt = created_at,
+        kind = kind,
+        tentative = tentative != 0L,
     )
 
 private fun com.boldexplorer.db.Trail.toModel() =
@@ -148,4 +150,5 @@ private fun com.boldexplorer.db.Trail.toModel() =
         name = name,
         description = description,
         createdAt = created_at,
+        tentative = tentative != 0L,
     )

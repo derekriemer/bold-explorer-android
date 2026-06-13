@@ -7,8 +7,10 @@ import androidx.lifecycle.viewModelScope
 import com.boldexplorer.gpx.GpxFileWriter
 import com.boldexplorer.gpx.GpxParser
 import com.boldexplorer.shared.gpx.GpxExporter
+import com.boldexplorer.shared.model.Collection
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.Waypoint
+import com.boldexplorer.shared.repository.CollectionRepository
 import com.boldexplorer.shared.repository.TrailRepository
 import com.boldexplorer.shared.repository.WaypointRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -34,9 +36,15 @@ class TrailsViewModel
         @ApplicationContext private val context: Context,
         private val trailRepo: TrailRepository,
         private val waypointRepo: WaypointRepository,
+        private val collectionRepo: CollectionRepository,
     ) : ViewModel() {
         val trails: StateFlow<List<Trail>> =
             trailRepo
+                .observeAll()
+                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
+
+        val collections: StateFlow<List<Collection>> =
+            collectionRepo
                 .observeAll()
                 .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
@@ -130,11 +138,12 @@ class TrailsViewModel
         }
 
         fun create(
+            collectionId: Long,
             name: String,
             description: String?,
         ) {
             viewModelScope.launch {
-                val id = trailRepo.create(name, description)
+                val id = trailRepo.create(collectionId, name, description)
                 _expandedTrailIds.value = _expandedTrailIds.value + id
                 _toast.value = "Trail created"
             }
@@ -167,8 +176,7 @@ class TrailsViewModel
             elevM: Double?,
         ) {
             viewModelScope.launch {
-                val wpId = waypointRepo.create(name, lat, lon, elevM, null)
-                waypointRepo.attach(trailId, wpId)
+                waypointRepo.createTrackPoint(trailId, name, lat, lon, elevM)
                 _toast.value = "Waypoint added"
             }
         }
@@ -250,15 +258,19 @@ class TrailsViewModel
                         _toast.value = "No waypoints or trails found in file"
                         return@launch
                     }
+                    val collectionId = collectionRepo.create(result.collectionName ?: "Imported", null)
                     result.waypoints.forEach { p ->
-                        waypointRepo.create(p.name, p.lat, p.lon, p.elevM, p.description)
+                        waypointRepo.create(collectionId, p.name, p.lat, p.lon, p.elevM, p.description)
                     }
                     result.trails.forEach { trail ->
-                        val trailId = trailRepo.create(trail.name, null)
-                        val kind = if (trail.isRoute) Waypoint.KIND_WAYPOINT else Waypoint.KIND_TRACK_POINT
+                        val trailId = trailRepo.create(collectionId, trail.name, null)
                         trail.points.forEach { p ->
-                            val wpId = waypointRepo.create(p.name, p.lat, p.lon, p.elevM, p.description, kind)
-                            waypointRepo.attach(trailId, wpId)
+                            if (trail.isRoute) {
+                                val wpId = waypointRepo.create(collectionId, p.name, p.lat, p.lon, p.elevM, p.description)
+                                waypointRepo.attach(trailId, wpId)
+                            } else {
+                                waypointRepo.createTrackPoint(trailId, p.name, p.lat, p.lon, p.elevM)
+                            }
                         }
                     }
                     _toast.value = "Imported ${result.summary}"

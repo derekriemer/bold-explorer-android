@@ -194,8 +194,13 @@ class WaypointsViewModel
             lon: Double,
             elevM: Double?,
         ) {
+            val collectionId =
+                _collectionFilter.value ?: run {
+                    _toast.value = "Select a collection first"
+                    return
+                }
             viewModelScope.launch {
-                waypointRepo.create(name, lat, lon, elevM, null)
+                waypointRepo.create(collectionId, name, lat, lon, elevM, null)
                 _toast.value = "Waypoint added"
             }
         }
@@ -263,15 +268,19 @@ class WaypointsViewModel
                         _toast.value = "No waypoints or trails found in file"
                         return@launch
                     }
+                    val collectionId = collectionRepo.create(result.collectionName ?: "Imported", null)
                     result.waypoints.forEach { p ->
-                        waypointRepo.create(p.name, p.lat, p.lon, p.elevM, p.description)
+                        waypointRepo.create(collectionId, p.name, p.lat, p.lon, p.elevM, p.description)
                     }
                     result.trails.forEach { trail ->
-                        val trailId = trailRepo.create(trail.name, null)
-                        val kind = if (trail.isRoute) Waypoint.KIND_WAYPOINT else Waypoint.KIND_TRACK_POINT
+                        val trailId = trailRepo.create(collectionId, trail.name, null)
                         trail.points.forEach { p ->
-                            val wpId = waypointRepo.create(p.name, p.lat, p.lon, p.elevM, p.description, kind)
-                            waypointRepo.attach(trailId, wpId)
+                            if (trail.isRoute) {
+                                val wpId = waypointRepo.create(collectionId, p.name, p.lat, p.lon, p.elevM, p.description)
+                                waypointRepo.attach(trailId, wpId)
+                            } else {
+                                waypointRepo.createTrackPoint(trailId, p.name, p.lat, p.lon, p.elevM)
+                            }
                         }
                     }
                     _toast.value = "Imported ${result.summary}"
