@@ -44,6 +44,7 @@ import com.boldexplorer.shared.navigation.TrailGuidanceState
 import com.boldexplorer.shared.navigation.TrailPoint
 import com.boldexplorer.shared.navigation.TrailRecordingMachine
 import com.boldexplorer.shared.navigation.TrailRecordingState
+import com.boldexplorer.shared.navigation.collectionNavPoints
 import com.boldexplorer.shared.navigation.displayName
 import com.boldexplorer.shared.repository.CollectionRepository
 import com.boldexplorer.shared.repository.SettingsRepository
@@ -624,10 +625,15 @@ class GpsViewModel
                     compassProvider.setLocation(s.lat, s.lon, s.altitude ?: 0.0)
                 }
             }
-            // Reload collection explorer whenever the selected collection's waypoints or trails change.
+            // Reload collection explorer from a fully reactive composition: standalone waypoints plus each
+            // trail's ends, where the ends track each trail's waypoints flow. Adding a track point (which
+            // touches only trail_waypoint) therefore refreshes the trail's ends live — no app restart.
             viewModelScope.launch {
-                combine(collectionWaypoints, collectionTrails) { wps, trails -> wps to trails }
-                    .collect { (wps, trails) -> reloadCollectionExplorer(wps, trails) }
+                collectionNavPoints(
+                    standalones = collectionWaypoints,
+                    trails = collectionTrails,
+                    trailWaypoints = trailRepo::observeWaypointsForTrail,
+                ).collect { points -> reloadCollectionExplorer(points) }
             }
             // Bridge: honour "set as GPS target" requests made from the Waypoints/Trails screens so the
             // user can re-point navigation without leaving the screen they are on.
@@ -1223,31 +1229,16 @@ class GpsViewModel
         }
 
         /**
-         * Rebuild the CollectionExplorer's point list — standalone waypoints plus each trail's
-         * start/end points — for the selected collection, preserving the current explore-mode flag.
+         * Load the CollectionExplorer with an already-composed point list (standalones + trail ends,
+         * derived reactively by [collectionNavPoints]), preserving the current explore-mode flag.
          * No-op when no collection is selected.
          */
-        private suspend fun reloadCollectionExplorer(
-            wps: List<Waypoint>,
-            trails: List<Trail>,
-        ) {
+        private fun reloadCollectionExplorer(points: List<CollectionPoint>) {
             if (_selectedCollectionId.value == null) return
-            val standalones = wps.map { CollectionPoint.Standalone(it) }
-            val trailEnds =
-                trails.flatMap { trail ->
-                    val ordered = trailRepo.waypointsForTrail(trail.id)
-                    listOfNotNull(
-                        ordered.firstOrNull()?.let { CollectionPoint.TrailEnd(it, trail, isStart = true) },
-                        ordered
-                            .lastOrNull()
-                            ?.takeIf { ordered.size > 1 }
-                            ?.let { CollectionPoint.TrailEnd(it, trail, isStart = false) },
-                    )
-                }
             val currentExploreMode =
                 (collectionExplorer.state.value as? CollectionExplorerState.Active)
                     ?.exploreMode ?: false
-            collectionExplorer.load(standalones + trailEnds, currentExploreMode)
+            collectionExplorer.load(points, currentExploreMode)
         }
 
         /**
