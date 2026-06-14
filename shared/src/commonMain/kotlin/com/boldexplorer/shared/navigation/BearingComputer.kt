@@ -97,6 +97,13 @@ object BearingComputer {
     // sin is bounded to [-1, 1] so no coercion needed.
     fun computePan(relativeDeg: Double): Float = sin(relativeDeg * PI / 180.0).toFloat()
 
+    // Alignment uses the full stereo range within ±45° so small heading errors are easier to hear.
+    // Saturating outside that range preserves turn direction without wrapping back toward centre.
+    fun computeAlignmentPan(relativeDeg: Double): Float {
+        val normalized = (relativeDeg / 45.0).coerceIn(-1.0, 1.0)
+        return sin(normalized * PI / 2.0).toFloat()
+    }
+
     // Returns the beacon pitch in Hz — logarithmic / musical mapping:
     // 0°→880 Hz (A5, ahead), ±90°→440 Hz (A4, side), ±180°→220 Hz (A3, behind).
     // Each 90° step is exactly one octave — perceptually equal intervals.

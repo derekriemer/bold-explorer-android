@@ -58,8 +58,8 @@ class GpsHeadingSmoother(
         val fresh = buffer.filter { nowMs - it.timestampMs <= MAX_STALENESS_MS }
         if (fresh.size < MIN_FIXES) return null
 
-        var sumX = 0.0   // East
-        var sumY = 0.0   // North
+        var sumX = 0.0 // East
+        var sumY = 0.0 // North
         var totalWeight = 0.0
         var newestTimestampMs = Long.MIN_VALUE
 
@@ -68,8 +68,8 @@ class GpsHeadingSmoother(
             val weight = fix.speedMps * recency
             if (weight <= 0.0) continue
             val rad = Math.toRadians(fix.headingDeg)
-            sumX += weight * sin(rad)   // East component (CW-from-North convention)
-            sumY += weight * cos(rad)   // North component
+            sumX += weight * sin(rad) // East component (CW-from-North convention)
+            sumY += weight * cos(rad) // North component
             totalWeight += weight
             if (fix.timestampMs > newestTimestampMs) newestTimestampMs = fix.timestampMs
         }

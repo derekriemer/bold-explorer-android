@@ -74,7 +74,7 @@ class AudioCueScheduler(
                                 val deg = relativeDeg.value
                                 if (deg != null) {
                                     val aligned = abs(deg) <= config.alignmentDeadbandDeg
-                                    val pan = BearingComputer.computePan(deg)
+                                    val pan = BearingComputer.computeAlignmentPan(deg)
                                     val pitchHz = BearingComputer.computeAlignmentPitchHz(deg)
                                     _events.emit(AudioCueEvent.AlignmentPing(pan, pitchHz))
                                     val intervalMs =

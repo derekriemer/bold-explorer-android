@@ -84,6 +84,31 @@ class BearingComputerTest {
         }
     }
 
+    // ---------- computeAlignmentPan ----------
+
+    @Test
+    fun computeAlignmentPan_at0deg_isZero() {
+        assertEquals(0.0f, BearingComputer.computeAlignmentPan(0.0), absoluteTolerance = 1e-6f)
+    }
+
+    @Test
+    fun computeAlignmentPan_at15deg_isHalfRight() {
+        assertEquals(0.5f, BearingComputer.computeAlignmentPan(15.0), absoluteTolerance = 1e-6f)
+    }
+
+    @Test
+    fun computeAlignmentPan_atMinus15deg_isHalfLeft() {
+        assertEquals(-0.5f, BearingComputer.computeAlignmentPan(-15.0), absoluteTolerance = 1e-6f)
+    }
+
+    @Test
+    fun computeAlignmentPan_saturatesAt45deg() {
+        assertEquals(1.0f, BearingComputer.computeAlignmentPan(45.0), absoluteTolerance = 1e-6f)
+        assertEquals(-1.0f, BearingComputer.computeAlignmentPan(-45.0), absoluteTolerance = 1e-6f)
+        assertEquals(1.0f, BearingComputer.computeAlignmentPan(180.0), absoluteTolerance = 1e-6f)
+        assertEquals(-1.0f, BearingComputer.computeAlignmentPan(-180.0), absoluteTolerance = 1e-6f)
+    }
+
     // ---------- toAlignmentRelative ----------
 
     @Test

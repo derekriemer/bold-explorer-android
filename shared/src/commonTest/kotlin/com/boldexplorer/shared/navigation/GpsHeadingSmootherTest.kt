@@ -9,7 +9,6 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class GpsHeadingSmootherTest {
-
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private fun smoother() = GpsHeadingSmoother(windowSize = 5)
@@ -21,7 +20,11 @@ class GpsHeadingSmootherTest {
     ) = LocationSample(lat = 0.0, lon = 0.0, heading = headingDeg, speed = speedMps, timestamp = timestampMs)
 
     /** Assert that two bearings are within [toleranceDeg] of each other (handles wrap). */
-    private fun assertNearBearing(expected: Double, actual: Double, toleranceDeg: Double = 2.0) {
+    private fun assertNearBearing(
+        expected: Double,
+        actual: Double,
+        toleranceDeg: Double = 2.0,
+    ) {
         val diff = abs(((actual - expected + 540.0) % 360.0) - 180.0)
         assertTrue(diff <= toleranceDeg, "Expected bearing near $expected° but got $actual° (diff=$diff°)")
     }
@@ -101,11 +104,11 @@ class GpsHeadingSmootherTest {
     @Test
     fun opposingHeadings_returnsNull() {
         val s = smoother()
-        s.addFix(fix(0.0,   speedMps = 0.6, timestampMs = 1_000))
+        s.addFix(fix(0.0, speedMps = 0.6, timestampMs = 1_000))
         s.addFix(fix(180.0, speedMps = 0.6, timestampMs = 2_000))
-        s.addFix(fix(0.0,   speedMps = 0.6, timestampMs = 3_000))
+        s.addFix(fix(0.0, speedMps = 0.6, timestampMs = 3_000))
         s.addFix(fix(180.0, speedMps = 0.6, timestampMs = 4_000))
-        s.addFix(fix(0.0,   speedMps = 0.6, timestampMs = 5_000))
+        s.addFix(fix(0.0, speedMps = 0.6, timestampMs = 5_000))
         val result = s.smoothedHeading(5_000)
         assertNull(result)
         // Rejected confidence should be recorded for logging
@@ -119,15 +122,15 @@ class GpsHeadingSmootherTest {
     fun fasterFixesDominate() {
         val s = smoother()
         // Three fast fixes at 90° (East), two slow fixes at 180° (South)
-        s.addFix(fix(90.0,  speedMps = 0.9, timestampMs = 1_000))
-        s.addFix(fix(90.0,  speedMps = 0.9, timestampMs = 2_000))
-        s.addFix(fix(90.0,  speedMps = 0.9, timestampMs = 3_000))
+        s.addFix(fix(90.0, speedMps = 0.9, timestampMs = 1_000))
+        s.addFix(fix(90.0, speedMps = 0.9, timestampMs = 2_000))
+        s.addFix(fix(90.0, speedMps = 0.9, timestampMs = 3_000))
         s.addFix(fix(180.0, speedMps = 0.45, timestampMs = 4_000))
         s.addFix(fix(180.0, speedMps = 0.45, timestampMs = 5_000))
         val result = s.smoothedHeading(5_000)
         assertNotNull(result)
         // Result should be significantly closer to 90° than 180°
-        val diffTo90  = abs(((result.deg - 90.0  + 540.0) % 360.0) - 180.0)
+        val diffTo90 = abs(((result.deg - 90.0 + 540.0) % 360.0) - 180.0)
         val diffTo180 = abs(((result.deg - 180.0 + 540.0) % 360.0) - 180.0)
         assertTrue(diffTo90 < diffTo180, "Expected result closer to 90° than 180°, got ${result.deg}°")
     }
@@ -181,7 +184,7 @@ class GpsHeadingSmootherTest {
         val result = s.smoothedHeading(nowMs)
         assertNotNull(result)
         // Fresh South fixes should pull result closer to 180° than 90°
-        val diffTo90  = abs(((result.deg - 90.0  + 540.0) % 360.0) - 180.0)
+        val diffTo90 = abs(((result.deg - 90.0 + 540.0) % 360.0) - 180.0)
         val diffTo180 = abs(((result.deg - 180.0 + 540.0) % 360.0) - 180.0)
         assertTrue(diffTo180 < diffTo90, "Expected result closer to 180°, got ${result.deg}°")
     }
