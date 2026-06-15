@@ -34,6 +34,8 @@ import com.boldexplorer.shared.navigation.CollectionExplorer
 import com.boldexplorer.shared.navigation.CollectionExplorerEvent
 import com.boldexplorer.shared.navigation.CollectionExplorerState
 import com.boldexplorer.shared.navigation.CollectionPoint
+import com.boldexplorer.shared.navigation.NavMode
+import com.boldexplorer.shared.navigation.NavModeResolver
 import com.boldexplorer.shared.navigation.NavigationTargetResolver
 import com.boldexplorer.shared.navigation.TrailFollower
 import com.boldexplorer.shared.navigation.TrailFollowerEvent
@@ -101,7 +103,7 @@ data class GpsUiState(
     val announcement: String = "",
     val navigationActive: Boolean = false,
     val recordingState: TrailRecordingState = TrailRecordingState.Idle,
-    val canExtendTrailEnd: Boolean = false,
+    val navMode: NavMode = NavMode.NoCollection,
 )
 
 sealed interface GpsAction {
@@ -225,7 +227,6 @@ private data class SelectionGroup(
     val selectedCollectionId: Long?,
     val trailFollowState: TrailFollowerState,
     val collectionExplorerState: CollectionExplorerState,
-    val canExtendTrailEnd: Boolean,
 )
 
 private data class BearingGroup(
@@ -254,6 +255,7 @@ private data class InteractionGroup(
     val announcement: String,
     val navigationActive: Boolean,
     val recordingState: TrailRecordingState,
+    val navMode: NavMode,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -425,28 +427,6 @@ class GpsViewModel
         private val collectionExplorer = CollectionExplorer()
         val collectionExplorerState: StateFlow<CollectionExplorerState> = collectionExplorer.state
 
-        // True when the current explore target is a trail end the user is close enough to extend.
-        // The extension threshold is accuracy-scaled (wider than the 10 m follow-from-end hook) so a
-        // noisy fix doesn't strand the user just out of range. Extend is suppressed while already
-        // following or recording, so follow + record are never offered at once.
-        val canExtendTrailEnd: StateFlow<Boolean> =
-            combine(
-                collectionExplorer.state,
-                location,
-                accuracyM,
-                recordingMachine.state,
-            ) { explorer, loc, acc, recording ->
-                val target = (explorer as? CollectionExplorerState.Active)?.target
-                if (target !is CollectionPoint.TrailEnd || loc == null) {
-                    false
-                } else if (recording is TrailRecordingState.Recording || recording is TrailRecordingState.Following) {
-                    false
-                } else {
-                    val dist = haversineDistanceMeters(LatLng(loc.lat, loc.lon), LatLng(target.waypoint.lat, target.waypoint.lon))
-                    dist <= maxOf(EXTEND_FLOOR_M, EXTEND_ACCURACY_FACTOR * (acc ?: 0.0))
-                }
-            }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), false)
-
         // ── Derived navigation values ─────────────────────────────────────────────────
 
         // The active-target precedence rule (trail-follow waypoint wins over the explorer target) and
@@ -465,6 +445,20 @@ class GpsViewModel
         val bearingDeg: StateFlow<Double?> = targetResolver.bearingDeg
         val distanceM: StateFlow<Double?> = targetResolver.distanceM
         val relativeDeg: StateFlow<Double?> = targetResolver.relativeDeg
+
+        // The single derived mode the GPS screen renders its contextual trail controls from. Folds the
+        // three state holders with an explicit precedence (active session beats explorer target) and
+        // never reads the unreliable TrailRecordingState.Selected.hasPoints flag — see NavModeResolver.
+        private val navModeResolver =
+            NavModeResolver(
+                scope = viewModelScope,
+                recordingState = recordingMachine.state,
+                explorerState = collectionExplorer.state,
+                selectedCollectionId = _selectedCollectionId,
+                location = location,
+                accuracyM = accuracyM,
+            )
+        val navMode: StateFlow<NavMode> = navModeResolver.navMode
 
         // ── Alignment ─────────────────────────────────────────────────────────────────
 
@@ -551,8 +545,7 @@ class GpsViewModel
                 selectedCollectionId,
                 trailFollowState,
                 collectionExplorerState,
-                canExtendTrailEnd,
-            ) { tr, col, fs, ce, ext -> SelectionGroup(tr, col, fs, ce, ext) }
+            ) { tr, col, fs, ce -> SelectionGroup(tr, col, fs, ce) }
         private val bearingGroup =
             combine(
                 combine(targetName, bearingDeg, distanceM, relativeDeg) { tn, bd, dm, rd ->
@@ -569,14 +562,11 @@ class GpsViewModel
             }
         private val interactionGroup =
             combine(
-                alignmentBearingDeg,
-                alignmentRelativeDeg,
-                announcement,
-                navigationActive,
-                recordingState,
-            ) { ab, ar, ann, na, rec ->
-                InteractionGroup(ab, ar, ann, na, rec)
-            }
+                combine(alignmentBearingDeg, alignmentRelativeDeg, announcement, navigationActive) { ab, ar, ann, na ->
+                    InteractionGroup(ab, ar, ann, na, TrailRecordingState.Idle, NavMode.NoCollection)
+                },
+                combine(recordingState, navMode) { rec, nm -> rec to nm },
+            ) { group, (rec, nm) -> group.copy(recordingState = rec, navMode = nm) }
 
         val uiState: StateFlow<GpsUiState> =
             combine(
@@ -602,7 +592,6 @@ class GpsViewModel
                     selectedCollectionId = sel.selectedCollectionId,
                     trailFollowState = sel.trailFollowState,
                     collectionExplorerState = sel.collectionExplorerState,
-                    canExtendTrailEnd = sel.canExtendTrailEnd,
                     targetName = bear.targetName,
                     bearingDeg = bear.bearingDeg,
                     distanceM = bear.distanceM,
@@ -613,6 +602,7 @@ class GpsViewModel
                     announcement = inter.announcement,
                     navigationActive = inter.navigationActive,
                     recordingState = inter.recordingState,
+                    navMode = inter.navMode,
                 )
             }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), GpsUiState())
 
@@ -1428,7 +1418,7 @@ class GpsViewModel
 
         /**
          * Resume recording onto a trail from one of its ends. Offered only when the explore target is a
-         * [CollectionPoint.TrailEnd] within the accuracy-scaled extension threshold (see [canExtendTrailEnd]).
+         * [CollectionPoint.TrailEnd] within the accuracy-scaled extension threshold (see [NavModeResolver]).
          */
         fun extendTrailFromCollectionEnd(trailEnd: CollectionPoint.TrailEnd) {
             _selectedTrailId.value = trailEnd.trail.id
@@ -1591,11 +1581,6 @@ class GpsViewModel
         companion object {
             private const val AUTO_RECORD_DISTANCE_M = 10.0
             private const val AUTO_RECORD_TTS_INTERVAL = 5
-
-            // Record-extend uses a wider, accuracy-scaled threshold than the 10 m follow-from-end hook
-            // (TRAIL_APPROACH_M) so a noisy fix doesn't strand the user just out of range.
-            private const val EXTEND_FLOOR_M = 15.0
-            private const val EXTEND_ACCURACY_FACTOR = 2.0
 
             // Minimum speed (m/s) before GPS course-over-ground is trusted for direction-aware selection.
             private const val MIN_TRAVEL_HEADING_SPEED_MPS = 1.0

@@ -4,7 +4,6 @@ import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -54,7 +53,8 @@ import com.boldexplorer.shared.navigation.BearingComputer
 import com.boldexplorer.shared.navigation.CollectionExplorerState
 import com.boldexplorer.shared.navigation.CollectionPoint
 import com.boldexplorer.shared.navigation.CollectionTargeting
-import com.boldexplorer.shared.navigation.TrailRecordingState
+import com.boldexplorer.shared.navigation.NavMode
+import com.boldexplorer.shared.navigation.TrailEndAction
 import com.boldexplorer.shared.settings.AppSettings
 import com.boldexplorer.ui.common.CreateItemDialog
 
@@ -226,7 +226,11 @@ fun GpsScreen(
             )
 
             // ── Pinned contextual trail actions ─────────────────────────────────────
-            ContextualTrailActions(state = state, active = active, onAction = onAction)
+            ContextualTrailActions(
+                navMode = state.navMode,
+                selectedCollectionId = state.selectedCollectionId,
+                onAction = onAction,
+            )
 
             Spacer(Modifier.height(8.dp))
 
@@ -356,8 +360,7 @@ private fun CollectionSelector(
             modifier =
                 Modifier
                     .menuAnchor(androidx.compose.material3.MenuAnchorType.PrimaryNotEditable)
-                    .fillMaxWidth()
-                    .semantics { contentDescription = "Selected collection: $selectedName" },
+                    .fillMaxWidth(),
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             if (collections.isEmpty()) {
@@ -373,7 +376,6 @@ private fun CollectionSelector(
                             onAction(GpsAction.SelectCollection(collection.id))
                             expanded = false
                         },
-                        modifier = Modifier.semantics { contentDescription = "Select collection ${collection.name}" },
                     )
                 }
             }
@@ -393,7 +395,7 @@ private fun CollectionControls(
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp),
     ) {
-        Text("Explore mode", modifier = Modifier.weight(1f))
+        Text("Auto-advance", modifier = Modifier.weight(1f))
         if (active.exploreMode && active.visitedIds.isNotEmpty()) {
             TextButton(
                 onClick = { onAction(GpsAction.ClearCollectionVisited) },
@@ -405,7 +407,8 @@ private fun CollectionControls(
             onCheckedChange = { onAction(GpsAction.SetCollectionExploreMode(it)) },
             modifier =
                 Modifier.semantics {
-                    contentDescription = if (active.exploreMode) "Explore mode, on" else "Explore mode, off"
+                    contentDescription = if (active.exploreMode) "Auto-advance, on" else "Auto-advance, off"
+                    // this one may be unnecessary.
                 },
         )
     }
@@ -534,58 +537,46 @@ private fun CollectionTargetList(
 
 @Composable
 private fun ContextualTrailActions(
-    state: GpsUiState,
-    active: CollectionExplorerState.Active?,
+    navMode: NavMode,
+    selectedCollectionId: Long?,
     onAction: (GpsAction) -> Unit,
 ) {
-    // The recording state machine is the single source of truth: Follow and Record are never offered
-    // at the same time.
-    val recording = state.recordingState
-    val busy = recording is TrailRecordingState.Recording || recording is TrailRecordingState.Following
-
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-        // Skip the current collection target.
-        if (active?.target != null && !busy) {
-            TextButton(
-                onClick = { onAction(GpsAction.SkipCollectionTarget) },
-                modifier = Modifier.semantics { contentDescription = "Skip current target and pick something else" },
-            ) { Text("Not this") }
-        }
-
-        val target = active?.target
-
-        // Follow-from-end: only when the current target is a trail end within approach range.
-        if (target is CollectionPoint.TrailEnd && active.nearTrailEndM != null && !busy) {
-            Button(
-                onClick = { onAction(GpsAction.FollowTrailFromCollectionEnd(target)) },
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .semantics {
-                            contentDescription =
-                                "Follow ${target.trail.name}" + if (target.isStart) "" else " in reverse"
-                        },
-            ) {
-                Text("Follow ${target.trail.name}")
+        when (navMode) {
+            NavMode.NoCollection, NavMode.NoTarget -> {
+                RecordNewTrailButton(selectedCollectionId = selectedCollectionId, onAction = onAction)
             }
-        }
 
-        // Extend: resume recording onto a trail from its end, within the accuracy-scaled threshold.
-        if (target is CollectionPoint.TrailEnd && state.canExtendTrailEnd && !busy) {
-            Button(
-                onClick = { onAction(GpsAction.ExtendTrailFromCollectionEnd(target)) },
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .semantics { contentDescription = "Extend ${target.trail.name} by recording from this end" },
-            ) {
-                Text("Extend ${target.trail.name}")
+            is NavMode.CollectionTarget -> {
+                SkipTargetButton(onAction)
+                RecordNewTrailButton(selectedCollectionId = selectedCollectionId, onAction = onAction)
             }
-        }
 
-        // Trail follow / record controls, mutually exclusive by machine state.
-        when {
-            recording is TrailRecordingState.Following -> {
+            is NavMode.AtTrailEnd -> {
+                val end = navMode.trailEnd
+                SkipTargetButton(onAction)
+                if (TrailEndAction.Follow in navMode.actions) {
+                    Button(
+                        onClick = { onAction(GpsAction.FollowTrailFromCollectionEnd(end)) },
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .semantics { contentDescription = "Follow ${end.trail.name}" },
+                    ) { Text("Follow ${end.trail.name}") }
+                }
+                if (TrailEndAction.Extend in navMode.actions) {
+                    Button(
+                        onClick = { onAction(GpsAction.ExtendTrailFromCollectionEnd(end)) },
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .semantics { contentDescription = "Extend ${end.trail.name} by recording from this end" },
+                    ) { Text("Extend ${end.trail.name}") }
+                }
+                RecordNewTrailButton(selectedCollectionId = selectedCollectionId, onAction = onAction)
+            }
+
+            is NavMode.FollowingTrail -> {
                 Button(
                     onClick = { onAction(GpsAction.StopFollowTrail) },
                     modifier =
@@ -595,8 +586,8 @@ private fun ContextualTrailActions(
                 ) { Text("Stop Navigation") }
             }
 
-            recording is TrailRecordingState.Recording -> {
-                val recordStatusText = "Auto-recording: ${recording.pointCount} points captured"
+            is NavMode.RecordingTrail -> {
+                val recordStatusText = "Auto-recording: ${navMode.pointCount} points captured"
                 Text(
                     recordStatusText,
                     style = MaterialTheme.typography.bodySmall,
@@ -610,76 +601,47 @@ private fun ContextualTrailActions(
                             .semantics { contentDescription = "Stop auto-recording GPS track" },
                 ) { Text("Stop Auto-Record") }
             }
-
-            recording is TrailRecordingState.Selected && recording.hasPoints -> {
-                // A trail with points: default action is Follow (+ reverse).
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    Button(
-                        onClick = { onAction(GpsAction.StartFollowTrail) },
-                        modifier =
-                            Modifier
-                                .weight(1f)
-                                .semantics { contentDescription = "Follow the selected trail" },
-                    ) { Text("Follow") }
-                    Button(
-                        onClick = { onAction(GpsAction.StartFollowTrailReversed) },
-                        modifier =
-                            Modifier
-                                .weight(1f)
-                                .semantics { contentDescription = "Follow the selected trail in reverse" },
-                    ) { Text("Reverse") }
-                }
-                if (!state.canExtendTrailEnd) {
-                    Button(
-                        onClick = { onAction(GpsAction.StartAutoRecord) },
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .semantics { contentDescription = "Start auto-recording GPS track points every 10 meters" },
-                    ) { Text("Auto-Record") }
-                }
-            }
-
-            !state.canExtendTrailEnd -> {
-                // Idle, or a selected trail with no points yet: offer recording.
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    Button(
-                        onClick = { onAction(GpsAction.RecordNewTrail) },
-                        enabled = state.selectedCollectionId != null,
-                        modifier =
-                            Modifier
-                                .weight(1f)
-                                .semantics {
-                                    contentDescription =
-                                        if (state.selectedCollectionId == null) {
-                                            "Record new trail — select a collection first"
-                                        } else {
-                                            "Record a new trail in the selected collection"
-                                        }
-                                    if (state.selectedCollectionId != null) {
-                                        customActions =
-                                            listOf(
-                                                CustomAccessibilityAction("Speak new trail name") {
-                                                    onAction(GpsAction.RecordNewTrailWithSpeech)
-                                                    true
-                                                },
-                                            )
-                                    }
-                                },
-                    ) { Text("Record New Trail") }
-                    if (state.selectedTrailId != null) {
-                        Button(
-                            onClick = { onAction(GpsAction.StartAutoRecord) },
-                            modifier =
-                                Modifier
-                                    .weight(1f)
-                                    .semantics { contentDescription = "Start auto-recording GPS track points every 10 meters" },
-                        ) { Text("Auto-Record") }
-                    }
-                }
-            }
         }
     }
+}
+
+@Composable
+private fun SkipTargetButton(onAction: (GpsAction) -> Unit) {
+    TextButton(
+        onClick = { onAction(GpsAction.SkipCollectionTarget) },
+        modifier = Modifier.semantics { contentDescription = "Skip current target and pick something else" },
+    ) { Text("Not this") }
+}
+
+@Composable
+private fun RecordNewTrailButton(
+    selectedCollectionId: Long?,
+    onAction: (GpsAction) -> Unit,
+) {
+    Button(
+        onClick = { onAction(GpsAction.RecordNewTrail) },
+        enabled = selectedCollectionId != null,
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .semantics {
+                    contentDescription =
+                        if (selectedCollectionId == null) {
+                            "Record new trail — select a collection first"
+                        } else {
+                            "Record a new trail in the selected collection"
+                        }
+                    if (selectedCollectionId != null) {
+                        customActions =
+                            listOf(
+                                CustomAccessibilityAction("Speak new trail name") {
+                                    onAction(GpsAction.RecordNewTrailWithSpeech)
+                                    true
+                                },
+                            )
+                    }
+                },
+    ) { Text("Record New Trail") }
 }
 
 @Composable
