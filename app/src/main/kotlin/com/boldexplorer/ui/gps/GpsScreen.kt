@@ -431,6 +431,7 @@ private fun CollectionTargetList(
             }
         val distStr =
             location?.let { loc ->
+              // should this be in the view really? and we could just use flat earth coords for this, because we will be close enough to target that we can just use #_of_meters_per_degree as a shortcut.
                 val dist =
                     haversineDistanceMeters(
                         LatLng(loc.lat, loc.lon),
@@ -450,6 +451,7 @@ private fun CollectionTargetList(
                     Modifier.semantics {
                         liveRegion = LiveRegionMode.Polite
                         contentDescription =
+                        // no need.
                             if (selectedCollectionId == null) "No collection selected" else "Loading collection"
                     },
             )
@@ -462,7 +464,6 @@ private fun CollectionTargetList(
             Text(
                 "Collection has no points",
                 style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.semantics { contentDescription = "Collection has no points" },
             )
         }
         return
@@ -486,6 +487,7 @@ private fun CollectionTargetList(
                         .padding(vertical = 12.dp)
                         .semantics {
                             contentDescription =
+                            // figure out
                                 "Nearest, automatic${if (autoSelected) ", selected" else ""}"
                         },
             ) {
@@ -561,6 +563,7 @@ private fun ContextualTrailActions(
                         modifier =
                             Modifier
                                 .fillMaxWidth()
+                                // no probably
                                 .semantics { contentDescription = "Follow ${end.trail.name}" },
                     ) { Text("Follow ${end.trail.name}") }
                 }
@@ -570,7 +573,7 @@ private fun ContextualTrailActions(
                         modifier =
                             Modifier
                                 .fillMaxWidth()
-                                .semantics { contentDescription = "Extend ${end.trail.name} by recording from this end" },
+                                .semantics { contentDescription = "Extend ${end.trail.name} by recording from this end" }, // No
                     ) { Text("Extend ${end.trail.name}") }
                 }
                 RecordNewTrailButton(selectedCollectionId = selectedCollectionId, onAction = onAction)
@@ -582,7 +585,7 @@ private fun ContextualTrailActions(
                     modifier =
                         Modifier
                             .fillMaxWidth()
-                            .semantics { contentDescription = "Stop trail navigation" },
+                            .semantics { contentDescription = "Stop trail navigation" }, // No
                 ) { Text("Stop Navigation") }
             }
 
