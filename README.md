@@ -69,7 +69,7 @@ adb logcat -s BoldExplorer
 | GPS | Primary navigation — waypoint / trail / collection scopes, audio cues, mark waypoint |
 | Waypoints | CRUD, near-me filter, attach to trails / collections, GPX import/export |
 | Trails | CRUD, ordered waypoint list, reorder, GPX import/export |
-| Collections | CRUD, heterogeneous grouping of waypoints + trails, explore mode, GPX import/export |
+| Collections | CRUD, heterogeneous grouping of waypoints + trails, auto-advance, GPX import/export |
 | Settings | Units, bearing display, compass mode, audio toggles |
 | Debug | GPS telemetry, raw GNSS toggle, accuracy beacon test, advancement diagnostics |
 

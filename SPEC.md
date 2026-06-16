@@ -337,7 +337,7 @@ TRAIL_APPROACH_M   = 10     trail endpoint approached (show Follow button)
 PROXIMITY_M        = 30     nearby point announced (once per session per point)
 ```
 
-**Explore mode:** when enabled, auto-advances to the nearest unvisited point after each `PointReached`. When disabled, user must manually pick the next target.
+**Auto-advance** (the on-screen toggle; internally `exploreMode`/`SetCollectionExploreMode`): when enabled, auto-advances to the nearest unvisited point after each `PointReached`. When disabled, user must manually pick the next target.
 
 **Visited cap:** last 3 visited point IDs are tracked to weight auto-selection away from recently visited points.
 
@@ -586,13 +586,14 @@ Three scopes selectable via segmented control:
 - Pick a collection
 - CollectionExplorer navigates through waypoints and trail endpoints
 - Shows: current target, distance
-- Explore mode toggle: auto-advance vs. manual
+- Auto-advance toggle: auto-select nearest unvisited vs. manual target selection
+- Contextual trail-end controls (derived from a single `NavMode`): at a trail end you are near, a "Follow {trail}" button appears (direction is implied by which end you selected — start follows forward, end follows reverse); within the accuracy-scaled extend range, an "Extend {trail}" button also appears
 
 **Shared elements (all scopes):**
 - Telemetry card: latitude, longitude, altitude, accuracy, speed (auto-hidden when screen reader off)
 - Heading: magnetic or true (per `compassMode` setting)
 - Mark Waypoint FAB: creates a waypoint at current location
-- Auto-record toggle: saves waypoints automatically while moving
+- Auto-record: started via "Record New Trail" (new trail) or "Extend {trail}" (resume from a trail end); captures track points automatically while moving until stopped
 - Alignment mode: tap compass heading to enter alignment on that bearing; alignment ping activates
 - Live region announcements: TalkBack reads state changes automatically
 
@@ -629,7 +630,7 @@ Three scopes selectable via segmented control:
 - Add waypoint to collection (pick from list)
 - Add trail to collection (pick from list)
 - Remove member waypoint or trail
-- Explore mode: start exploring directly from this screen
+- Auto-advance: start exploring directly from this screen
 - GPX import: creates collection named from file or metadata
 - GPX export: full collection
 
