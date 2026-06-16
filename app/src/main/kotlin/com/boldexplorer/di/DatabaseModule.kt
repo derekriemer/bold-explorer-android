@@ -5,10 +5,12 @@ import app.cash.sqldelight.driver.android.AndroidSqliteDriver
 import com.boldexplorer.db.AutoWaypointRepositoryImpl
 import com.boldexplorer.db.BoldExplorerDatabase
 import com.boldexplorer.db.CollectionRepositoryImpl
+import com.boldexplorer.db.NavPointsRepositoryImpl
 import com.boldexplorer.db.TrailRepositoryImpl
 import com.boldexplorer.db.WaypointRepositoryImpl
 import com.boldexplorer.shared.repository.AutoWaypointRepository
 import com.boldexplorer.shared.repository.CollectionRepository
+import com.boldexplorer.shared.repository.NavPointsRepository
 import com.boldexplorer.shared.repository.TrailRepository
 import com.boldexplorer.shared.repository.WaypointRepository
 import dagger.Binds
@@ -50,4 +52,8 @@ abstract class RepositoryModule {
     @Binds
     @Singleton
     abstract fun bindAutoWaypointRepository(impl: AutoWaypointRepositoryImpl): AutoWaypointRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindNavPointsRepository(impl: NavPointsRepositoryImpl): NavPointsRepository
 }

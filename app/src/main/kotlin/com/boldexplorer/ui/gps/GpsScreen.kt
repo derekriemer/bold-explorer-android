@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenuItem
@@ -53,6 +54,8 @@ import com.boldexplorer.shared.navigation.BearingComputer
 import com.boldexplorer.shared.navigation.CollectionExplorerState
 import com.boldexplorer.shared.navigation.CollectionPoint
 import com.boldexplorer.shared.navigation.CollectionTargeting
+import com.boldexplorer.shared.navigation.DirectionDescriptor
+import com.boldexplorer.shared.navigation.FollowOption
 import com.boldexplorer.shared.navigation.NavMode
 import com.boldexplorer.shared.navigation.TrailEndAction
 import com.boldexplorer.shared.settings.AppSettings
@@ -431,7 +434,7 @@ private fun CollectionTargetList(
             }
         val distStr =
             location?.let { loc ->
-              // should this be in the view really? and we could just use flat earth coords for this, because we will be close enough to target that we can just use #_of_meters_per_degree as a shortcut.
+                // should this be in the view really? and we could just use flat earth coords for this, because we will be close enough to target that we can just use #_of_meters_per_degree as a shortcut.
                 val dist =
                     haversineDistanceMeters(
                         LatLng(loc.lat, loc.lon),
@@ -451,7 +454,7 @@ private fun CollectionTargetList(
                     Modifier.semantics {
                         liveRegion = LiveRegionMode.Polite
                         contentDescription =
-                        // no need.
+                            // no need.
                             if (selectedCollectionId == null) "No collection selected" else "Loading collection"
                     },
             )
@@ -487,7 +490,7 @@ private fun CollectionTargetList(
                         .padding(vertical = 12.dp)
                         .semantics {
                             contentDescription =
-                            // figure out
+                                // figure out
                                 "Nearest, automatic${if (autoSelected) ", selected" else ""}"
                         },
             ) {
@@ -558,14 +561,12 @@ private fun ContextualTrailActions(
                 val end = navMode.trailEnd
                 SkipTargetButton(onAction)
                 if (TrailEndAction.Follow in navMode.actions) {
-                    Button(
-                        onClick = { onAction(GpsAction.FollowTrailFromCollectionEnd(end)) },
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                // no probably
-                                .semantics { contentDescription = "Follow ${end.trail.name}" },
-                    ) { Text("Follow ${end.trail.name}") }
+                    FollowAffordance(
+                        trailName = end.trail.name,
+                        trailId = end.trail.id,
+                        options = navMode.followOptions,
+                        onAction = onAction,
+                    )
                 }
                 if (TrailEndAction.Extend in navMode.actions) {
                     Button(
@@ -575,6 +576,18 @@ private fun ContextualTrailActions(
                                 .fillMaxWidth()
                                 .semantics { contentDescription = "Extend ${end.trail.name} by recording from this end" }, // No
                     ) { Text("Extend ${end.trail.name}") }
+                }
+                RecordNewTrailButton(selectedCollectionId = selectedCollectionId, onAction = onAction)
+            }
+
+            is NavMode.NearTrail -> {
+                navMode.trails.forEach { trail ->
+                    FollowAffordance(
+                        trailName = trail.name,
+                        trailId = trail.id,
+                        options = navMode.options,
+                        onAction = onAction,
+                    )
                 }
                 RecordNewTrailButton(selectedCollectionId = selectedCollectionId, onAction = onAction)
             }
@@ -607,6 +620,79 @@ private fun ContextualTrailActions(
         }
     }
 }
+
+/**
+ * The single "Follow {trail}" affordance. With one [options] entry it follows directly; with two it
+ * opens a direction chooser so the user — who may not know the trail — picks a direction explicitly,
+ * rather than the app guessing (which risks misdirecting a blind user when direction is ambiguous).
+ */
+@Composable
+private fun FollowAffordance(
+    trailName: String,
+    trailId: Long,
+    options: List<FollowOption>,
+    onAction: (GpsAction) -> Unit,
+) {
+    if (options.isEmpty()) return
+
+    if (options.size == 1) {
+        val reversed = options.single().reversed
+        Button(
+            onClick = { onAction(GpsAction.FollowTrail(trailId, reversed)) },
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .semantics { contentDescription = "Follow $trailName" },
+        ) { Text("Follow $trailName") }
+        return
+    }
+
+    var showChooser by remember { mutableStateOf(false) }
+    Button(
+        onClick = { showChooser = true },
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .semantics { contentDescription = "Follow $trailName, choose a direction" },
+    ) { Text("Follow $trailName") }
+
+    if (showChooser) {
+        AlertDialog(
+            onDismissRequest = { showChooser = false },
+            title = { Text("Follow $trailName") },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    options.forEach { option ->
+                        val label = option.descriptor.label()
+                        Button(
+                            onClick = {
+                                showChooser = false
+                                onAction(GpsAction.FollowTrail(trailId, option.reversed))
+                            },
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .semantics { contentDescription = "Follow $trailName, $label" },
+                        ) { Text(label) }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showChooser = false }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+/** Human-readable label for a follow direction. Only Forward/Backward are produced today. */
+private fun DirectionDescriptor.label(): String =
+    when (this) {
+        DirectionDescriptor.Forward -> "Forward"
+        DirectionDescriptor.Backward -> "Backward"
+        is DirectionDescriptor.Cardinal -> text
+        is DirectionDescriptor.Loop -> if (clockwise) "Clockwise" else "Counter-clockwise"
+    }
 
 @Composable
 private fun SkipTargetButton(onAction: (GpsAction) -> Unit) {

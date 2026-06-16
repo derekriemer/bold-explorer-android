@@ -1,0 +1,52 @@
+-- Lean navigation-point lookups for the GPS screen. These avoid loading a trail's full
+-- (track-point-dense) waypoint list just to find its ends or its nearby interior points.
+-- See plan: "Mid-trail Follow + SQL-backed nav points". All tables are defined in their own
+-- .sq files; this file only adds queries.
+
+-- Start/end waypoint of every trail in a collection, WITHOUT scanning into dense track-point
+-- bodies in Kotlin. A CO-ROUTINE aggregate computes each trail's min/max position, then we join
+-- back to fetch only those two endpoint rows. is_start = (this row sits at the min position).
+-- Single-waypoint trail: lo == hi, so `position IN (lo, hi)` yields exactly one row (start only).
+-- Verified index-backed and ~0.15 ms on a 2.6k-track-point DB (vs 4.7 ms for a correlated subquery).
+trailEndsForCollection:
+WITH ends AS (
+    SELECT tw.trail_id AS trail_id, MIN(tw.position) AS lo, MAX(tw.position) AS hi
+    FROM trail_waypoint AS tw
+    INNER JOIN collection_trail AS ct ON ct.trail_id = tw.trail_id
+    WHERE ct.collection_id = :collectionId
+    GROUP BY tw.trail_id
+)
+SELECT w.id, w.name, w.lat, w.lon, w.elev_m, w.description, w.created_at, w.kind, w.tentative,
+       tw.trail_id, tw.position,
+       t.name AS trail_name, t.description AS trail_description,
+       t.created_at AS trail_created_at, t.tentative AS trail_tentative,
+       CAST((tw.position = ends.lo) AS INTEGER) AS is_start
+FROM ends
+INNER JOIN trail_waypoint AS tw ON tw.trail_id = ends.trail_id AND tw.position IN (ends.lo, ends.hi)
+INNER JOIN trail          AS t  ON t.id  = tw.trail_id
+INNER JOIN waypoint       AS w  ON w.id  = tw.waypoint_id
+ORDER BY tw.trail_id, tw.position;
+
+-- Trail points (waypoints AND track points) inside a lat/lon bbox, scoped to a collection.
+-- Snapshot query for "what trail am I near right now" mid-trail follow — one-shot per GPS fix,
+-- not a hot subscription. Lean projection (no names/descriptions/elevation). Normal case (AND on lon).
+trailPointsInBboxNoCrossing:
+SELECT w.id, w.lat, w.lon, tw.trail_id, tw.position
+FROM waypoint AS w
+INNER JOIN trail_waypoint   AS tw ON tw.waypoint_id = w.id
+INNER JOIN collection_trail AS ct ON ct.trail_id = tw.trail_id
+WHERE ct.collection_id = :collectionId
+  AND w.lat >= :latMin AND w.lat <= :latMax
+  AND w.lon >= :lonMin AND w.lon <= :lonMax
+ORDER BY tw.trail_id, tw.position;
+
+-- Anti-meridian crossing case (OR on lon), mirroring waypointsInBboxCrossing.
+trailPointsInBboxCrossing:
+SELECT w.id, w.lat, w.lon, tw.trail_id, tw.position
+FROM waypoint AS w
+INNER JOIN trail_waypoint   AS tw ON tw.waypoint_id = w.id
+INNER JOIN collection_trail AS ct ON ct.trail_id = tw.trail_id
+WHERE ct.collection_id = :collectionId
+  AND w.lat >= :latMin AND w.lat <= :latMax
+  AND (w.lon >= :lonMin OR w.lon <= :lonMax)
+ORDER BY tw.trail_id, tw.position;

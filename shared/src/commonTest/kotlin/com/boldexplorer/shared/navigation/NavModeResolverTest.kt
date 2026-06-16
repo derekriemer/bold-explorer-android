@@ -22,13 +22,25 @@ class NavModeResolverTest {
     private val selectedCollectionId = MutableStateFlow<Long?>(null)
     private val location = MutableStateFlow<LocationSample?>(null)
     private val accuracyM = MutableStateFlow<Double?>(null)
+    private val nearbyTrail = MutableStateFlow<List<NearbyTrail>>(emptyList())
 
-    private fun resolver(scope: CoroutineScope) =
-        NavModeResolver(scope, recordingState, explorerState, selectedCollectionId, location, accuracyM)
+    private fun resolver(
+        scope: CoroutineScope,
+        describer: DirectionDescriber? = null,
+    ) = NavModeResolver(
+        scope,
+        recordingState,
+        explorerState,
+        selectedCollectionId,
+        location,
+        accuracyM,
+        nearbyTrail,
+        describer,
+    )
 
     /** Build a resolver on [backgroundScope], keep its WhileSubscribed flow hot, settle, return it. */
-    private suspend fun TestScope.settledResolver(): NavModeResolver {
-        val r = resolver(backgroundScope)
+    private suspend fun TestScope.settledResolver(describer: DirectionDescriber? = null): NavModeResolver {
+        val r = resolver(backgroundScope, describer)
         backgroundScope.launch { r.navMode.collect {} }
         advanceUntilIdle()
         return r
@@ -229,5 +241,163 @@ class NavModeResolverTest {
             explorerState.value = active(wp, nearTrailEndM = null)
             val r = settledResolver()
             assertEquals(NavMode.CollectionTarget(wp), r.navMode.value)
+        }
+
+    // ── (f) NearTrail: mid-trail follow ───────────────────────────────────────────────────────
+
+    /** Active explorer whose points expose [trailId]'s ends, so the resolver can resolve its [Trail]. */
+    private fun activeExposingTrail(
+        trailId: Long,
+        target: CollectionPoint?,
+    ) = CollectionExplorerState.Active(
+        points =
+            listOfNotNull(target) +
+                trailEnd(trailId, isStart = true, lat = 0.0, lon = 0.0) +
+                trailEnd(trailId, isStart = false, lat = 0.001, lon = 0.0),
+        targeting = if (target == null) CollectionTargeting.Auto() else CollectionTargeting.Manual(target),
+        visitedIds = emptyList(),
+        exploreMode = false,
+        nearTrailEndM = null,
+    )
+
+    @Test
+    fun nearTrail_emittedWhenSnapshotPresent_andNoEndTargeted() =
+        runTest(UnconfinedTestDispatcher()) {
+            explorerState.value = activeExposingTrail(trailId = 2, target = null)
+            nearbyTrail.value = listOf(NearbyTrail(trailId = 2, distanceM = 4.0, nearestIndex = 1))
+            val r = settledResolver()
+
+            val mode = r.navMode.value
+            assertTrue(mode is NavMode.NearTrail, "expected NearTrail, got $mode")
+            assertEquals(listOf(2L), mode.trails.map { it.id })
+        }
+
+    @Test
+    fun nearTrail_alwaysOffersBothDirections() =
+        runTest(UnconfinedTestDispatcher()) {
+            explorerState.value = activeExposingTrail(trailId = 2, target = null)
+            nearbyTrail.value = listOf(NearbyTrail(trailId = 2, distanceM = 4.0, nearestIndex = 1))
+            val r = settledResolver()
+
+            val mode = r.navMode.value
+            assertTrue(mode is NavMode.NearTrail, "expected NearTrail, got $mode")
+            assertEquals(setOf(false, true), mode.options.map { it.reversed }.toSet())
+            assertEquals(
+                setOf(DirectionDescriptor.Forward, DirectionDescriptor.Backward),
+                mode.options.map { it.descriptor }.toSet(),
+            )
+        }
+
+    @Test
+    fun nearTrail_winsOverPlainCollectionTarget() =
+        runTest(UnconfinedTestDispatcher()) {
+            val wp = CollectionPoint.Standalone(waypoint(5, 1.0, 2.0))
+            explorerState.value = activeExposingTrail(trailId = 2, target = wp)
+            nearbyTrail.value = listOf(NearbyTrail(trailId = 2, distanceM = 4.0, nearestIndex = 1))
+            val r = settledResolver()
+
+            assertTrue(r.navMode.value is NavMode.NearTrail, "NearTrail should beat a plain target")
+        }
+
+    @Test
+    fun atTrailEnd_winsOverNearTrail() =
+        runTest(UnconfinedTestDispatcher()) {
+            val end = trailEnd(1, isStart = true, lat = 0.0, lon = 0.0)
+            explorerState.value = active(end, nearTrailEndM = 5.0)
+            location.value = sample(0.0, 0.0)
+            nearbyTrail.value = listOf(NearbyTrail(trailId = 2, distanceM = 4.0, nearestIndex = 1))
+            val r = settledResolver()
+
+            assertTrue(r.navMode.value is NavMode.AtTrailEnd, "a targeted end keeps primacy over NearTrail")
+        }
+
+    @Test
+    fun following_winsOverNearTrail() =
+        runTest(UnconfinedTestDispatcher()) {
+            explorerState.value = activeExposingTrail(trailId = 2, target = null)
+            nearbyTrail.value = listOf(NearbyTrail(trailId = 2, distanceM = 4.0, nearestIndex = 1))
+            recordingState.value = TrailRecordingState.Following(trailId = 9)
+            val r = settledResolver()
+
+            assertEquals(NavMode.FollowingTrail(9), r.navMode.value)
+        }
+
+    @Test
+    fun nearTrail_multipleNearby_allSurfaced_nearestFirst() =
+        runTest(UnconfinedTestDispatcher()) {
+            // Two trails in the collection, both near the user.
+            val end1a = trailEnd(1, isStart = true, lat = 0.0, lon = 0.0)
+            val end1b = trailEnd(1, isStart = false, lat = 0.001, lon = 0.0)
+            val end2a = trailEnd(2, isStart = true, lat = 0.0, lon = 0.001)
+            val end2b = trailEnd(2, isStart = false, lat = 0.001, lon = 0.001)
+            explorerState.value =
+                CollectionExplorerState.Active(
+                    points = listOf(end1a, end1b, end2a, end2b),
+                    targeting = CollectionTargeting.Auto(),
+                    visitedIds = emptyList(),
+                    exploreMode = false,
+                    nearTrailEndM = null,
+                )
+            // Trail 2 is nearest (distanceM=3), trail 1 is further (distanceM=8).
+            nearbyTrail.value =
+                listOf(
+                    NearbyTrail(trailId = 2, distanceM = 3.0, nearestIndex = 0),
+                    NearbyTrail(trailId = 1, distanceM = 8.0, nearestIndex = 0),
+                )
+            val r = settledResolver()
+
+            val mode = r.navMode.value
+            assertTrue(mode is NavMode.NearTrail, "expected NearTrail, got $mode")
+            assertEquals(listOf(2L, 1L), mode.trails.map { it.id }, "nearest trail first")
+        }
+
+    // ── (g) Trail-end follow options: linear vs loop ──────────────────────────────────────────
+
+    @Test
+    fun linearTrailEnd_yieldsSingleFollowOption() =
+        runTest(UnconfinedTestDispatcher()) {
+            val end = trailEnd(1, isStart = true, lat = 0.0, lon = 0.0)
+            explorerState.value = active(end, nearTrailEndM = 5.0)
+            location.value = sample(0.0, 0.0)
+            val r = settledResolver()
+
+            val mode = r.navMode.value
+            assertTrue(mode is NavMode.AtTrailEnd, "expected AtTrailEnd, got $mode")
+            assertEquals(1, mode.followOptions.size)
+            assertEquals(false, mode.followOptions.single().reversed) // start → forward
+        }
+
+    @Test
+    fun endTrailEnd_singleOption_followsReversed() =
+        runTest(UnconfinedTestDispatcher()) {
+            val end = trailEnd(1, isStart = false, lat = 0.0, lon = 0.0)
+            explorerState.value = active(end, nearTrailEndM = 5.0)
+            location.value = sample(0.0, 0.0)
+            val r = settledResolver()
+
+            val mode = r.navMode.value
+            assertTrue(mode is NavMode.AtTrailEnd, "expected AtTrailEnd, got $mode")
+            assertEquals(true, mode.followOptions.single().reversed) // end → reversed
+        }
+
+    @Test
+    fun loopTrailEnd_viaDescriber_yieldsTwoOptions() =
+        runTest(UnconfinedTestDispatcher()) {
+            val end = trailEnd(1, isStart = true, lat = 0.0, lon = 0.0)
+            explorerState.value = active(end, nearTrailEndM = 5.0)
+            location.value = sample(0.0, 0.0)
+            // A describer simulating loop detection: both directions off a coincident end.
+            val describer =
+                DirectionDescriber {
+                    listOf(
+                        FollowOption(reversed = false, descriptor = DirectionDescriptor.Forward),
+                        FollowOption(reversed = true, descriptor = DirectionDescriptor.Backward),
+                    )
+                }
+            val r = settledResolver(describer)
+
+            val mode = r.navMode.value
+            assertTrue(mode is NavMode.AtTrailEnd, "expected AtTrailEnd, got $mode")
+            assertEquals(2, mode.followOptions.size)
         }
 }

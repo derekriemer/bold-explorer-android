@@ -1,8 +1,8 @@
 package com.boldexplorer.shared.navigation
 
 import com.boldexplorer.shared.model.Trail
+import com.boldexplorer.shared.model.TrailEndRow
 import com.boldexplorer.shared.model.Waypoint
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -15,23 +15,13 @@ import kotlin.test.assertTrue
 
 class CollectionNavPointsTest {
     private val standalones = MutableStateFlow<List<Waypoint>>(emptyList())
-    private val trails = MutableStateFlow<List<Trail>>(emptyList())
-    private val trailWaypointFlows = mutableMapOf<Long, MutableStateFlow<List<Waypoint>>>()
-
-    private fun trailWaypoints(trailId: Long): Flow<List<Waypoint>> = trailWaypointFlows.getOrPut(trailId) { MutableStateFlow(emptyList()) }
-
-    private fun pushTrailWaypoints(
-        trailId: Long,
-        wps: List<Waypoint>,
-    ) {
-        trailWaypointFlows.getOrPut(trailId) { MutableStateFlow(emptyList()) }.value = wps
-    }
+    private val trailEnds = MutableStateFlow<List<TrailEndRow>>(emptyList())
 
     /** Collect the composition into a mutable list of latest emissions on [TestScope.backgroundScope]. */
     private fun TestScope.collectLatest(): () -> List<CollectionPoint> {
         val emissions = mutableListOf<List<CollectionPoint>>()
         backgroundScope.launch {
-            collectionNavPoints(standalones, trails, ::trailWaypoints).collect { emissions.add(it) }
+            collectionNavPoints(standalones, trailEnds).collect { emissions.add(it) }
         }
         advanceUntilIdle()
         return { emissions.last() }
@@ -48,29 +38,40 @@ class CollectionNavPointsTest {
         name: String,
     ) = Trail(id = id, name = name, description = null, createdAt = 0L)
 
+    private fun end(
+        wpId: Long,
+        trailId: Long,
+        trailName: String,
+        isStart: Boolean,
+    ) = TrailEndRow(waypoint = waypoint(wpId, wpId.toDouble(), wpId.toDouble()), trail = trail(trailId, trailName), isStart = isStart)
+
     /**
-     * The headline regression for the "recorded trail invisible until restart" bug. A trail with zero
-     * waypoints contributes no ends; pushing track points into that trail's waypoint flow must update
-     * the ends live, through the same subscription — never requiring a re-subscribe or restart.
+     * The "recorded trail invisible until restart" regression now lives at the SQL layer (the
+     * reactive trailEndsForCollection query, covered by NavPointsRepositoryTest). Here we verify the
+     * fold reflects whatever ends the query reports: an empty trail contributes none; a growing trail
+     * surfaces start, then start+end, through the same subscription.
      */
     @Test
-    fun trailEnds_updateLive_asTrackPointsArrive() =
+    fun trailEnds_passThrough_andUpdateLive() =
         runTest(UnconfinedTestDispatcher()) {
-            trails.value = listOf(trail(1, "Loop"))
             val latest = collectLatest()
 
-            // Empty trail → no ends.
-            assertTrue(latest().none { it is CollectionPoint.TrailEnd }, "expected no ends for empty trail")
+            // No ends → no TrailEnd points.
+            assertTrue(latest().none { it is CollectionPoint.TrailEnd }, "expected no ends initially")
 
-            // One track point → a start only.
-            pushTrailWaypoints(1, listOf(waypoint(10, 1.0, 1.0)))
+            // Query reports a start only (single-point trail).
+            trailEnds.value = listOf(end(wpId = 10, trailId = 1, trailName = "Loop", isStart = true))
             advanceUntilIdle()
             val afterFirst = latest().filterIsInstance<CollectionPoint.TrailEnd>()
             assertEquals(1, afterFirst.size)
             assertTrue(afterFirst.single().isStart)
 
-            // Second track point → start + end.
-            pushTrailWaypoints(1, listOf(waypoint(10, 1.0, 1.0), waypoint(11, 2.0, 2.0)))
+            // Query now reports start + end.
+            trailEnds.value =
+                listOf(
+                    end(wpId = 10, trailId = 1, trailName = "Loop", isStart = true),
+                    end(wpId = 11, trailId = 1, trailName = "Loop", isStart = false),
+                )
             advanceUntilIdle()
             val afterSecond = latest().filterIsInstance<CollectionPoint.TrailEnd>()
             assertEquals(2, afterSecond.size)
@@ -90,7 +91,7 @@ class CollectionNavPointsTest {
         }
 
     @Test
-    fun emptyTrails_emitsOnlyStandalones_withoutHanging() =
+    fun emptyEnds_emitsOnlyStandalones_withoutHanging() =
         runTest(UnconfinedTestDispatcher()) {
             standalones.value = listOf(waypoint(1, 5.0, 6.0))
             val latest = collectLatest()
@@ -100,27 +101,29 @@ class CollectionNavPointsTest {
         }
 
     @Test
-    fun removingTrail_dropsItsEnds() =
+    fun removingTrailEnds_dropsThem() =
         runTest(UnconfinedTestDispatcher()) {
-            trails.value = listOf(trail(1, "Loop"))
-            pushTrailWaypoints(1, listOf(waypoint(10, 1.0, 1.0), waypoint(11, 2.0, 2.0)))
+            trailEnds.value =
+                listOf(
+                    end(wpId = 10, trailId = 1, trailName = "Loop", isStart = true),
+                    end(wpId = 11, trailId = 1, trailName = "Loop", isStart = false),
+                )
             val latest = collectLatest()
             assertEquals(2, latest().filterIsInstance<CollectionPoint.TrailEnd>().size)
 
-            trails.value = emptyList()
+            trailEnds.value = emptyList()
             advanceUntilIdle()
             assertTrue(latest().none { it is CollectionPoint.TrailEnd })
         }
 
     @Test
-    fun singleWaypointTrail_yieldsOnlyStart() =
+    fun standalonesAndEnds_combine() =
         runTest(UnconfinedTestDispatcher()) {
-            trails.value = listOf(trail(1, "Loop"))
-            pushTrailWaypoints(1, listOf(waypoint(10, 1.0, 1.0)))
+            standalones.value = listOf(waypoint(1, 5.0, 6.0))
+            trailEnds.value = listOf(end(wpId = 10, trailId = 1, trailName = "Loop", isStart = true))
             val latest = collectLatest()
 
-            val ends = latest().filterIsInstance<CollectionPoint.TrailEnd>()
-            assertEquals(1, ends.size)
-            assertTrue(ends.single().isStart)
+            assertEquals(1, latest().filterIsInstance<CollectionPoint.Standalone>().size)
+            assertEquals(1, latest().filterIsInstance<CollectionPoint.TrailEnd>().size)
         }
 }

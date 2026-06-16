@@ -1,5 +1,7 @@
 package com.boldexplorer.shared.repository
 
+import com.boldexplorer.shared.geo.DEFAULT_BBOX_RADIUS_M
+import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.model.*
 import com.boldexplorer.shared.settings.AppSettings
 import kotlinx.coroutines.flow.Flow
@@ -168,6 +170,29 @@ interface CollectionRepository {
         collectionId: Long,
         trailId: Long,
     )
+}
+
+/**
+ * Lean spatial/positional lookups for GPS-screen navigation. Kept separate from trail CRUD so the
+ * hot navigation path never loads dense track-point bodies just to find trail ends or nearby points.
+ */
+interface NavPointsRepository {
+    /**
+     * Start/end of every trail in [collectionId], reactive. Re-emits when any relevant table
+     * changes (e.g. an auto-record track-point insert shifts a trail's MAX position → its end moves).
+     * ≤2 rows per trail; never materializes interior track points.
+     */
+    fun observeTrailEndsForCollection(collectionId: Long): Flow<List<TrailEndRow>>
+
+    /**
+     * One-shot snapshot of trail points (waypoints + track points) within [radiusM] of [center],
+     * scoped to [collectionId]. Used per GPS fix for mid-trail follow; bbox-bounded, not a Flow.
+     */
+    suspend fun trailPointsInBbox(
+        collectionId: Long,
+        center: LatLng,
+        radiusM: Double = DEFAULT_BBOX_RADIUS_M,
+    ): List<TrailPointRow>
 }
 
 interface AutoWaypointRepository {

@@ -28,6 +28,7 @@ import com.boldexplorer.shared.location.LocationProvider
 import com.boldexplorer.shared.model.Collection
 import com.boldexplorer.shared.model.LocationSample
 import com.boldexplorer.shared.model.Trail
+import com.boldexplorer.shared.model.TrailEndRow
 import com.boldexplorer.shared.model.Waypoint
 import com.boldexplorer.shared.navigation.AdvancementReason
 import com.boldexplorer.shared.navigation.CollectionExplorer
@@ -37,6 +38,8 @@ import com.boldexplorer.shared.navigation.CollectionPoint
 import com.boldexplorer.shared.navigation.NavMode
 import com.boldexplorer.shared.navigation.NavModeResolver
 import com.boldexplorer.shared.navigation.NavigationTargetResolver
+import com.boldexplorer.shared.navigation.NearbyTrail
+import com.boldexplorer.shared.navigation.NearbyTrailResolver
 import com.boldexplorer.shared.navigation.TrailFollower
 import com.boldexplorer.shared.navigation.TrailFollowerEvent
 import com.boldexplorer.shared.navigation.TrailFollowerState
@@ -49,6 +52,7 @@ import com.boldexplorer.shared.navigation.TrailRecordingState
 import com.boldexplorer.shared.navigation.collectionNavPoints
 import com.boldexplorer.shared.navigation.displayName
 import com.boldexplorer.shared.repository.CollectionRepository
+import com.boldexplorer.shared.repository.NavPointsRepository
 import com.boldexplorer.shared.repository.SettingsRepository
 import com.boldexplorer.shared.repository.TrailRepository
 import com.boldexplorer.shared.repository.WaypointRepository
@@ -62,11 +66,13 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -75,6 +81,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import javax.inject.Inject
+import kotlin.math.max
 import kotlin.math.roundToInt
 
 data class GpsUiState(
@@ -129,17 +136,20 @@ sealed interface GpsAction {
         val enabled: Boolean,
     ) : GpsAction
 
-    data class FollowTrailFromCollectionEnd(
-        val trailEnd: CollectionPoint.TrailEnd,
-    ) : GpsAction
-
     data class ExtendTrailFromCollectionEnd(
         val trailEnd: CollectionPoint.TrailEnd,
     ) : GpsAction
 
-    data object StartFollowTrail : GpsAction
-
-    data object StartFollowTrailReversed : GpsAction
+    /**
+     * Follow [trailId] starting from whichever waypoint is nearest the user (mid-trail capable),
+     * traveling forward ([reversed] = false) or backward ([reversed] = true). Dispatched by the
+     * single "Follow {trail}" affordance / direction chooser for both [NavMode.NearTrail] and
+     * [NavMode.AtTrailEnd].
+     */
+    data class FollowTrail(
+        val trailId: Long,
+        val reversed: Boolean,
+    ) : GpsAction
 
     data object StopFollowTrail : GpsAction
 
@@ -269,6 +279,7 @@ class GpsViewModel
         private val waypointRepo: WaypointRepository,
         private val trailRepo: TrailRepository,
         private val collectionRepo: CollectionRepository,
+        private val navPointsRepo: NavPointsRepository,
         private val targetingStateHolder: TargetingStateHolder,
         private val backgroundSession: GpsBackgroundSession,
         private val spokenGuidancePlayer: SpokenGuidancePlayer,
@@ -407,6 +418,19 @@ class GpsViewModel
                     }
                 }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
+        // Lean reactive start/end of each trail in the selected collection. Backed by the
+        // trailEndsForCollection SQL query (≤2 rows/trail, no track-point body) — re-emits when a
+        // track point shifts a trail's MAX position, so ends stay live without loading dense data.
+        private val collectionTrailEnds: StateFlow<List<TrailEndRow>> =
+            _selectedCollectionId
+                .flatMapLatest { id ->
+                    if (id == null) {
+                        flowOf(emptyList())
+                    } else {
+                        navPointsRepo.observeTrailEndsForCollection(id)
+                    }
+                }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
+
         // ── Trail follower ────────────────────────────────────────────────────────────
 
         private val trailFollower =
@@ -446,6 +470,27 @@ class GpsViewModel
         val distanceM: StateFlow<Double?> = targetResolver.distanceM
         val relativeDeg: StateFlow<Double?> = targetResolver.relativeDeg
 
+        // Per-fix snapshot of the nearest follow-able trail (mid-trail pickup). Unlike the reactive
+        // nav-point flows this is *pulled* once per GPS fix — conflated so a backlog of fixes can't
+        // queue DB work — by bbox-querying the selected collection's trail points and ranking them
+        // purely in NearbyTrailResolver. The bbox is sized to the resolver's accuracy-scaled gate plus
+        // a margin so it always covers whatever the resolver may admit. Only place dense trail data is
+        // touched, and only as a bounded snapshot.
+        private val nearbyTrail: StateFlow<List<NearbyTrail>> =
+            combine(_selectedCollectionId, location) { id, loc -> id to loc }
+                .conflate()
+                .mapLatest { (id, loc) ->
+                    if (id == null || loc == null) {
+                        emptyList()
+                    } else {
+                        val acc = loc.accuracy ?: 0.0
+                        val gate = max(NearbyTrailResolver.NEAR_TRAIL_FLOOR_M, NearbyTrailResolver.NEAR_TRAIL_ACCURACY_FACTOR * acc)
+                        val center = LatLng(loc.lat, loc.lon)
+                        val snapshot = navPointsRepo.trailPointsInBbox(id, center, radiusM = gate + NEARBY_TRAIL_BBOX_MARGIN_M)
+                        NearbyTrailResolver.resolve(center, loc.accuracy, snapshot)
+                    }
+                }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
+
         // The single derived mode the GPS screen renders its contextual trail controls from. Folds the
         // three state holders with an explicit precedence (active session beats explorer target) and
         // never reads the unreliable TrailRecordingState.Selected.hasPoints flag — see NavModeResolver.
@@ -457,6 +502,7 @@ class GpsViewModel
                 selectedCollectionId = _selectedCollectionId,
                 location = location,
                 accuracyM = accuracyM,
+                nearbyTrail = nearbyTrail,
             )
         val navMode: StateFlow<NavMode> = navModeResolver.navMode
 
@@ -616,13 +662,13 @@ class GpsViewModel
                 }
             }
             // Reload collection explorer from a fully reactive composition: standalone waypoints plus each
-            // trail's ends, where the ends track each trail's waypoints flow. Adding a track point (which
-            // touches only trail_waypoint) therefore refreshes the trail's ends live — no app restart.
+            // trail's ends (from the lean trailEndsForCollection query). Adding a track point (which
+            // touches only trail_waypoint) shifts a trail's MAX position, so its end refreshes live —
+            // no app restart, and without loading the trail's dense track-point body.
             viewModelScope.launch {
                 collectionNavPoints(
                     standalones = collectionWaypoints,
-                    trails = collectionTrails,
-                    trailWaypoints = trailRepo::observeWaypointsForTrail,
+                    trailEnds = collectionTrailEnds,
                 ).collect { points -> reloadCollectionExplorer(points) }
             }
             // Bridge: honour "set as GPS target" requests made from the Waypoints/Trails screens so the
@@ -747,10 +793,6 @@ class GpsViewModel
             if (enabled) startLocationService() else stopLocationServiceIfIdle()
         }
 
-        fun startFollowTrailFromCollectionEnd(trailEnd: CollectionPoint.TrailEnd) {
-            followTrailById(trailEnd.trail.id, reversed = !trailEnd.isStart)
-        }
-
         /**
          * Follow [trailId] from its start ([reversed] = false) or end ([reversed] = true), fetching the
          * ordered waypoints directly from the repository. Used both by the collection explore "follow from
@@ -817,46 +859,6 @@ class GpsViewModel
                 recordingMachine.selectTrail(trailId, hasPoints = true)
             }
             recordingMachine.startFollowing()
-        }
-
-        fun startFollowTrail() {
-            val wps = trailWaypoints.value
-            if (wps.isEmpty()) return
-            val trailId = _selectedTrailId.value ?: return
-            enterFollowing(trailId)
-            val points = wps.map { TrailPoint(it.id, it.name, it.lat, it.lon, elevationM = it.elevM, kind = it.kind) }
-            val loc = location.value?.let { LatLng(it.lat, it.lon) }
-            val bearing =
-                location.value?.let { s ->
-                    s.heading?.takeIf { (s.speed ?: 0.0) >= TrailGuidance.MIN_TRUSTED_SPEED_MPS }?.toFloat()
-                }
-            if (loc != null) trailFollower.startNearest(points, loc, bearing) else trailFollower.start(points)
-            refreshTrailGuidanceFromLatestLocation(resetOrdinaryThrottle = true)
-            backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, true)
-            startLocationService()
-            announce(buildTrailStartAnnouncement("Trail started", points, loc), speakInBackground = true, trigger = "TrailStarted")
-        }
-
-        fun startFollowTrailReversed() {
-            val wps = trailWaypoints.value
-            if (wps.isEmpty()) return
-            val trailId = _selectedTrailId.value ?: return
-            enterFollowing(trailId)
-            val points = wps.reversed().map { TrailPoint(it.id, it.name, it.lat, it.lon, elevationM = it.elevM, kind = it.kind) }
-            val loc = location.value?.let { LatLng(it.lat, it.lon) }
-            val bearing =
-                location.value?.let { s ->
-                    s.heading?.takeIf { (s.speed ?: 0.0) >= TrailGuidance.MIN_TRUSTED_SPEED_MPS }?.toFloat()
-                }
-            if (loc != null) trailFollower.startNearest(points, loc, bearing) else trailFollower.start(points)
-            refreshTrailGuidanceFromLatestLocation(resetOrdinaryThrottle = true)
-            backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, true)
-            startLocationService()
-            announce(
-                buildTrailStartAnnouncement("Trail started in reverse", points, loc),
-                speakInBackground = true,
-                trigger = "TrailStartedReversed",
-            )
         }
 
         private fun buildTrailStartAnnouncement(
@@ -1459,20 +1461,12 @@ class GpsViewModel
                     setCollectionExploreMode(action.enabled)
                 }
 
-                is GpsAction.FollowTrailFromCollectionEnd -> {
-                    startFollowTrailFromCollectionEnd(action.trailEnd)
-                }
-
                 is GpsAction.ExtendTrailFromCollectionEnd -> {
                     extendTrailFromCollectionEnd(action.trailEnd)
                 }
 
-                GpsAction.StartFollowTrail -> {
-                    startFollowTrail()
-                }
-
-                GpsAction.StartFollowTrailReversed -> {
-                    startFollowTrailReversed()
+                is GpsAction.FollowTrail -> {
+                    followTrailById(action.trailId, action.reversed)
                 }
 
                 GpsAction.StopFollowTrail -> {
@@ -1584,5 +1578,9 @@ class GpsViewModel
 
             // Minimum speed (m/s) before GPS course-over-ground is trusted for direction-aware selection.
             private const val MIN_TRAVEL_HEADING_SPEED_MPS = 1.0
+
+            // Padding added to the near-trail gate when sizing the mid-trail snapshot bbox, so the
+            // query window always covers whatever distance NearbyTrailResolver may admit.
+            private const val NEARBY_TRAIL_BBOX_MARGIN_M = 30.0
         }
     }

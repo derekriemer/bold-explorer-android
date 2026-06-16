@@ -69,3 +69,26 @@ data class WaypointWithDistance(
     val waypoint: Waypoint,
     val distanceM: Double,
 )
+
+/**
+ * One end (start or end) of a trail within a collection, as returned by the lean
+ * `trailEndsForCollection` query. Carries the full [waypoint] and [trail] so the UI nav-point
+ * list can be built without loading the trail's dense track-point body.
+ */
+data class TrailEndRow(
+    val waypoint: Waypoint,
+    val trail: Trail,
+    val isStart: Boolean,
+)
+
+/**
+ * A single trail point (waypoint or track point) inside a spatial bbox snapshot, as returned by
+ * `trailPointsInBbox`. Lean by design — only the fields the nearby-trail ranking needs.
+ */
+data class TrailPointRow(
+    val id: Long,
+    val lat: Double,
+    val lon: Double,
+    val trailId: Long,
+    val position: Int,
+)

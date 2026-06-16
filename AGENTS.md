@@ -205,6 +205,56 @@ Coordination points that require sequencing:
 - SQLDelight schema changes (`.sq` files) must be followed by `./gradlew :app:generateBoldExplorerDatabaseInterface` before any Kotlin that references the generated queries.
 - When architecture or commands change, update only `AGENTS.md`. `CLAUDE.md` defers to it and needs no sync.
 
+## Audio log format
+
+Session logs are JSONL files (`bold_explorer_audio_log_<timestamp>.jsonl`), one JSON object per line, oldest-first. Each line maps to `AudioLogEntry`:
+
+```
+{ "ts": <epochMs>, "kind": <Kind>, "trigger": <string>, "inputs": <string>,
+  "outputs": <string>, "played": <string>, "note": <string (optional)> }
+```
+
+### `kind` values
+
+| Kind | What it records |
+|------|----------------|
+| `DIRECTIONAL_BEACON` | Each compass-ping cycle: bearing to target, user heading, relative angle, speed, smoothing state |
+| `ACCURACY_BEACON` | Accuracy-ring audio ping |
+| `ALIGNMENT_PING` | Stereo pan/earcon for heading alignment |
+| `WAYPOINT_APPROACH` | Proximity ramp-up as user nears a waypoint |
+| `TRAIL_COMPLETE` | Trail finished event |
+| `TTS_ANNOUNCEMENT` | Any spoken text event (nav cues, alerts, collection points, recording state) |
+| `DETECTION_STATE` | Internal detector decisions: `OffTrailCheck`, `NearbyPoint`, etc. |
+| `USER_MARKER` | In-field note pressed by the user; `note` field contains the text |
+
+### `played` field semantics
+
+The `played` field records the *audio outcome*, not intent:
+
+- `"Spoke: '<text>'"` — TTS was actually spoken aloud (app was **backgrounded**)
+- `"Suppressed: '<text>'"` — TTS was skipped because the app was **foregrounded**; the UI live region announced it via TalkBack instead. This is **normal and expected** — do not treat it as a missing announcement.
+- `"Wrong-vector earcon"` / `"Accuracy earcon"` / similar — a non-TTS audio tone played
+- `"bail:<reason>"` — the detector ran but decided not to act (e.g. `bail:no_relative_deg`, `bail:count_1_of_2`)
+- `""` (empty) — no audio output for this event (informational log only)
+
+### `inputs` / `outputs` fields
+
+Both are free-form `key=value, key=value` strings. Common fields in `DIRECTIONAL_BEACON` inputs:
+
+- `relativeDeg` — bearing from user's heading to target (null when heading is unavailable)
+- `userSpeed_ms` — GPS speed in m/s
+- `smoothedHeadingDeg` / `rawHeadingDeg` — smoothed and raw GPS course
+- `smoothedConfidence` — 0–1 confidence in the smoothed heading
+- `courseIsSmoothed` — whether the beacon used the smoothed course
+
+### Reading a log
+
+1. **USER_MARKERs first** — grep for `"kind":"USER_MARKER"` to see the user's in-field notes; these are the highest-signal observations.
+2. **TTS_ANNOUNCEMENTs** — `"ttsDelivered":true` means the app was backgrounded and spoke aloud. `"Suppressed"` in `played` means foregrounded (normal).
+3. **DETECTION_STATE bail clusters** — repeated `bail:no_relative_deg` means off-trail detection was blind (user nearly stationary, heading unknown).
+4. **Duplicate-event clusters** — same `trigger` + same target within a few seconds = proximity threshold being crossed repeatedly.
+5. **Timestamps** — `ts` is Unix epoch milliseconds. Gaps > 30s with no `DIRECTIONAL_BEACON` entries usually mean the app was paused or the screen was off and GPS duty-cycled.
+
 ## Rules
 ### Commit guidelines
 
