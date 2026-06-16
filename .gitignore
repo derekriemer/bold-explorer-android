@@ -12,3 +12,5 @@ android-sdk/
 *.apk
 *.aab
 a.txt
+*.sqlite
+
