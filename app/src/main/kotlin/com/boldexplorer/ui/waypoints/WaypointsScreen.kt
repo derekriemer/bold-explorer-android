@@ -53,6 +53,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.Waypoint
 import com.boldexplorer.shared.navigation.BearingComputer
+import com.boldexplorer.ui.common.CollectionDropdown
 import com.boldexplorer.ui.common.CreateItemDialog
 import com.boldexplorer.ui.common.MultiSelectItemDialog
 import com.boldexplorer.ui.common.SpeakButton
@@ -348,8 +349,7 @@ private fun RadiusDropdown(
             modifier =
                 Modifier
                     .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                    .fillMaxWidth()
-                    .semantics { contentDescription = "Radius filter: $label" },
+                    .fillMaxWidth(),
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             RADIUS_OPTIONS.forEach { (name, value) ->
@@ -359,66 +359,8 @@ private fun RadiusDropdown(
                         onSelect(value)
                         expanded = false
                     },
-                    modifier = Modifier.semantics { contentDescription = name },
                 )
             }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun CollectionDropdown(
-    collections: List<ExplorerCollection>,
-    selectedId: Long?,
-    onSelect: (Long?) -> Unit,
-    onCreateNew: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    val label =
-        if (selectedId == null) {
-            "Select collection"
-        } else {
-            collections.firstOrNull { it.id == selectedId }?.name ?: "Select collection"
-        }
-
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = it },
-        modifier = modifier,
-    ) {
-        OutlinedTextField(
-            value = label,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text("Collection") },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
-            modifier =
-                Modifier
-                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                    .fillMaxWidth()
-                    .semantics { contentDescription = "Selected collection: $label" },
-        )
-        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            collections.forEach { col ->
-                DropdownMenuItem(
-                    text = { Text(col.name) },
-                    onClick = {
-                        onSelect(col.id)
-                        expanded = false
-                    },
-                    modifier = Modifier.semantics { contentDescription = "Select collection ${col.name}" },
-                )
-            }
-            DropdownMenuItem(
-                text = { Text("Create new collection…") },
-                onClick = {
-                    expanded = false
-                    onCreateNew()
-                },
-                modifier = Modifier.semantics { contentDescription = "Create new collection" },
-            )
         }
     }
 }

@@ -16,6 +16,7 @@ import com.boldexplorer.location.BeaconAudioInputs
 import com.boldexplorer.location.GpsBackgroundMode
 import com.boldexplorer.location.GpsBackgroundSession
 import com.boldexplorer.location.LocationForegroundService
+import com.boldexplorer.location.SelectedCollectionHolder
 import com.boldexplorer.location.TargetingStateHolder
 import com.boldexplorer.location.TrailTargetRequest
 import com.boldexplorer.shared.audio.AudioCueScheduler
@@ -120,6 +121,10 @@ sealed interface GpsAction {
 
     data class SelectCollection(
         val id: Long,
+    ) : GpsAction
+
+    data class CreateCollection(
+        val name: String,
     ) : GpsAction
 
     data class SelectCollectionPoint(
@@ -281,6 +286,7 @@ class GpsViewModel
         private val collectionRepo: CollectionRepository,
         private val navPointsRepo: NavPointsRepository,
         private val targetingStateHolder: TargetingStateHolder,
+        private val selectedCollectionHolder: SelectedCollectionHolder,
         private val backgroundSession: GpsBackgroundSession,
         private val spokenGuidancePlayer: SpokenGuidancePlayer,
         private val settingsRepo: SettingsRepository,
@@ -348,8 +354,7 @@ class GpsViewModel
         private val _selectedTrailId = MutableStateFlow<Long?>(null)
         val selectedTrailId: StateFlow<Long?> = _selectedTrailId.asStateFlow()
 
-        private val _selectedCollectionId = MutableStateFlow<Long?>(null)
-        val selectedCollectionId: StateFlow<Long?> = _selectedCollectionId.asStateFlow()
+        val selectedCollectionId: StateFlow<Long?> = selectedCollectionHolder.selectedCollectionId
 
         // ── Pending creation (drives the naming dialog; no DB write until named) ──────
 
@@ -399,7 +404,7 @@ class GpsViewModel
                 }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
         val collectionWaypoints: StateFlow<List<Waypoint>> =
-            _selectedCollectionId
+            selectedCollectionHolder.selectedCollectionId
                 .flatMapLatest { id ->
                     if (id == null) {
                         flowOf(emptyList())
@@ -409,7 +414,7 @@ class GpsViewModel
                 }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
         private val collectionTrails: StateFlow<List<Trail>> =
-            _selectedCollectionId
+            selectedCollectionHolder.selectedCollectionId
                 .flatMapLatest { id ->
                     if (id == null) {
                         flowOf(emptyList())
@@ -422,7 +427,7 @@ class GpsViewModel
         // trailEndsForCollection SQL query (≤2 rows/trail, no track-point body) — re-emits when a
         // track point shifts a trail's MAX position, so ends stay live without loading dense data.
         private val collectionTrailEnds: StateFlow<List<TrailEndRow>> =
-            _selectedCollectionId
+            selectedCollectionHolder.selectedCollectionId
                 .flatMapLatest { id ->
                     if (id == null) {
                         flowOf(emptyList())
@@ -477,7 +482,7 @@ class GpsViewModel
         // a margin so it always covers whatever the resolver may admit. Only place dense trail data is
         // touched, and only as a bounded snapshot.
         private val nearbyTrail: StateFlow<List<NearbyTrail>> =
-            combine(_selectedCollectionId, location) { id, loc -> id to loc }
+            combine(selectedCollectionHolder.selectedCollectionId, location) { id, loc -> id to loc }
                 .conflate()
                 .mapLatest { (id, loc) ->
                     if (id == null || loc == null) {
@@ -499,7 +504,7 @@ class GpsViewModel
                 scope = viewModelScope,
                 recordingState = recordingMachine.state,
                 explorerState = collectionExplorer.state,
-                selectedCollectionId = _selectedCollectionId,
+                selectedCollectionId = selectedCollectionHolder.selectedCollectionId,
                 location = location,
                 accuracyM = accuracyM,
                 nearbyTrail = nearbyTrail,
@@ -661,6 +666,14 @@ class GpsViewModel
                     compassProvider.setLocation(s.lat, s.lon, s.altitude ?: 0.0)
                 }
             }
+            // Stop the explorer immediately on any collection change so GPS fixes that arrive before
+            // the reactive DB queries re-emit don't fire announcements against stale points. The
+            // explorer reloads once collectionWaypoints/collectionTrailEnds settle (below).
+            viewModelScope.launch {
+                selectedCollectionHolder.selectedCollectionId.collect {
+                    collectionExplorer.stop()
+                }
+            }
             // Reload collection explorer from a fully reactive composition: standalone waypoints plus each
             // trail's ends (from the lean trailEndsForCollection query). Adding a track point (which
             // touches only trail_waypoint) shifts a trail's MAX position, so its end refreshes live —
@@ -719,8 +732,7 @@ class GpsViewModel
         }
 
         fun selectCollection(id: Long) {
-            _selectedCollectionId.value = id
-            collectionExplorer.stop() // will reload via collectionWaypoints/collectionTrails combine
+            selectedCollectionHolder.select(id)
         }
 
         fun selectCollectionPoint(point: CollectionPoint) {
@@ -737,7 +749,7 @@ class GpsViewModel
         private suspend fun applyExternalWaypointTarget(waypointId: Long) {
             val collections = collectionRepo.collectionsForWaypoint(waypointId)
             if (collections.isEmpty()) return
-            val current = _selectedCollectionId.value
+            val current = selectedCollectionHolder.selectedCollectionId.value
             if (current == null || collections.none { it.id == current }) {
                 selectCollection(collections.first().id)
             }
@@ -804,6 +816,14 @@ class GpsViewModel
             reversed: Boolean,
         ) {
             viewModelScope.launch {
+                // Reconcile collection: mirror applyExternalWaypointTarget so the nav list includes
+                // this trail's endpoints. Every trail belongs to at least one collection (General is
+                // the sentinel), so an empty result here is a data-integrity failure.
+                val trailCollections = collectionRepo.collectionsForTrail(trailId)
+                val current = selectedCollectionHolder.selectedCollectionId.value
+                if (trailCollections.isNotEmpty() && (current == null || trailCollections.none { it.id == current })) {
+                    selectCollection(trailCollections.first().id)
+                }
                 val wps = trailRepo.waypointsForTrail(trailId)
                 val ordered = if (reversed) wps.reversed() else wps
                 if (ordered.isEmpty()) return@launch
@@ -835,6 +855,11 @@ class GpsViewModel
         /** Select [trailId] and begin auto-recording onto it; used by Trails-screen record requests. */
         private fun recordTrailById(trailId: Long) {
             viewModelScope.launch {
+                val trailCollections = collectionRepo.collectionsForTrail(trailId)
+                val current = selectedCollectionHolder.selectedCollectionId.value
+                if (trailCollections.isNotEmpty() && (current == null || trailCollections.none { it.id == current })) {
+                    selectCollection(trailCollections.first().id)
+                }
                 val hasPoints = trailRepo.waypointsForTrail(trailId).isNotEmpty()
                 _selectedTrailId.value = trailId
                 recordingMachine.stop()
@@ -948,12 +973,12 @@ class GpsViewModel
         // ── Collection editing from GPS screen ───────────────────────────────────────
 
         fun addWaypointsToCollection(ids: Set<Long>) {
-            val collId = _selectedCollectionId.value ?: return
+            val collId = selectedCollectionHolder.selectedCollectionId.value ?: return
             viewModelScope.launch { ids.forEach { collectionRepo.attachWaypoint(collId, it) } }
         }
 
         fun addTrailsToCollection(ids: Set<Long>) {
-            val collId = _selectedCollectionId.value ?: return
+            val collId = selectedCollectionHolder.selectedCollectionId.value ?: return
             viewModelScope.launch { ids.forEach { collectionRepo.attachTrail(collId, it) } }
         }
 
@@ -966,7 +991,7 @@ class GpsViewModel
          */
         fun markWaypoint(launchStt: Boolean = false) {
             val loc = location.value ?: return
-            if (_selectedCollectionId.value == null) return
+            if (selectedCollectionHolder.selectedCollectionId.value == null) return
             _pendingCreate.value = PendingCreate.Waypoint(loc, launchStt)
         }
 
@@ -975,7 +1000,7 @@ class GpsViewModel
             tentative: Boolean,
         ) {
             val pending = _pendingCreate.value as? PendingCreate.Waypoint ?: return
-            val collectionId = _selectedCollectionId.value ?: return
+            val collectionId = selectedCollectionHolder.selectedCollectionId.value ?: return
             val loc = pending.capturedLocation
             _pendingCreate.value = null
             viewModelScope.launch {
@@ -1226,7 +1251,7 @@ class GpsViewModel
          * No-op when no collection is selected.
          */
         private fun reloadCollectionExplorer(points: List<CollectionPoint>) {
-            if (_selectedCollectionId.value == null) return
+            if (selectedCollectionHolder.selectedCollectionId.value == null) return
             val currentExploreMode =
                 (collectionExplorer.state.value as? CollectionExplorerState.Active)
                     ?.exploreMode ?: false
@@ -1370,7 +1395,7 @@ class GpsViewModel
         // ── Trail recording ───────────────────────────────────────────────────────────
 
         fun recordNewTrail(launchStt: Boolean = false) {
-            if (_selectedCollectionId.value == null) return
+            if (selectedCollectionHolder.selectedCollectionId.value == null) return
             _pendingCreate.value = PendingCreate.Trail(launchStt)
         }
 
@@ -1379,7 +1404,7 @@ class GpsViewModel
             tentative: Boolean,
         ) {
             if (_pendingCreate.value !is PendingCreate.Trail) return
-            val collectionId = _selectedCollectionId.value ?: return
+            val collectionId = selectedCollectionHolder.selectedCollectionId.value ?: return
             _pendingCreate.value = null
             viewModelScope.launch {
                 val id = trailRepo.create(collectionId, name, null, tentative)
@@ -1439,6 +1464,13 @@ class GpsViewModel
 
                 is GpsAction.SelectCollection -> {
                     selectCollection(action.id)
+                }
+
+                is GpsAction.CreateCollection -> {
+                    viewModelScope.launch {
+                        val id = collectionRepo.create(action.name, null)
+                        selectCollection(id)
+                    }
                 }
 
                 is GpsAction.SelectCollectionPoint -> {

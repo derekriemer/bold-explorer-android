@@ -26,3 +26,8 @@ DELETE FROM collection_trail WHERE trail_id = :trailId;
 
 deleteForCollection:
 DELETE FROM collection_trail WHERE collection_id = :collectionId;
+
+collectionsForTrail:
+SELECT c.* FROM collection AS c
+INNER JOIN collection_trail AS ct ON ct.collection_id = c.id
+WHERE ct.trail_id = :trailId;

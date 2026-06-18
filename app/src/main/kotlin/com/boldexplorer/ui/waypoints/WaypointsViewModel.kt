@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.boldexplorer.gpx.GpxParser
 import com.boldexplorer.location.FusedLocationProviderImpl
+import com.boldexplorer.location.SelectedCollectionHolder
 import com.boldexplorer.location.TargetingStateHolder
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.haversineDistanceMeters
@@ -59,6 +60,7 @@ class WaypointsViewModel
         private val trailRepo: TrailRepository,
         private val collectionRepo: CollectionRepository,
         private val targetingStateHolder: TargetingStateHolder,
+        private val selectedCollectionHolder: SelectedCollectionHolder,
         settingsRepo: SettingsRepository,
         locationProvider: FusedLocationProviderImpl,
     ) : ViewModel() {
@@ -74,9 +76,7 @@ class WaypointsViewModel
         private val _radiusFilterM = MutableStateFlow<Double?>(null)
         val radiusFilterM: StateFlow<Double?> = _radiusFilterM.asStateFlow()
 
-        /** Null = all collections. */
-        private val _collectionFilter = MutableStateFlow<Long?>(null)
-        val collectionFilter: StateFlow<Long?> = _collectionFilter.asStateFlow()
+        val collectionFilter: StateFlow<Long?> = selectedCollectionHolder.selectedCollectionId
 
         // ── Source data ───────────────────────────────────────────────────────────────
 
@@ -112,7 +112,7 @@ class WaypointsViewModel
         // ── Derived: waypoint IDs in the selected collection (null = no filter) ───────
 
         private val _collectionFilterIds: StateFlow<Set<Long>?> =
-            _collectionFilter
+            selectedCollectionHolder.selectedCollectionId
                 .flatMapLatest { id ->
                     if (id == null) {
                         flowOf(null)
@@ -190,7 +190,7 @@ class WaypointsViewModel
         }
 
         fun setCollectionFilter(id: Long?) {
-            _collectionFilter.value = id
+            selectedCollectionHolder.select(id)
         }
 
         fun create(
@@ -201,7 +201,7 @@ class WaypointsViewModel
             tentative: Boolean = false,
         ) {
             val collectionId =
-                _collectionFilter.value ?: run {
+                selectedCollectionHolder.selectedCollectionId.value ?: run {
                     _toast.value = "Select a collection first"
                     return
                 }
@@ -273,7 +273,7 @@ class WaypointsViewModel
             targetCollectionId: Long,
         ) {
             val from =
-                _collectionFilter.value ?: run {
+                selectedCollectionHolder.selectedCollectionId.value ?: run {
                     _toast.value = "Select a collection first"
                     return
                 }
@@ -289,7 +289,7 @@ class WaypointsViewModel
         fun createCollection(name: String) {
             viewModelScope.launch {
                 val id = collectionRepo.create(name, null)
-                _collectionFilter.value = id
+                selectedCollectionHolder.select(id)
                 _toast.value = "Collection created"
             }
         }

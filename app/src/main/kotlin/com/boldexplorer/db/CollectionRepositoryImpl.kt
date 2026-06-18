@@ -94,6 +94,12 @@ class CollectionRepositoryImpl
                 .executeAsList()
                 .map { it.toModel() }
 
+        override suspend fun collectionsForTrail(trailId: Long): List<ExplorerCollection> =
+            db.collectionTrailQueries
+                .collectionsForTrail(trailId)
+                .executeAsList()
+                .map { it.toModel() }
+
         override suspend fun attachWaypoint(
             collectionId: Long,
             waypointId: Long,

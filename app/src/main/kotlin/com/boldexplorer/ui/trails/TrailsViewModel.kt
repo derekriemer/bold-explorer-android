@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.boldexplorer.gpx.GpxFileWriter
 import com.boldexplorer.gpx.GpxParser
 import com.boldexplorer.location.FusedLocationProviderImpl
+import com.boldexplorer.location.SelectedCollectionHolder
 import com.boldexplorer.location.TargetingStateHolder
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.gpx.GpxExporter
@@ -41,6 +42,7 @@ class TrailsViewModel
         private val waypointRepo: WaypointRepository,
         private val collectionRepo: CollectionRepository,
         private val targetingStateHolder: TargetingStateHolder,
+        private val selectedCollectionHolder: SelectedCollectionHolder,
         locationProvider: FusedLocationProviderImpl,
     ) : ViewModel() {
         // Current fix, used to decide which trail end is nearest for the end-proximity actions.
@@ -49,10 +51,21 @@ class TrailsViewModel
                 .map { it?.let { s -> LatLng(s.lat, s.lon) } }
                 .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
 
+        val selectedCollectionId: StateFlow<Long?> = selectedCollectionHolder.selectedCollectionId
+
+        private val _query = MutableStateFlow("")
+        val query: StateFlow<String> = _query.asStateFlow()
+
+        private val _collectionTrails: StateFlow<List<Trail>> =
+            selectedCollectionHolder.selectedCollectionId
+                .flatMapLatest { id ->
+                    if (id == null) flowOf(emptyList()) else collectionRepo.observeTrailsForCollection(id)
+                }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
+
         val trails: StateFlow<List<Trail>> =
-            trailRepo
-                .observeAll()
-                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
+            combine(_collectionTrails, _query) { all, q ->
+                if (q.isBlank()) all else all.filter { it.name.contains(q, ignoreCase = true) }
+            }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
         val collections: StateFlow<List<Collection>> =
             collectionRepo
@@ -148,16 +161,37 @@ class TrailsViewModel
             _trackExpandedTrailIds.value = if (trailId in current) current - trailId else current + trailId
         }
 
+        fun setQuery(q: String) {
+            _query.value = q
+        }
+
+        fun setCollectionFilter(id: Long?) {
+            selectedCollectionHolder.select(id)
+        }
+
         fun create(
-            collectionId: Long,
             name: String,
             description: String?,
             tentative: Boolean = false,
         ) {
+            val collectionId =
+                selectedCollectionHolder.selectedCollectionId.value ?: run {
+                    _toast.value = "Select a collection first"
+                    return
+                }
             viewModelScope.launch {
                 val id = trailRepo.create(collectionId, name, description, tentative)
                 _expandedTrailIds.value = _expandedTrailIds.value + id
                 _toast.value = "Trail created"
+            }
+        }
+
+        /** Create a new collection and immediately scope the screen to it. */
+        fun createCollection(name: String) {
+            viewModelScope.launch {
+                val id = collectionRepo.create(name, null)
+                selectedCollectionHolder.select(id)
+                _toast.value = "Collection created"
             }
         }
 

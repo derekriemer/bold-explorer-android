@@ -151,6 +151,8 @@ interface CollectionRepository {
 
     suspend fun collectionsForWaypoint(waypointId: Long): List<ExplorerCollection>
 
+    suspend fun collectionsForTrail(trailId: Long): List<ExplorerCollection>
+
     suspend fun attachWaypoint(
         collectionId: Long,
         waypointId: Long,

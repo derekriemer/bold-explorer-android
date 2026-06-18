@@ -18,13 +18,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -48,7 +43,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.haversineDistanceMeters
-import com.boldexplorer.shared.model.Collection
 import com.boldexplorer.shared.model.LocationSample
 import com.boldexplorer.shared.navigation.BearingComputer
 import com.boldexplorer.shared.navigation.CollectionExplorerState
@@ -59,6 +53,7 @@ import com.boldexplorer.shared.navigation.FollowOption
 import com.boldexplorer.shared.navigation.NavMode
 import com.boldexplorer.shared.navigation.TrailEndAction
 import com.boldexplorer.shared.settings.AppSettings
+import com.boldexplorer.ui.common.CollectionDropdown
 import com.boldexplorer.ui.common.CreateItemDialog
 
 @Composable
@@ -68,6 +63,19 @@ fun GpsRoute(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val pendingCreate by viewModel.pendingCreate.collectAsStateWithLifecycle()
+    var showCreateCollection by remember { mutableStateOf(false) }
+
+    if (showCreateCollection) {
+        CreateItemDialog(
+            title = "New Collection",
+            confirmLabel = "Create",
+            onConfirm = { name, _ ->
+                viewModel.onAction(GpsAction.CreateCollection(name))
+                showCreateCollection = false
+            },
+            onDismiss = { showCreateCollection = false },
+        )
+    }
 
     when (val pending = pendingCreate) {
         is PendingCreate.Waypoint -> {
@@ -122,6 +130,7 @@ fun GpsRoute(
                 viewModel.onAction(action)
             }
         },
+        onCreateCollection = { showCreateCollection = true },
     )
 }
 
@@ -130,6 +139,7 @@ fun GpsScreen(
     paddingValues: PaddingValues,
     state: GpsUiState,
     onAction: (GpsAction) -> Unit,
+    onCreateCollection: () -> Unit,
 ) {
     var showAlignmentDialog by remember { mutableStateOf(false) }
 
@@ -205,10 +215,15 @@ fun GpsScreen(
             )
 
             // ── Pinned collection selector ──────────────────────────────────────────
-            CollectionSelector(
+            CollectionDropdown(
                 collections = state.collections,
                 selectedId = state.selectedCollectionId,
-                onAction = onAction,
+                onSelect = { id -> if (id != null) onAction(GpsAction.SelectCollection(id)) },
+                onCreateNew = onCreateCollection,
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
             )
 
             val active = state.collectionExplorerState as? CollectionExplorerState.Active
@@ -332,56 +347,6 @@ private fun TelemetryCard(
                     BearingComputer.formatDistance(it, state.settings.units)
                 } ?: "—"
             TelemetryRow(label = "GPS Accuracy", value = accText, contentDesc = "GPS accuracy: $accText")
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun CollectionSelector(
-    collections: List<Collection>,
-    selectedId: Long?,
-    onAction: (GpsAction) -> Unit,
-) {
-    val selectedName = collections.find { it.id == selectedId }?.name ?: "Select collection"
-    var expanded by remember { mutableStateOf(false) }
-
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = it },
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-    ) {
-        OutlinedTextField(
-            value = selectedName,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text("Collection") },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier =
-                Modifier
-                    .menuAnchor(androidx.compose.material3.MenuAnchorType.PrimaryNotEditable)
-                    .fillMaxWidth(),
-        )
-        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            if (collections.isEmpty()) {
-                DropdownMenuItem(
-                    text = { Text("No collections yet") },
-                    onClick = { expanded = false },
-                )
-            } else {
-                collections.forEach { collection ->
-                    DropdownMenuItem(
-                        text = { Text(collection.name) },
-                        onClick = {
-                            onAction(GpsAction.SelectCollection(collection.id))
-                            expanded = false
-                        },
-                    )
-                }
-            }
         }
     }
 }

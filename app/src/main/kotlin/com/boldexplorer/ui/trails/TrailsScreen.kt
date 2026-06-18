@@ -18,22 +18,15 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,9 +44,10 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.haversineDistanceMeters
-import com.boldexplorer.shared.model.Collection
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.Waypoint
+import com.boldexplorer.ui.common.CollectionDropdown
+import com.boldexplorer.ui.common.CreateItemDialog
 import com.boldexplorer.ui.common.SpeakButton
 import com.boldexplorer.ui.common.ToastMessage
 import com.boldexplorer.ui.common.rememberSttLauncher
@@ -75,6 +69,8 @@ fun TrailsScreen(
     val trackExpandedIds by viewModel.trackExpandedTrailIds.collectAsStateWithLifecycle()
     val allWaypoints by viewModel.allWaypoints.collectAsStateWithLifecycle()
     val collections by viewModel.collections.collectAsStateWithLifecycle()
+    val selectedCollectionId by viewModel.selectedCollectionId.collectAsStateWithLifecycle()
+    val query by viewModel.query.collectAsStateWithLifecycle()
     val toast by viewModel.toast.collectAsStateWithLifecycle()
     val exportStatus by viewModel.exportStatus.collectAsStateWithLifecycle()
     val currentLocation by viewModel.currentLocation.collectAsStateWithLifecycle()
@@ -85,6 +81,7 @@ fun TrailsScreen(
         }
 
     var showAddDialog by remember { mutableStateOf(false) }
+    var showCreateCollection by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<Trail?>(null) }
     var deleteTarget by remember { mutableStateOf<Trail?>(null) }
     var addWpToTrail by remember { mutableStateOf<Long?>(null) }
@@ -114,9 +111,39 @@ fun TrailsScreen(
 
         ToastMessage(toastMessage)
 
+        CollectionDropdown(
+            collections = collections,
+            selectedId = selectedCollectionId,
+            onSelect = { viewModel.setCollectionFilter(it) },
+            onCreateNew = { showCreateCollection = true },
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        OutlinedTextField(
+            value = query,
+            onValueChange = { viewModel.setQuery(it) },
+            label = { Text("Search trails") },
+            singleLine = true,
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
         if (trails.isEmpty()) {
             Text(
-                "No trails yet",
+                when {
+                    selectedCollectionId == null -> "Select a collection to view trails"
+                    query.isNotBlank() -> "No trails match your search"
+                    else -> "No trails in this collection yet"
+                },
                 modifier = Modifier.padding(16.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -192,12 +219,23 @@ fun TrailsScreen(
         NameDescDialog(
             title = "New Trail",
             confirmLabel = "Create",
-            collections = collections,
-            onConfirm = { collectionId, name, desc, tentative ->
-                viewModel.create(collectionId, name, desc, tentative)
+            onConfirm = { name, desc, tentative ->
+                viewModel.create(name, desc, tentative)
                 showAddDialog = false
             },
             onDismiss = { showAddDialog = false },
+        )
+    }
+
+    if (showCreateCollection) {
+        CreateItemDialog(
+            title = "New Collection",
+            confirmLabel = "Create",
+            onConfirm = { name, _ ->
+                viewModel.createCollection(name)
+                showCreateCollection = false
+            },
+            onDismiss = { showCreateCollection = false },
         )
     }
 
@@ -522,22 +560,17 @@ private fun TrailItem(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun NameDescDialog(
     title: String,
     confirmLabel: String,
-    collections: List<Collection>,
-    onConfirm: (collectionId: Long, name: String, description: String?, tentative: Boolean) -> Unit,
+    onConfirm: (name: String, description: String?, tentative: Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var name by remember { mutableStateOf("") }
     var desc by remember { mutableStateOf("") }
     var tentative by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var selectedCollectionId by remember(collections) { mutableStateOf(collections.firstOrNull()?.id) }
-    var expanded by remember { mutableStateOf(false) }
-    val selectedName = collections.firstOrNull { it.id == selectedCollectionId }?.name ?: ""
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -558,37 +591,6 @@ private fun NameDescDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                if (collections.isEmpty()) {
-                    Text("Create a collection first", color = MaterialTheme.colorScheme.error)
-                } else {
-                    ExposedDropdownMenuBox(
-                        expanded = expanded,
-                        onExpandedChange = { expanded = it },
-                    ) {
-                        OutlinedTextField(
-                            value = selectedName,
-                            onValueChange = {},
-                            readOnly = true,
-                            label = { Text("Collection") },
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                            modifier =
-                                Modifier
-                                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                                    .fillMaxWidth(),
-                        )
-                        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                            collections.forEach { c ->
-                                DropdownMenuItem(
-                                    text = { Text(c.name) },
-                                    onClick = {
-                                        selectedCollectionId = c.id
-                                        expanded = false
-                                    },
-                                )
-                            }
-                        }
-                    }
-                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = tentative, onCheckedChange = { tentative = it })
                     Text(
@@ -609,13 +611,10 @@ private fun NameDescDialog(
         },
         confirmButton = {
             TextButton(onClick = {
-                val collectionId = selectedCollectionId
                 if (name.isBlank()) {
                     error = "Name required"
-                } else if (collectionId == null) {
-                    error = "Select a collection"
                 } else {
-                    onConfirm(collectionId, name.trim(), desc.trim().ifBlank { null }, tentative)
+                    onConfirm(name.trim(), desc.trim().ifBlank { null }, tentative)
                 }
             }) { Text(confirmLabel) }
         },
