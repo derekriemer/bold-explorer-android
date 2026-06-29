@@ -44,6 +44,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.haversineDistanceMeters
 import com.boldexplorer.shared.model.LocationSample
+import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.navigation.BearingComputer
 import com.boldexplorer.shared.navigation.CollectionExplorerState
 import com.boldexplorer.shared.navigation.CollectionPoint
@@ -52,6 +53,7 @@ import com.boldexplorer.shared.navigation.DirectionDescriptor
 import com.boldexplorer.shared.navigation.FollowOption
 import com.boldexplorer.shared.navigation.NavMode
 import com.boldexplorer.shared.navigation.TrailEndAction
+import com.boldexplorer.shared.navigation.TrailRecordingState
 import com.boldexplorer.shared.settings.AppSettings
 import com.boldexplorer.ui.common.CollectionDropdown
 import com.boldexplorer.ui.common.CreateItemDialog
@@ -234,11 +236,14 @@ fun GpsScreen(
             }
 
             // ── Scrolling target list (the only scrollable region) ──────────────────
+            val nearbyTrails = (state.navMode as? NavMode.NearTrail)?.trails ?: emptyList()
             CollectionTargetList(
                 active = active,
                 selectedCollectionId = state.selectedCollectionId,
                 settings = state.settings,
                 location = state.location,
+                nearbyTrails = nearbyTrails,
+                selectedTrailId = state.selectedTrailId,
                 onAction = onAction,
                 modifier = Modifier.weight(1f),
             )
@@ -247,6 +252,8 @@ fun GpsScreen(
             ContextualTrailActions(
                 navMode = state.navMode,
                 selectedCollectionId = state.selectedCollectionId,
+                selectedTrailId = state.selectedTrailId,
+                recordingState = state.recordingState,
                 onAction = onAction,
             )
 
@@ -388,6 +395,8 @@ private fun CollectionTargetList(
     selectedCollectionId: Long?,
     settings: AppSettings,
     location: LocationSample?,
+    nearbyTrails: List<Trail>,
+    selectedTrailId: Long?,
     onAction: (GpsAction) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -471,6 +480,30 @@ private fun CollectionTargetList(
                 )
             }
         }
+        items(nearbyTrails, key = { "nearby:${it.id}" }) { trail ->
+            val isSelected = trail.id == selectedTrailId
+            Row(
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { onAction(GpsAction.SelectTrail(trail.id)) }
+                        .padding(vertical = 12.dp)
+                        .semantics {
+                            contentDescription = "${trail.name}, nearby${if (isSelected) ", selected" else ""}"
+                        },
+            ) {
+                Text(
+                    trail.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color =
+                        if (isSelected) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                )
+            }
+        }
         items(active.points, key = { it.id }) { point ->
             val label = pointLabel(point)
             val isVisited = point.id in active.visitedIds
@@ -509,6 +542,8 @@ private fun CollectionTargetList(
 private fun ContextualTrailActions(
     navMode: NavMode,
     selectedCollectionId: Long?,
+    selectedTrailId: Long?,
+    recordingState: TrailRecordingState,
     onAction: (GpsAction) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
@@ -524,8 +559,9 @@ private fun ContextualTrailActions(
 
             is NavMode.AtTrailEnd -> {
                 val end = navMode.trailEnd
+                val trailSelected = selectedTrailId == end.trail.id
                 SkipTargetButton(onAction)
-                if (TrailEndAction.Follow in navMode.actions) {
+                if (TrailEndAction.Follow in navMode.actions && trailSelected) {
                     FollowAffordance(
                         trailName = end.trail.name,
                         trailId = end.trail.id,
@@ -533,23 +569,21 @@ private fun ContextualTrailActions(
                         onAction = onAction,
                     )
                 }
-                if (TrailEndAction.Extend in navMode.actions) {
+                if (TrailEndAction.Extend in navMode.actions && trailSelected) {
                     Button(
                         onClick = { onAction(GpsAction.ExtendTrailFromCollectionEnd(end)) },
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .semantics { contentDescription = "Extend ${end.trail.name} by recording from this end" }, // No
+                        modifier = Modifier.fillMaxWidth(),
                     ) { Text("Extend ${end.trail.name}") }
                 }
                 RecordNewTrailButton(selectedCollectionId = selectedCollectionId, onAction = onAction)
             }
 
             is NavMode.NearTrail -> {
-                navMode.trails.forEach { trail ->
+                val selected = navMode.trails.firstOrNull { it.id == selectedTrailId }
+                if (selected != null) {
                     FollowAffordance(
-                        trailName = trail.name,
-                        trailId = trail.id,
+                        trailName = selected.name,
+                        trailId = selected.id,
                         options = navMode.options,
                         onAction = onAction,
                     )
@@ -560,10 +594,7 @@ private fun ContextualTrailActions(
             is NavMode.FollowingTrail -> {
                 Button(
                     onClick = { onAction(GpsAction.StopFollowTrail) },
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .semantics { contentDescription = "Stop trail navigation" }, // No
+                    modifier = Modifier.fillMaxWidth(),
                 ) { Text("Stop Navigation") }
             }
 
@@ -582,6 +613,13 @@ private fun ContextualTrailActions(
                             .semantics { contentDescription = "Stop auto-recording GPS track" },
                 ) { Text("Stop Auto-Record") }
             }
+        }
+
+        if (recordingState is TrailRecordingState.Selected) {
+            Button(
+                onClick = { onAction(GpsAction.StartAutoRecord) },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Start Auto-Record") }
         }
     }
 }

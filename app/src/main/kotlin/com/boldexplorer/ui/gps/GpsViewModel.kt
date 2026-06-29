@@ -737,6 +737,8 @@ class GpsViewModel
 
         fun selectCollectionPoint(point: CollectionPoint) {
             collectionExplorer.selectTarget(point)
+            // Gate Follow/Extend on explicit selection — same as NearTrail flow.
+            if (point is CollectionPoint.TrailEnd) selectTrail(point.trail.id)
             backgroundSession.setModeActive(GpsBackgroundMode.CollectionFollow, true)
             startLocationService()
         }
