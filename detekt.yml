@@ -1,0 +1,11 @@
+build:
+  maxIssues: 0
+
+# Only the custom a11y rule set is enabled (see app/build.gradle.kts: disableDefaultRuleSets = true).
+# Enabling detekt's built-in rule sets is a separate decision — this repo has no prior baseline for
+# them and this config is scoped to Codeberg issue #4 (unnecessary contentDescription usage).
+a11y:
+  active: true
+  UnjustifiedContentDescription:
+    active: true
+    severity: warning

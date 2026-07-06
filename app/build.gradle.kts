@@ -5,6 +5,7 @@ plugins {
     alias(libs.plugins.ksp)
     alias(libs.plugins.sqldelight)
     alias(libs.plugins.compose.compiler)
+    alias(libs.plugins.detekt)
 }
 
 android {
@@ -53,6 +54,14 @@ sqldelight {
             schemaOutputDirectory.set(file("src/main/sqldelight/schema"))
         }
     }
+}
+
+// Custom a11y rule only (issue #4) — the built-in rule sets are intentionally left off since this
+// repo has no prior detekt baseline; enabling them is a separate decision.
+detekt {
+    config.setFrom(rootProject.file("detekt.yml"))
+    buildUponDefaultConfig = false
+    disableDefaultRuleSets = true
 }
 
 // SQLDelight 2.x doesn't wire its codegen into the KSP task automatically.
@@ -112,4 +121,7 @@ dependencies {
     testImplementation(libs.kotlin.test)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.sqldelight.sqlite.driver)
+
+    // Custom detekt rules
+    detektPlugins(project(":detekt-rules"))
 }

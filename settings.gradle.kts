@@ -23,3 +23,4 @@ dependencyResolutionManagement {
 rootProject.name = "bold-explorer-kmp"
 include(":shared")
 include(":app")
+include(":detekt-rules")

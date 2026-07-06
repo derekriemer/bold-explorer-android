@@ -81,6 +81,14 @@ fmt:
 	@command -v ktlint >/dev/null 2>&1 || { echo "ktlint not found — install with: curl -sSLO https://github.com/pinterest/ktlint/releases/latest/download/ktlint && chmod +x ktlint && sudo mv ktlint /usr/local/bin/"; exit 1; }
 	ktlint --format "**/*.kt"
 
+# ── Static analysis ────────────────────────────────────────────────────────
+# If you're iterating on detekt-rules/ itself and stop seeing expected findings, run
+# `./gradlew --stop` first — the Gradle daemon can cache a stale ServiceLoader classloader
+# for the custom rule jar across invocations within the same daemon process.
+.PHONY: lint
+lint:
+	$(GW) :app:detekt :detekt-rules:test
+
 .PHONY: help
 help:
 	@echo "make test-shared       — run :shared:jvmTest (Phase 1 gate)"
@@ -91,6 +99,7 @@ help:
 	@echo "make install           — install debug APK on connected device"
 	@echo "make clean             — clean all build outputs"
 	@echo "make fmt               — reformat all Kotlin sources with ktlint"
+	@echo "make lint              — run detekt (custom a11y rule) + its own tests"
 	@echo "make adb-connect       — connect to phone via Tailscale (set PHONE_IP, PHONE_PORT)"
 	@echo "make adb-pair          — pair phone for first-time wireless ADB (set PHONE_IP, PAIR_PORT)"
 	@echo "make logcat            — tail app + crash logs"

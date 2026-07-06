@@ -7,4 +7,6 @@ plugins {
     alias(libs.plugins.ksp) apply false
     alias(libs.plugins.sqldelight) apply false
     alias(libs.plugins.compose.compiler) apply false
+    alias(libs.plugins.detekt) apply false
+    alias(libs.plugins.kotlin.jvm) apply false
 }
