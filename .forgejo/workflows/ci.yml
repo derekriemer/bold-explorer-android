@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-and-lint:
+    # codeberg-medium: 4 CPU / 8GB RAM / 10 min runtime. A cold Gradle build (no cache, downloading
+    # AGP/Kotlin/detekt deps from scratch) is the main risk here — if it doesn't fit in 10 minutes,
+    # the fix is Gradle build-cache/dependency caching between runs, not a bigger runner.
+    runs-on: codeberg-medium
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@v4
+
+      # Codeberg's shared runner image (ghcr.io/catthehacker/ubuntu:act-latest) has no Android SDK
+      # preinstalled — install it the same way setup.sh does for local dev.
+      - name: Install JDK 17
+        run: |
+          if ! java -version 2>&1 | grep -q 'version "17'; then
+            sudo apt-get update -q
+            sudo apt-get install -y openjdk-17-jdk-headless
+          fi
+
+      - name: Install Android SDK
+        env:
+          ANDROID_HOME: /home/runner/android-sdk
+        run: |
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" -o /tmp/cmdtools.zip
+          unzip -q /tmp/cmdtools.zip -d /tmp/cmdtools
+          mv /tmp/cmdtools/cmdline-tools "$ANDROID_HOME/cmdline-tools/latest"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-35" "build-tools;35.0.0" > /dev/null
+
+      - name: make test
+        run: make test
+
+      - name: make lint
+        run: make lint
