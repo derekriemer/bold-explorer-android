@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -33,7 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
@@ -159,6 +160,7 @@ fun GpsScreen(
                     },
                 modifier =
                     Modifier.semantics {
+                        // a11y: the visible label is just "+"; state also varies by disabled reason.
                         contentDescription =
                             when {
                                 !canMark -> "Mark waypoint — select a collection first"
@@ -316,7 +318,6 @@ private fun TelemetryCard(
             TelemetryRow(
                 label = "Heading",
                 value = "$headingText ($headingDegText) · ${state.compassModeLabel}",
-                contentDesc = "Heading: $headingText $headingDegText, ${state.compassModeLabel}",
                 customActions =
                     listOf(
                         CustomAccessibilityAction("Open alignment") {
@@ -341,19 +342,19 @@ private fun TelemetryCard(
                         state.bearingDeg?.let { "${BearingComputer.toCardinal(it)} (${"%.0f".format(it)}°)" } ?: "—"
                     }
                 }
-            TelemetryRow(label = bearingLabel, value = directionText, contentDesc = "$bearingLabel: $directionText")
+            TelemetryRow(label = bearingLabel, value = directionText)
 
             val distText =
                 state.distanceM?.let {
                     BearingComputer.formatDistance(it, state.settings.units)
                 } ?: "—"
-            TelemetryRow(label = "Distance", value = distText, contentDesc = "Distance to target: $distText")
+            TelemetryRow(label = "Distance to target", value = distText)
 
             val accText =
                 state.accuracyM?.let {
                     BearingComputer.formatDistance(it, state.settings.units)
                 } ?: "—"
-            TelemetryRow(label = "GPS Accuracy", value = accText, contentDesc = "GPS accuracy: $accText")
+            TelemetryRow(label = "GPS Accuracy", value = accText)
         }
     }
 }
@@ -370,22 +371,25 @@ private fun CollectionControls(
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp),
     ) {
-        Text("Auto-advance", modifier = Modifier.weight(1f))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier =
+                Modifier
+                    .weight(1f)
+                    .toggleable(
+                        value = active.exploreMode,
+                        onValueChange = { onAction(GpsAction.SetCollectionExploreMode(it)) },
+                        role = Role.Switch,
+                    ),
+        ) {
+            Text("Auto-advance", modifier = Modifier.weight(1f))
+            Switch(checked = active.exploreMode, onCheckedChange = null)
+        }
         if (active.exploreMode && active.visitedIds.isNotEmpty()) {
             TextButton(
                 onClick = { onAction(GpsAction.ClearCollectionVisited) },
-                modifier = Modifier.semantics { contentDescription = "Reset visited points" },
             ) { Text("Reset visited (${active.visitedIds.size})") }
         }
-        Switch(
-            checked = active.exploreMode,
-            onCheckedChange = { onAction(GpsAction.SetCollectionExploreMode(it)) },
-            modifier =
-                Modifier.semantics {
-                    contentDescription = if (active.exploreMode) "Auto-advance, on" else "Auto-advance, off"
-                    // this one may be unnecessary.
-                },
-        )
     }
 }
 
@@ -427,9 +431,6 @@ private fun CollectionTargetList(
                 modifier =
                     Modifier.semantics {
                         liveRegion = LiveRegionMode.Polite
-                        contentDescription =
-                            // no need.
-                            if (selectedCollectionId == null) "No collection selected" else "Loading collection"
                     },
             )
         }
@@ -463,9 +464,9 @@ private fun CollectionTargetList(
                         .clickable { onAction(GpsAction.ClearCollectionTarget) }
                         .padding(vertical = 12.dp)
                         .semantics {
-                            contentDescription =
-                                // figure out
-                                "Nearest, automatic${if (autoSelected) ", selected" else ""}"
+                            // a11y: plain clickable Row has no native selected-state semantics, and
+                            // "selected" is otherwise only shown by color, which isn't accessible.
+                            contentDescription = "Nearest, automatic${if (autoSelected) ", selected" else ""}"
                         },
             ) {
                 Text(
@@ -489,6 +490,8 @@ private fun CollectionTargetList(
                         .clickable { onAction(GpsAction.SelectTrail(trail.id)) }
                         .padding(vertical = 12.dp)
                         .semantics {
+                            // a11y: "nearby"/"selected" aren't shown by color alone; Row has no
+                            // native selected-state semantics.
                             contentDescription = "${trail.name}, nearby${if (isSelected) ", selected" else ""}"
                         },
             ) {
@@ -515,6 +518,8 @@ private fun CollectionTargetList(
                         .clickable { onAction(GpsAction.SelectCollectionPoint(point)) }
                         .padding(vertical = 12.dp)
                         .semantics {
+                            // a11y: "current target"/"visited" aren't shown by color alone; Row has
+                            // no native selected-state semantics.
                             contentDescription =
                                 buildString {
                                     append(label)
@@ -603,14 +608,10 @@ private fun ContextualTrailActions(
                 Text(
                     recordStatusText,
                     style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.semantics { contentDescription = recordStatusText },
                 )
                 Button(
                     onClick = { onAction(GpsAction.StopAutoRecord) },
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .semantics { contentDescription = "Stop auto-recording GPS track" },
+                    modifier = Modifier.fillMaxWidth(),
                 ) { Text("Stop Auto-Record") }
             }
         }
@@ -642,10 +643,7 @@ private fun FollowAffordance(
         val reversed = options.single().reversed
         Button(
             onClick = { onAction(GpsAction.FollowTrail(trailId, reversed)) },
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .semantics { contentDescription = "Follow $trailName" },
+            modifier = Modifier.fillMaxWidth(),
         ) { Text("Follow $trailName") }
         return
     }
@@ -656,7 +654,12 @@ private fun FollowAffordance(
         modifier =
             Modifier
                 .fillMaxWidth()
-                .semantics { contentDescription = "Follow $trailName, choose a direction" },
+                .semantics {
+                    // a11y: this button opens a direction-choice dialog rather than following
+                    // immediately (unlike the single-option case above); the visible label alone
+                    // doesn't convey that a choice is needed.
+                    contentDescription = "Follow $trailName, choose a direction"
+                },
     ) { Text("Follow $trailName") }
 
     if (showChooser) {
@@ -672,10 +675,7 @@ private fun FollowAffordance(
                                 showChooser = false
                                 onAction(GpsAction.FollowTrail(trailId, option.reversed))
                             },
-                            modifier =
-                                Modifier
-                                    .fillMaxWidth()
-                                    .semantics { contentDescription = "Follow $trailName, $label" },
+                            modifier = Modifier.fillMaxWidth(),
                         ) { Text(label) }
                     }
                 }
@@ -701,6 +701,7 @@ private fun DirectionDescriptor.label(): String =
 private fun SkipTargetButton(onAction: (GpsAction) -> Unit) {
     TextButton(
         onClick = { onAction(GpsAction.SkipCollectionTarget) },
+        // a11y: "Not this" alone doesn't convey what tapping does.
         modifier = Modifier.semantics { contentDescription = "Skip current target and pick something else" },
     ) { Text("Not this") }
 }
@@ -717,6 +718,8 @@ private fun RecordNewTrailButton(
             Modifier
                 .fillMaxWidth()
                 .semantics {
+                    // a11y: visible "Record New Trail" doesn't convey the disabled reason or which
+                    // collection it applies to.
                     contentDescription =
                         if (selectedCollectionId == null) {
                             "Record new trail — select a collection first"
@@ -740,7 +743,6 @@ private fun RecordNewTrailButton(
 private fun TelemetryRow(
     label: String,
     value: String,
-    contentDesc: String,
     customActions: List<CustomAccessibilityAction> = emptyList(),
 ) {
     Row(
@@ -748,8 +750,7 @@ private fun TelemetryRow(
             Modifier
                 .fillMaxWidth()
                 .padding(vertical = 2.dp)
-                .clearAndSetSemantics {
-                    contentDescription = contentDesc
+                .semantics(mergeDescendants = true) {
                     if (customActions.isNotEmpty()) this.customActions = customActions
                 },
     ) {

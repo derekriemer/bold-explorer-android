@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -20,8 +19,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.unit.dp
 
 /**
@@ -90,26 +87,11 @@ fun CreateItemDialog(
                     )
                     SpeakButton(controller = stt, modifier = Modifier.padding(start = 4.dp))
                 }
-                Row(
+                TentativeCheckboxRow(
+                    tentative = tentative,
+                    onTentativeChange = { tentative = it },
                     modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Checkbox(checked = tentative, onCheckedChange = { tentative = it })
-                    Text(
-                        "Mark as tentative",
-                        modifier =
-                            Modifier
-                                .padding(start = 4.dp)
-                                .clearAndSetSemantics {
-                                    contentDescription =
-                                        if (tentative) {
-                                            "Mark as tentative, checked"
-                                        } else {
-                                            "Mark as tentative, not checked"
-                                        }
-                                },
-                    )
-                }
+                )
                 error?.let {
                     Text(it, color = MaterialTheme.colorScheme.error)
                 }

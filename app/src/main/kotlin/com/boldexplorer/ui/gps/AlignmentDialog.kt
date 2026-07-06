@@ -116,11 +116,6 @@ fun AlignmentDialog(
                 Text(
                     "Heading: $headingCardinal ($headingDegText) · ${state.compassModeLabel}",
                     style = MaterialTheme.typography.bodyMedium,
-                    modifier =
-                        Modifier.semantics {
-                            contentDescription =
-                                "Heading: $headingCardinal $headingDegText, ${state.compassModeLabel}"
-                        },
                 )
 
                 Text(
@@ -130,7 +125,6 @@ fun AlignmentDialog(
                         Modifier
                             .fillMaxWidth()
                             .semantics {
-                                contentDescription = "Alignment target $targetBearingText degrees, $deltaText"
                                 customActions = deltaActions
                             },
                 )
@@ -143,7 +137,6 @@ fun AlignmentDialog(
                             .alpha(0f)
                             .semantics {
                                 liveRegion = LiveRegionMode.Assertive
-                                contentDescription = autoReadAnnouncement
                             },
                 )
 
@@ -152,6 +145,8 @@ fun AlignmentDialog(
                     onClick = { autoRead = !autoRead },
                     modifier =
                         Modifier.semantics {
+                            // a11y: names the action tapping performs; the visible label only shows
+                            // current state ("Auto-read: On/Off"), not what tapping it will do.
                             contentDescription =
                                 if (autoRead) {
                                     "Stop automatic alignment readout"
@@ -164,18 +159,11 @@ fun AlignmentDialog(
                 // Visible counterparts to the custom actions on the delta readout.
                 TextButton(
                     onClick = { onAction(GpsAction.ResetAlignment) },
-                    modifier =
-                        Modifier.semantics { contentDescription = "Align to current compass heading" },
                 ) { Text("Align to compass heading") }
 
                 if (state.bearingDeg != null) {
                     TextButton(
                         onClick = { onAction(GpsAction.AlignToTarget) },
-                        modifier =
-                            Modifier.semantics {
-                                contentDescription =
-                                    state.targetName?.let { "Align to $it" } ?: "Align to current target"
-                            },
                     ) { Text(state.targetName?.let { "Align to $it" } ?: "Align to target") }
                 }
 
@@ -185,7 +173,6 @@ fun AlignmentDialog(
                         bearingInputError = false
                         showBearingInput = true
                     },
-                    modifier = Modifier.semantics { contentDescription = "Enter a bearing in degrees" },
                 ) { Text("Set bearing manually") }
             }
         },
@@ -195,12 +182,13 @@ fun AlignmentDialog(
                     onAction(GpsAction.StopAlignment)
                     onDismiss()
                 },
-                modifier = Modifier.semantics { contentDescription = "Stop alignment guidance" },
             ) { Text("Stop alignment") }
         },
         dismissButton = {
             TextButton(
                 onClick = onDismiss,
+                // a11y: dismissing this dialog does NOT stop alignment (only the "Stop alignment"
+                // action does) — visible "Close" alone would wrongly suggest it does.
                 modifier = Modifier.semantics { contentDescription = "Close, keep alignment running" },
             ) { Text("Close") }
         },
@@ -222,7 +210,6 @@ fun AlignmentDialog(
                         label = { Text("Bearing (0–360°)") },
                         isError = bearingInputError,
                         singleLine = true,
-                        modifier = Modifier.semantics { contentDescription = "Bearing in degrees, 0 to 360" },
                     )
                     if (bearingInputError) {
                         Text(

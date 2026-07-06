@@ -12,7 +12,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -90,10 +89,6 @@ fun NavGraph() {
                             },
                             label = { Text(screen.label) },
                             icon = {}, // Accessible label is sufficient; icon would need extended icons dep
-                            modifier =
-                                Modifier.semantics {
-                                    contentDescription = "${screen.label} tab${if (selected) ", selected" else ""}"
-                                },
                         )
                     }
                 }
@@ -109,7 +104,6 @@ fun NavGraph() {
                         .alpha(0f)
                         .semantics {
                             liveRegion = LiveRegionMode.Assertive
-                            contentDescription = announcement
                         },
             )
             NavHost(navController = navController, startDestination = Screen.Gps.route) {

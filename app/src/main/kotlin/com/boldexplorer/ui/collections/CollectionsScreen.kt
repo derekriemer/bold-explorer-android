@@ -75,10 +75,12 @@ fun CollectionsScreen(
             Text("Collections", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
             TextButton(
                 onClick = { importLauncher.launch("*/*") },
+                // a11y: names the file format and outcome, which "Import" alone doesn't.
                 modifier = Modifier.semantics { contentDescription = "Import GPX file as collection" },
             ) { Text("Import") }
             TextButton(
                 onClick = { showAddDialog = true },
+                // a11y: "Add" alone doesn't say what's being added.
                 modifier = Modifier.semantics { contentDescription = "Add collection" },
             ) { Text("Add") }
         }
@@ -178,7 +180,6 @@ fun CollectionsScreen(
                         viewModel.delete(coll.id)
                         deleteTarget = null
                     },
-                    modifier = Modifier.semantics { contentDescription = "Confirm delete collection ${coll.name}" },
                 ) { Text("Delete") }
             },
             dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("Cancel") } },
@@ -236,6 +237,7 @@ private fun CollectionItem(
             Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 4.dp)
+                // a11y: Card has no native expanded-state semantics; state isn't shown by color alone.
                 .semantics { contentDescription = "${collection.name} collection, ${if (expanded) "expanded" else "collapsed"}" },
         elevation = CardDefaults.cardElevation(defaultElevation = if (expanded) 4.dp else 1.dp),
     ) {
@@ -247,14 +249,17 @@ private fun CollectionItem(
                 Text(collection.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                 TextButton(
                     onClick = onRename,
+                    // a11y: names the collection — every row in the list has a "Rename" button.
                     modifier = Modifier.semantics { contentDescription = "Rename collection ${collection.name}" },
                 ) { Text("Rename") }
                 TextButton(
                     onClick = onDelete,
+                    // a11y: names the collection — every row in the list has a "Delete" button.
                     modifier = Modifier.semantics { contentDescription = "Delete collection ${collection.name}" },
                 ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
                 TextButton(
                     onClick = onExport,
+                    // a11y: names the collection — every row in the list has an "Export GPX" button.
                     modifier = Modifier.semantics { contentDescription = "Export collection ${collection.name} as GPX" },
                 ) { Text("Export GPX") }
             }
@@ -263,14 +268,8 @@ private fun CollectionItem(
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
                 Row {
-                    TextButton(
-                        onClick = onAddWaypoints,
-                        modifier = Modifier.semantics { contentDescription = "Add waypoints to ${collection.name}" },
-                    ) { Text("Add Waypoints") }
-                    TextButton(
-                        onClick = onAddTrails,
-                        modifier = Modifier.semantics { contentDescription = "Add trails to ${collection.name}" },
-                    ) { Text("Add Trails") }
+                    TextButton(onClick = onAddWaypoints) { Text("Add Waypoints") }
+                    TextButton(onClick = onAddTrails) { Text("Add Trails") }
                 }
 
                 Text("Waypoints", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 4.dp))
@@ -286,6 +285,7 @@ private fun CollectionItem(
                             Text(wp.name, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
                             TextButton(
                                 onClick = { onRemoveWaypoint(wp.id) },
+                                // a11y: names the waypoint — every row in this list has a "Remove" button.
                                 modifier = Modifier.semantics { contentDescription = "Remove waypoint ${wp.name}" },
                             ) { Text("Remove") }
                         }
@@ -305,6 +305,7 @@ private fun CollectionItem(
                             Text(trail.name, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
                             TextButton(
                                 onClick = { onRemoveTrail(trail.id) },
+                                // a11y: names the trail — every row in this list has a "Remove" button.
                                 modifier = Modifier.semantics { contentDescription = "Remove trail ${trail.name}" },
                             ) { Text("Remove") }
                         }

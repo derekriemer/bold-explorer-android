@@ -105,6 +105,8 @@ fun DebugScreen(
                         Modifier
                             .fillMaxWidth()
                             .semantics(mergeDescendants = true) {
+                                // a11y: explains the tradeoff (sensor fusion vs. raw GNSS) that isn't
+                                // conveyed by the visible labels alone.
                                 contentDescription =
                                     "Raw GNSS provider ${if (useGnss) "on" else "off"}: bypasses sensor fusion for better outdoor accuracy"
                             },
@@ -149,6 +151,8 @@ fun DebugScreen(
                         Modifier
                             .fillMaxWidth()
                             .semantics(mergeDescendants = true) {
+                                // a11y: explains what the beacon sounds like and means, which the
+                                // visible "Accuracy beacon" label + switch don't convey.
                                 contentDescription =
                                     "Accuracy beacon ${if (accuracyBeaconEnabled) "on" else "off"}: beeps on every GPS update, pitch maps to fix quality"
                             },
@@ -171,10 +175,7 @@ fun DebugScreen(
                 )
                 Button(
                     onClick = { viewModel.testAccuracyBeacon() },
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .semantics { contentDescription = "Play accuracy beacon tone for current GPS accuracy" },
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text("Play Accuracy Beacon")
                 }
@@ -199,7 +200,10 @@ fun DebugScreen(
                     modifier =
                         Modifier
                             .fillMaxWidth()
-                            .semantics { contentDescription = "Export all waypoints to Downloads folder as GPX file" },
+                            .semantics {
+                                // a11y: names the destination folder, which the visible label doesn't.
+                                contentDescription = "Export all waypoints to Downloads folder as GPX file"
+                            },
                 ) {
                     Text("Export Waypoints GPX")
                 }
@@ -322,7 +326,7 @@ private fun DebugRow(
             Modifier
                 .fillMaxWidth()
                 .padding(vertical = 2.dp)
-                .semantics(mergeDescendants = true) { contentDescription = "$label: $value" },
+                .semantics(mergeDescendants = true) {},
     ) {
         Text(
             "$label:",

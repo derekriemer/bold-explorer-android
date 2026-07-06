@@ -16,7 +16,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -40,7 +39,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.liveRegion
@@ -57,6 +55,7 @@ import com.boldexplorer.ui.common.CollectionDropdown
 import com.boldexplorer.ui.common.CreateItemDialog
 import com.boldexplorer.ui.common.MultiSelectItemDialog
 import com.boldexplorer.ui.common.SpeakButton
+import com.boldexplorer.ui.common.TentativeCheckboxRow
 import com.boldexplorer.ui.common.ToastMessage
 import com.boldexplorer.ui.common.rememberSttLauncher
 import com.boldexplorer.ui.common.useToast
@@ -110,10 +109,12 @@ fun WaypointsScreen(
             Text("Waypoints", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
             TextButton(
                 onClick = { importLauncher.launch("*/*") },
+                // a11y: names the expected file format, which "Import" alone doesn't.
                 modifier = Modifier.semantics { contentDescription = "Import GPX file" },
             ) { Text("Import") }
             TextButton(
                 onClick = { showAddDialog = true },
+                // a11y: "Add" alone doesn't say what's being added.
                 modifier = Modifier.semantics { contentDescription = "Add waypoint" },
             ) { Text("Add") }
         }
@@ -159,12 +160,14 @@ fun WaypointsScreen(
                 selected = sortMode == WaypointSortMode.DISTANCE,
                 onClick = { viewModel.setSortMode(WaypointSortMode.DISTANCE) },
                 shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                // a11y: this row has no visible section header; "Distance" alone doesn't say it's a sort control.
                 modifier = Modifier.semantics { contentDescription = "Sort by distance" },
             ) { Text("Distance") }
             SegmentedButton(
                 selected = sortMode == WaypointSortMode.ALPHA,
                 onClick = { viewModel.setSortMode(WaypointSortMode.ALPHA) },
                 shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                // a11y: this row has no visible section header; "A–Z" alone doesn't say it's a sort control.
                 modifier = Modifier.semantics { contentDescription = "Sort A to Z" },
             ) { Text("A–Z") }
         }
@@ -259,7 +262,6 @@ fun WaypointsScreen(
                         viewModel.delete(wp.id)
                         deleteTarget = null
                     },
-                    modifier = Modifier.semantics { contentDescription = "Confirm delete waypoint ${wp.name}" },
                 ) { Text("Delete") }
             },
             dismissButton = {
@@ -424,8 +426,8 @@ private fun WaypointItem(
                 .padding(horizontal = 16.dp, vertical = 4.dp)
                 .semantics {
                     // Expand state via stateDescription (not baked into the text) so TalkBack localises
-                    // "expanded"/"collapsed" and i18n works.
-                    contentDescription = "${waypoint.name}$distLabel"
+                    // "expanded"/"collapsed" and i18n works. No contentDescription here: the merged
+                    // name + distance child Text already says the same thing.
                     stateDescription = if (expanded) "Expanded" else "Collapsed"
                     if (expanded) customActions = expandedActions
                 },
@@ -450,35 +452,17 @@ private fun WaypointItem(
 
                 Spacer(Modifier.height(8.dp))
 
+                // Unqualified labels match the collapsed card's customActions above: only one waypoint
+                // card is ever expanded at a time (expandedId is a single Long?), so there's no
+                // competing "Edit"/"Delete" button from another row to disambiguate from.
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(
-                        onClick = onSetTarget,
-                        modifier = Modifier.semantics { contentDescription = "Set ${waypoint.name} as GPS target" },
-                    ) { Text("Set as target") }
-                    TextButton(
-                        onClick = onEdit,
-                        modifier = Modifier.semantics { contentDescription = "Edit waypoint ${waypoint.name}" },
-                    ) { Text("Edit") }
-                    TextButton(
-                        onClick = onFixPoint,
-                        modifier = Modifier.semantics { contentDescription = "Fix ${waypoint.name} to current position" },
-                    ) { Text("Fix point") }
-                    TextButton(
-                        onClick = onAttach,
-                        modifier = Modifier.semantics { contentDescription = "Attach ${waypoint.name} to trail" },
-                    ) { Text("Attach to trail") }
-                    TextButton(
-                        onClick = onAddToCollection,
-                        modifier = Modifier.semantics { contentDescription = "Add ${waypoint.name} to collection" },
-                    ) { Text("Add to collection") }
-                    TextButton(
-                        onClick = onMoveCollection,
-                        modifier = Modifier.semantics { contentDescription = "Move ${waypoint.name} to another collection" },
-                    ) { Text("Move") }
-                    TextButton(
-                        onClick = onDelete,
-                        modifier = Modifier.semantics { contentDescription = "Delete waypoint ${waypoint.name}" },
-                    ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                    TextButton(onClick = onSetTarget) { Text("Set as target") }
+                    TextButton(onClick = onEdit) { Text("Edit") }
+                    TextButton(onClick = onFixPoint) { Text("Fix point") }
+                    TextButton(onClick = onAttach) { Text("Attach to trail") }
+                    TextButton(onClick = onAddToCollection) { Text("Add to collection") }
+                    TextButton(onClick = onMoveCollection) { Text("Move") }
+                    TextButton(onClick = onDelete) { Text("Delete", color = MaterialTheme.colorScheme.error) }
                 }
             }
         }
@@ -544,21 +528,10 @@ private fun WaypointEditDialog(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 if (showTentative) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = tentative, onCheckedChange = { tentative = it })
-                        Text(
-                            "Mark as tentative",
-                            modifier =
-                                Modifier.clearAndSetSemantics {
-                                    contentDescription =
-                                        if (tentative) {
-                                            "Mark as tentative, checked"
-                                        } else {
-                                            "Mark as tentative, not checked"
-                                        }
-                                },
-                        )
-                    }
+                    TentativeCheckboxRow(
+                        tentative = tentative,
+                        onTentativeChange = { tentative = it },
+                    )
                 }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
@@ -607,6 +580,7 @@ private fun MoveToCollectionDialog(
                         modifier =
                             Modifier
                                 .fillMaxWidth()
+                                // a11y: visible text is just the collection's name; this names the action too.
                                 .semantics { contentDescription = "Move to ${col.name}" },
                     ) { Text(col.name) }
                 }
@@ -645,6 +619,7 @@ private fun AttachToTrailDialog(
                         modifier =
                             Modifier
                                 .fillMaxWidth()
+                                // a11y: visible text is just the trail's name; this names the action too.
                                 .semantics { contentDescription = "Attach to trail ${trail.name}" },
                     ) { Text(trail.name) }
                 }

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -112,12 +113,6 @@ fun SettingsScreen(
             label = "Spoken Guidance",
             checked = settings.spokenGuidanceEnabled,
             onCheckedChange = { viewModel.setSpokenGuidance(it) },
-            contentDescription =
-                if (settings.spokenGuidanceEnabled) {
-                    "Spoken guidance, on"
-                } else {
-                    "Spoken guidance, off"
-                },
         )
 
         HorizontalDivider()
@@ -126,7 +121,6 @@ fun SettingsScreen(
             label = "Beacon Cues",
             checked = settings.beaconCuesEnabled,
             onCheckedChange = { viewModel.setBeaconCues(it) },
-            contentDescription = if (settings.beaconCuesEnabled) "Beacon cues, on" else "Beacon cues, off",
         )
 
         HorizontalDivider()
@@ -136,12 +130,9 @@ fun SettingsScreen(
             label = "Use True North",
             checked = settings.compassMode == CompassMode.TRUE,
             onCheckedChange = { viewModel.setCompassMode(if (it) CompassMode.TRUE else CompassMode.MAGNETIC) },
-            contentDescription =
-                if (settings.compassMode == CompassMode.TRUE) {
-                    "Use true north, on"
-                } else {
-                    "Use true north, off, using magnetic north"
-                },
+            // a11y: explains what "off" actually does (falls back to magnetic north), which the
+            // label + native on/off state don't convey.
+            description = if (settings.compassMode == CompassMode.TRUE) null else "Use true north, off, using magnetic north",
         )
 
         HorizontalDivider()
@@ -151,12 +142,6 @@ fun SettingsScreen(
             label = "Duck Music During Beacons",
             checked = settings.duckAudioEnabled,
             onCheckedChange = { viewModel.setDuckAudio(it) },
-            contentDescription =
-                if (settings.duckAudioEnabled) {
-                    "Duck music during beacons, on"
-                } else {
-                    "Duck music during beacons, off"
-                },
         )
 
         HorizontalDivider()
@@ -188,10 +173,7 @@ private fun RadioOption(
                     selected = selected,
                     onClick = onClick,
                     role = Role.RadioButton,
-                ).padding(vertical = 8.dp)
-                .semantics {
-                    contentDescription = if (selected) "$label, selected" else "$label, not selected"
-                },
+                ).padding(vertical = 8.dp),
     ) {
         Text(
             label,
@@ -206,21 +188,31 @@ private fun SwitchRow(
     label: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
-    contentDescription: String,
+    description: String? = null,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier =
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .toggleable(
+                    value = checked,
+                    onValueChange = onCheckedChange,
+                    role = Role.Switch,
+                )
+                .then(
+                    if (description != null) {
+                        // a11y: only pass description when the default (native switch state +
+                        // merged label) needs a supplementary explanation — see call site.
+                        Modifier.semantics { contentDescription = description }
+                    } else {
+                        Modifier
+                    },
+                ),
     ) {
         Text(label, modifier = Modifier.weight(1f))
         Spacer(Modifier.width(8.dp))
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            modifier = Modifier.semantics { this.contentDescription = contentDescription },
-        )
+        Switch(checked = checked, onCheckedChange = null)
     }
 }

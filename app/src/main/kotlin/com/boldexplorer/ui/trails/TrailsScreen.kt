@@ -17,7 +17,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -32,7 +31,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.liveRegion
@@ -49,6 +47,7 @@ import com.boldexplorer.shared.model.Waypoint
 import com.boldexplorer.ui.common.CollectionDropdown
 import com.boldexplorer.ui.common.CreateItemDialog
 import com.boldexplorer.ui.common.SpeakButton
+import com.boldexplorer.ui.common.TentativeCheckboxRow
 import com.boldexplorer.ui.common.ToastMessage
 import com.boldexplorer.ui.common.rememberSttLauncher
 import com.boldexplorer.ui.common.useToast
@@ -101,10 +100,12 @@ fun TrailsScreen(
             Text("Trails", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
             TextButton(
                 onClick = { importLauncher.launch("*/*") },
+                // a11y: names the expected file format, which "Import" alone doesn't.
                 modifier = Modifier.semantics { contentDescription = "Import GPX file" },
             ) { Text("Import") }
             TextButton(
                 onClick = { showAddDialog = true },
+                // a11y: "Add" alone doesn't say what's being added.
                 modifier = Modifier.semantics { contentDescription = "Add trail" },
             ) { Text("Add") }
         }
@@ -191,6 +192,7 @@ fun TrailsScreen(
                                         .padding(horizontal = 24.dp, vertical = 2.dp)
                                         .semantics {
                                             liveRegion = LiveRegionMode.Polite
+                                            // a11y: names which trail this live announcement is for.
                                             contentDescription = "$trackCount track points for ${trail.name}"
                                         },
                             )
@@ -204,6 +206,7 @@ fun TrailsScreen(
                                     modifier =
                                         Modifier
                                             .padding(start = 32.dp, top = 1.dp, end = 16.dp, bottom = 1.dp)
+                                            // a11y: adds the list position, which the visible name alone doesn't.
                                             .semantics { contentDescription = "Track point ${idx + 1}: ${tp.name}" },
                                 )
                             }
@@ -266,7 +269,6 @@ fun TrailsScreen(
                         viewModel.delete(trail.id)
                         deleteTarget = null
                     },
-                    modifier = Modifier.semantics { contentDescription = "Confirm delete trail ${trail.name}" },
                 ) { Text("Delete") }
             },
             dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("Cancel") } },
@@ -412,6 +414,7 @@ private fun TrailItem(
                         .fillMaxWidth()
                         .clickable(onClick = onToggle)
                         .semantics(mergeDescendants = true) {
+                            // a11y: adds waypoint/track-point counts, which aren't visible until expanded.
                             // Expand state via stateDescription so TalkBack localises it; not baked into text.
                             contentDescription = "${trail.name} trail, $wpLabel$tpLabel"
                             stateDescription = if (expanded) "Expanded" else "Collapsed"
@@ -429,27 +432,32 @@ private fun TrailItem(
                     if (start != null) {
                         TextButton(
                             onClick = { onFollow(false) },
+                            // a11y: names the trail — several cards can be expanded at once.
                             modifier = Modifier.semantics { contentDescription = "Follow trail ${trail.name}" },
                         ) { Text("Follow") }
                         if (start.id != end?.id) {
                             TextButton(
                                 onClick = { onFollow(true) },
+                                // a11y: names the trail — several cards can be expanded at once.
                                 modifier = Modifier.semantics { contentDescription = "Follow trail ${trail.name} in reverse" },
                             ) { Text("Reverse") }
                         }
                     }
                     TextButton(
                         onClick = onRecord,
+                        // a11y: names the trail — several cards can be expanded at once.
                         modifier = Modifier.semantics { contentDescription = "Start recording trail ${trail.name}" },
                     ) { Text("Record") }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(
                         onClick = onRename,
+                        // a11y: names the trail — several cards can be expanded at once.
                         modifier = Modifier.semantics { contentDescription = "Rename trail ${trail.name}" },
                     ) { Text("Rename") }
                     TextButton(
                         onClick = onDelete,
+                        // a11y: names the trail — several cards can be expanded at once.
                         modifier = Modifier.semantics { contentDescription = "Delete trail ${trail.name}" },
                     ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
                 }
@@ -465,14 +473,17 @@ private fun TrailItem(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(
                         onClick = onAddWaypoint,
+                        // a11y: "Add" alone doesn't say what's being added or to which trail.
                         modifier = Modifier.semantics { contentDescription = "Add new waypoint to trail ${trail.name}" },
                     ) { Text("Add") }
                     TextButton(
                         onClick = onAttachExisting,
+                        // a11y: names the trail — several cards can be expanded at once.
                         modifier = Modifier.semantics { contentDescription = "Attach existing waypoint to trail ${trail.name}" },
                     ) { Text("Attach Existing") }
                     TextButton(
                         onClick = onExport,
+                        // a11y: names the trail — several cards can be expanded at once.
                         modifier = Modifier.semantics { contentDescription = "Export trail ${trail.name} as GPX" },
                     ) { Text("Export GPX") }
                 }
@@ -520,7 +531,6 @@ private fun TrailItem(
                                     .fillMaxWidth()
                                     .padding(vertical = 2.dp)
                                     .semantics {
-                                        contentDescription = "${idx + 1}. ${wp.name}"
                                         customActions = wpActions
                                     },
                         )
@@ -534,6 +544,7 @@ private fun TrailItem(
                         onClick = onToggleTrackPoints,
                         modifier =
                             Modifier.semantics {
+                                // a11y: names the trail — several cards can be expanded at once.
                                 contentDescription =
                                     if (trackExpanded) {
                                         "Hide $trackPointCount track points for ${trail.name}"
@@ -591,21 +602,10 @@ private fun NameDescDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = tentative, onCheckedChange = { tentative = it })
-                    Text(
-                        "Mark as tentative",
-                        modifier =
-                            Modifier.clearAndSetSemantics {
-                                contentDescription =
-                                    if (tentative) {
-                                        "Mark as tentative, checked"
-                                    } else {
-                                        "Mark as tentative, not checked"
-                                    }
-                            },
-                    )
-                }
+                TentativeCheckboxRow(
+                    tentative = tentative,
+                    onTentativeChange = { tentative = it },
+                )
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },
@@ -777,6 +777,7 @@ private fun AttachExistingDialog(
                 candidates.forEach { wp ->
                     TextButton(
                         onClick = { onConfirm(wp.id) },
+                        // a11y: visible text is just the waypoint's name; this names the action too.
                         modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Attach ${wp.name}" },
                     ) { Text(wp.name) }
                 }
