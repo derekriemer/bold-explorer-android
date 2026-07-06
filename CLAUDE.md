@@ -17,21 +17,6 @@ Only Claude Code–specific additions appear below.
         - LSP for definitions, references, symbols, hover/type info, and diagnostics
 
     Only use Bash for commands that genuinely need shell execution, such as builds, tests, git, or project scripts.
-### Avoid unnecessary content descriptions
+### Accessibility: contentDescription
 
-Use `contentDescription` only when the visible text is insufficient.
-
-Bad:
-
-```kotlin
-Button(
-    onClick = { ... },
-    modifier = Modifier.semantics {
-        contentDescription = "Save progress"
-    }
-) {
-    Text("Save")
-}
-```
-
-The button text already provides an accessible name, so the content description adds no value. and actually is different from what people see which is bad.
+See "Accessibility constraints" in [`AGENTS.md`](AGENTS.md) — do not duplicate that guidance here.

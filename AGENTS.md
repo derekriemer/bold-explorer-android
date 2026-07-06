@@ -176,13 +176,42 @@ Phases 1–6 are implemented. Treat new work as hardening or feature completion,
 ### Accessibility constraints (non-negotiable)
 
 This app is built for a blind user. Audio cues are the primary interface.
-- Every icon-only element needs `Modifier.semantics { contentDescription = "..." }` — **do not add `contentDescription` when the composable already has sufficient visible text** (e.g. a `Button` with a `Text` child). Setting `contentDescription` on a composable with readable children *replaces* the default label entirely; TalkBack will read only your string and skip the visible text. Only override when the default is ambiguous or missing.
 - State transitions (waypoint reached, trail complete) must be announced via `TtsEngine`, not just reflected in UI state
 - Live regions: `Modifier.semantics { liveRegion = LiveRegionMode.Polite }` on announcement composables
 - Minimum 48dp touch targets
 - TalkBack pass required before any phase is considered complete
 
-**`contentDescription` on containers overrides all child text** — when you set `contentDescription` in `Modifier.semantics { }` on a container (Card, Row, Box, etc.), TalkBack reads *only* that string and ignores every child `Text()` composable inside it. Always include every piece of visible information (name, distance, state) explicitly in the container's `contentDescription`. Never assume child text will be read automatically once a container-level description is set.
+**Do not add `contentDescription` as a default reflex.** Setting it on a composable — especially a container (`Card`, `Row`, `Box`) — *replaces* the accessible name entirely; TalkBack reads only your string and ignores all child `Text()`. This codebase has repeatedly accumulated `contentDescription` strings that just restate visible text (sometimes verbatim) or a status the platform already announces natively. That is the accessibility equivalent of overusing `aria-label`, and it makes the *real* additions (the ones conveying something a screen-reader user genuinely can't get otherwise) harder to spot.
+
+**Decision test — apply before adding any `contentDescription`:**
+1. Does the composable already have visible text as a direct child that says the same thing? → don't add it (or delete it if present).
+2. Is this one of several visually-identical repeated controls (e.g. a "Delete" button on every list row) where the visible text alone is ambiguous out of context? → add one, but only *visible text + the minimum disambiguator* (e.g. the item's name), nothing else.
+3. Is the "extra" state you want to convey already exposed to TalkBack natively (`Switch`, `Checkbox`, `Modifier.selectable`/`toggleable(role = Role.RadioButton/Switch)`, `SegmentedButton`'s built-in selected state)? → don't add it. If the state genuinely isn't being announced, that's a missing-semantics bug — wrap the control in `Modifier.toggleable`/`selectable` so the label and native state merge into one node, instead of hand-writing "on"/"off"/"selected" into a string.
+4. Is this a live-region/announcement `Text` where the description would just repeat the `Text`'s own content? → don't add it.
+5. Still need one after 1–4? Add it, and add an inline `// a11y: <one-line reason>` comment next to the assignment explaining what it conveys that the visible text/native semantics don't. A detekt rule enforces that every `contentDescription` assignment carries this comment (see `detekt-rules`).
+
+Bad (from this codebase, since fixed):
+```kotlin
+TextButton(
+    onClick = { onAction(GpsAction.StopAlignment) },
+    modifier = Modifier.semantics { contentDescription = "Stop alignment guidance" },
+) { Text("Stop alignment") }
+```
+The button already reads "Stop alignment" via its visible text; the description just restates it.
+
+Good:
+```kotlin
+TextButton(
+    onClick = { onConfirm(col.id) },
+    modifier = Modifier.fillMaxWidth().semantics {
+        // a11y: visible text is just the collection's name; this names the action too.
+        contentDescription = "Move to ${col.name}"
+    },
+) { Text(col.name) }
+```
+Here the dialog lists several collections and every button's visible text is just the name — without the description, TalkBack can't tell "tap to move here" from any other name-only button.
+
+**When you do need to merge a label with a native control's state** (e.g. a `Checkbox`/`Switch` with a separate label `Text`), prefer wrapping both in `Modifier.toggleable(role = Role.Checkbox/Switch)` (with the control's own `onCheckedChange = null`) over hand-writing the state into a `contentDescription` string — see `TentativeCheckboxRow` (`ui/common/`) or the "Auto-advance" row in `GpsScreen.kt` for the pattern. This gets the on/off announcement from the platform for free and stays correct if the wording of "on"/"off" ever changes.
 
 ### Version pins
 
