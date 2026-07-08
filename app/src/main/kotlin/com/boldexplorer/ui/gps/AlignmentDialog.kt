@@ -137,6 +137,9 @@ fun AlignmentDialog(
                             .alpha(0f)
                             .semantics {
                                 liveRegion = LiveRegionMode.Assertive
+                                // a11y: TalkBack doesn't reliably re-announce on `text` alone for this
+                                // live-region node; contentDescription is the actual delivery mechanism.
+                                contentDescription = autoReadAnnouncement
                             },
                 )
 

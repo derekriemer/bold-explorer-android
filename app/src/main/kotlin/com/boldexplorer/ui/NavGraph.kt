@@ -12,6 +12,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -104,6 +105,9 @@ fun NavGraph() {
                         .alpha(0f)
                         .semantics {
                             liveRegion = LiveRegionMode.Assertive
+                            // a11y: TalkBack doesn't reliably re-announce on `text` alone for this
+                            // live-region node; contentDescription is the actual delivery mechanism.
+                            contentDescription = announcement
                         },
             )
             NavHost(navController = navController, startDestination = Screen.Gps.route) {
