@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.boldexplorer.gpx.GpxFileWriter
+import com.boldexplorer.gpx.GpxParseResult
 import com.boldexplorer.gpx.GpxParser
 import com.boldexplorer.location.FusedLocationProviderImpl
 import com.boldexplorer.shared.geo.LatLng
@@ -213,45 +214,75 @@ class CollectionsViewModel
             _exportStatus.value = null
         }
 
+        /** Creates a new collection (named from the GPX file) and imports its contents into it. */
         fun importGpx(
             uri: Uri,
             fallbackName: String,
         ) {
             viewModelScope.launch {
-                try {
-                    val stream =
-                        context.contentResolver.openInputStream(uri) ?: run {
-                            _toast.value = "Could not open file"
-                            return@launch
-                        }
-                    val result = stream.use { GpxParser.parse(it) }
-                    if (result.isEmpty) {
-                        _toast.value = "No waypoints or trails found in file"
-                        return@launch
-                    }
+                readGpx(uri)?.let { result ->
                     val collectionName = result.collectionName ?: fallbackName
                     val collectionId = collectionRepo.create(collectionName, null)
                     loadContents(collectionId)
-
-                    result.waypoints.forEach { p ->
-                        waypointRepo.create(collectionId, p.name, p.lat, p.lon, p.elevM, p.description)
-                    }
-                    result.trails.forEach { trail ->
-                        val trailId = trailRepo.create(collectionId, trail.name, null)
-                        trail.points.forEach { p ->
-                            if (trail.isRoute) {
-                                // Route points are named, collection-owned waypoints linked to the trail.
-                                val wpId = waypointRepo.create(collectionId, p.name, p.lat, p.lon, p.elevM, p.description)
-                                waypointRepo.attach(trailId, wpId)
-                            } else {
-                                // Track points derive their collection through the trail.
-                                waypointRepo.createTrackPoint(trailId, p.name, p.lat, p.lon, p.elevM)
-                            }
-                        }
-                    }
+                    applyGpxImport(collectionId, result)
                     _toast.value = "Imported \"$collectionName\" — ${result.summary}"
-                } catch (e: Exception) {
-                    _toast.value = "Import failed: ${e.message}"
+                }
+            }
+        }
+
+        /** Imports a GPX file's waypoints/trails directly into an existing [collectionId]. */
+        fun importGpxIntoCollection(
+            collectionId: Long,
+            uri: Uri,
+        ) {
+            viewModelScope.launch {
+                readGpx(uri)?.let { result ->
+                    loadContents(collectionId)
+                    applyGpxImport(collectionId, result)
+                    val name = collectionRepo.getById(collectionId)?.name ?: "collection"
+                    _toast.value = "Imported ${result.summary} into $name"
+                }
+            }
+        }
+
+        /** Opens and parses [uri], reporting failures via [_toast]; returns null if nothing to import. */
+        private suspend fun readGpx(uri: Uri): GpxParseResult? {
+            try {
+                val stream =
+                    context.contentResolver.openInputStream(uri) ?: run {
+                        _toast.value = "Could not open file"
+                        return null
+                    }
+                val result = stream.use { GpxParser.parse(it) }
+                if (result.isEmpty) {
+                    _toast.value = "No waypoints or trails found in file"
+                    return null
+                }
+                return result
+            } catch (e: Exception) {
+                _toast.value = "Import failed: ${e.message}"
+                return null
+            }
+        }
+
+        private suspend fun applyGpxImport(
+            collectionId: Long,
+            result: GpxParseResult,
+        ) {
+            result.waypoints.forEach { p ->
+                waypointRepo.create(collectionId, p.name, p.lat, p.lon, p.elevM, p.description)
+            }
+            result.trails.forEach { trail ->
+                val trailId = trailRepo.create(collectionId, trail.name, null)
+                trail.points.forEach { p ->
+                    if (trail.isRoute) {
+                        // Route points are named, collection-owned waypoints linked to the trail.
+                        val wpId = waypointRepo.create(collectionId, p.name, p.lat, p.lon, p.elevM, p.description)
+                        waypointRepo.attach(trailId, wpId)
+                    } else {
+                        // Track points derive their collection through the trail.
+                        waypointRepo.createTrackPoint(trailId, p.name, p.lat, p.lon, p.elevM)
+                    }
                 }
             }
         }

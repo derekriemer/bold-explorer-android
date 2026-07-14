@@ -1,11 +1,9 @@
 package com.boldexplorer.ui.trails
 
 import android.content.Context
-import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.boldexplorer.gpx.GpxFileWriter
-import com.boldexplorer.gpx.GpxParser
 import com.boldexplorer.location.FusedLocationProviderImpl
 import com.boldexplorer.location.SelectedCollectionHolder
 import com.boldexplorer.location.TargetingStateHolder
@@ -315,40 +313,5 @@ class TrailsViewModel
 
         fun clearExportStatus() {
             _exportStatus.value = null
-        }
-
-        fun importGpx(uri: Uri) {
-            viewModelScope.launch {
-                try {
-                    val stream =
-                        context.contentResolver.openInputStream(uri) ?: run {
-                            _toast.value = "Could not open file"
-                            return@launch
-                        }
-                    val result = stream.use { GpxParser.parse(it) }
-                    if (result.isEmpty) {
-                        _toast.value = "No waypoints or trails found in file"
-                        return@launch
-                    }
-                    val collectionId = collectionRepo.create(result.collectionName ?: "Imported", null)
-                    result.waypoints.forEach { p ->
-                        waypointRepo.create(collectionId, p.name, p.lat, p.lon, p.elevM, p.description)
-                    }
-                    result.trails.forEach { trail ->
-                        val trailId = trailRepo.create(collectionId, trail.name, null)
-                        trail.points.forEach { p ->
-                            if (trail.isRoute) {
-                                val wpId = waypointRepo.create(collectionId, p.name, p.lat, p.lon, p.elevM, p.description)
-                                waypointRepo.attach(trailId, wpId)
-                            } else {
-                                waypointRepo.createTrackPoint(trailId, p.name, p.lat, p.lon, p.elevM)
-                            }
-                        }
-                    }
-                    _toast.value = "Imported ${result.summary}"
-                } catch (e: Exception) {
-                    _toast.value = "Import failed: ${e.message}"
-                }
-            }
         }
     }

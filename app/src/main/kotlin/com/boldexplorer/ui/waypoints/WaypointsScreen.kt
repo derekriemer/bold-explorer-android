@@ -1,7 +1,5 @@
 package com.boldexplorer.ui.waypoints
 
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -92,11 +90,6 @@ fun WaypointsScreen(
         collectionTarget?.let { viewModel.loadWaypointCollections(it.id) }
     }
 
-    val importLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-            uri?.let { viewModel.importGpx(it) }
-        }
-
     Column(modifier = Modifier.padding(paddingValues)) {
         // ── Header ────────────────────────────────────────────────────────────────
         Row(
@@ -107,11 +100,6 @@ fun WaypointsScreen(
                     .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
             Text("Waypoints", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
-            TextButton(
-                onClick = { importLauncher.launch("*/*") },
-                // a11y: names the expected file format, which "Import" alone doesn't.
-                modifier = Modifier.semantics { contentDescription = "Import GPX file" },
-            ) { Text("Import") }
             TextButton(
                 onClick = { showAddDialog = true },
                 // a11y: "Add" alone doesn't say what's being added.

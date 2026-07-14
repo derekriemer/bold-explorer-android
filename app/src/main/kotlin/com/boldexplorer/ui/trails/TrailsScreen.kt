@@ -1,7 +1,5 @@
 package com.boldexplorer.ui.trails
 
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -74,11 +72,6 @@ fun TrailsScreen(
     val exportStatus by viewModel.exportStatus.collectAsStateWithLifecycle()
     val currentLocation by viewModel.currentLocation.collectAsStateWithLifecycle()
 
-    val importLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-            uri?.let { viewModel.importGpx(it) }
-        }
-
     var showAddDialog by remember { mutableStateOf(false) }
     var showCreateCollection by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<Trail?>(null) }
@@ -98,11 +91,6 @@ fun TrailsScreen(
                     .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
             Text("Trails", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
-            TextButton(
-                onClick = { importLauncher.launch("*/*") },
-                // a11y: names the expected file format, which "Import" alone doesn't.
-                modifier = Modifier.semantics { contentDescription = "Import GPX file" },
-            ) { Text("Import") }
             TextButton(
                 onClick = { showAddDialog = true },
                 // a11y: "Add" alone doesn't say what's being added.

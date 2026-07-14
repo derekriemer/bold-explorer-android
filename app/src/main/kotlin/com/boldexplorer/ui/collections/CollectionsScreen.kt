@@ -63,6 +63,13 @@ fun CollectionsScreen(
     var deleteTarget by remember { mutableStateOf<ExplorerCollection?>(null) }
     var addWpToCollection by remember { mutableStateOf<Long?>(null) }
     var addTrailToCollection by remember { mutableStateOf<Long?>(null) }
+    var importTargetCollection by remember { mutableStateOf<Long?>(null) }
+    val importIntoLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+            val collId = importTargetCollection
+            importTargetCollection = null
+            if (uri != null && collId != null) viewModel.importGpxIntoCollection(collId, uri)
+        }
     val toastMessage =
         useToast(toast, viewModel::clearToast)
             ?: useToast(exportStatus, viewModel::clearExportStatus, durationMs = 3000L)
@@ -132,6 +139,10 @@ fun CollectionsScreen(
                         onExport = { viewModel.exportCollection(coll.id) },
                         onAddWaypoints = { addWpToCollection = coll.id },
                         onAddTrails = { addTrailToCollection = coll.id },
+                        onImport = {
+                            importTargetCollection = coll.id
+                            importIntoLauncher.launch("*/*")
+                        },
                         onRemoveWaypoint = { wpId -> viewModel.removeWaypoint(coll.id, wpId) },
                         onRemoveTrail = { trailId -> viewModel.removeTrail(coll.id, trailId) },
                     )
@@ -254,6 +265,7 @@ private fun CollectionItem(
     onExport: () -> Unit,
     onAddWaypoints: () -> Unit,
     onAddTrails: () -> Unit,
+    onImport: () -> Unit,
     onRemoveWaypoint: (Long) -> Unit,
     onRemoveTrail: (Long) -> Unit,
 ) {
@@ -291,6 +303,10 @@ private fun CollectionItem(
                         onAddTrails()
                         true
                     },
+                    CustomAccessibilityAction("Import GPX") {
+                        onImport()
+                        true
+                    },
                 )
 
             // Clickable header row — mergeDescendants scoped only to this row.
@@ -326,6 +342,11 @@ private fun CollectionItem(
                 Row {
                     TextButton(onClick = onAddWaypoints) { Text("Add Waypoints") }
                     TextButton(onClick = onAddTrails) { Text("Add Trails") }
+                    TextButton(
+                        onClick = onImport,
+                        // a11y: names the file format, which "Import" alone doesn't.
+                        modifier = Modifier.semantics { contentDescription = "Import GPX file into this collection" },
+                    ) { Text("Import") }
                 }
 
                 Text("Waypoints", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 4.dp))
