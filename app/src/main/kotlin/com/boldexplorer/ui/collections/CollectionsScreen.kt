@@ -2,10 +2,13 @@ package com.boldexplorer.ui.collections
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -25,14 +28,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.boldexplorer.shared.model.Trail
-import com.boldexplorer.shared.model.Waypoint
-import com.boldexplorer.ui.common.MultiSelectItemDialog
+import com.boldexplorer.ui.common.CollectionGroupedMultiSelectDialog
 import com.boldexplorer.ui.common.ToastMessage
 import com.boldexplorer.ui.common.useToast
 import com.boldexplorer.shared.model.Collection as ExplorerCollection
@@ -44,8 +48,7 @@ fun CollectionsScreen(
 ) {
     val collections by viewModel.collections.collectAsStateWithLifecycle()
     val contents by viewModel.contents.collectAsStateWithLifecycle()
-    val allWaypoints by viewModel.allWaypoints.collectAsStateWithLifecycle()
-    val allTrails by viewModel.allTrails.collectAsStateWithLifecycle()
+    val query by viewModel.query.collectAsStateWithLifecycle()
     val toast by viewModel.toast.collectAsStateWithLifecycle()
     val exportStatus by viewModel.exportStatus.collectAsStateWithLifecycle()
 
@@ -86,6 +89,19 @@ fun CollectionsScreen(
         }
 
         ToastMessage(toastMessage)
+
+        Spacer(Modifier.height(8.dp))
+
+        OutlinedTextField(
+            value = query,
+            onValueChange = { viewModel.setQuery(it) },
+            label = { Text("Search collections") },
+            singleLine = true,
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+        )
 
         if (collections.isEmpty()) {
             Text(
@@ -188,10 +204,15 @@ fun CollectionsScreen(
 
     addWpToCollection?.let { collId ->
         val existing = contents[collId]?.waypoints?.map { it.id }?.toSet() ?: emptySet()
-        val candidates = allWaypoints.filter { it.id !in existing }
-        MultiSelectItemDialog(
+        val groups = collections.filter { it.id != collId }.map { it.id to it.name }
+        CollectionGroupedMultiSelectDialog(
             title = "Add Waypoints",
-            entries = candidates.map { it.id to it.name },
+            itemNoun = "waypoint",
+            groups = groups,
+            itemsForGroup = { gid ->
+                contents[gid]?.waypoints?.filter { it.id !in existing }?.map { it.id to it.name }
+            },
+            onExpandGroup = { gid -> viewModel.loadContents(gid) },
             onConfirm = { ids ->
                 viewModel.addWaypoints(collId, ids)
                 addWpToCollection = null
@@ -203,10 +224,15 @@ fun CollectionsScreen(
 
     addTrailToCollection?.let { collId ->
         val existing = contents[collId]?.trails?.map { it.id }?.toSet() ?: emptySet()
-        val candidates = allTrails.filter { it.id !in existing }
-        MultiSelectItemDialog(
+        val groups = collections.filter { it.id != collId }.map { it.id to it.name }
+        CollectionGroupedMultiSelectDialog(
             title = "Add Trails",
-            entries = candidates.map { it.id to it.name },
+            itemNoun = "trail",
+            groups = groups,
+            itemsForGroup = { gid ->
+                contents[gid]?.trails?.filter { it.id !in existing }?.map { it.id to it.name }
+            },
+            onExpandGroup = { gid -> viewModel.loadContents(gid) },
             onConfirm = { ids ->
                 viewModel.addTrails(collId, ids)
                 addTrailToCollection = null
@@ -232,40 +258,70 @@ private fun CollectionItem(
     onRemoveTrail: (Long) -> Unit,
 ) {
     Card(
-        onClick = onToggle,
         modifier =
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp)
-                // a11y: Card has no native expanded-state semantics; state isn't shown by color alone.
-                .semantics { contentDescription = "${collection.name} collection, ${if (expanded) "expanded" else "collapsed"}" },
+                .padding(horizontal = 16.dp, vertical = 4.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = if (expanded) 4.dp else 1.dp),
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
+            val wpCount = contents?.waypoints?.size ?: 0
+            val trailCount = contents?.trails?.size ?: 0
+            val wpLabel = "$wpCount waypoint" + if (wpCount == 1) "" else "s"
+            val trailLabel = "$trailCount trail" + if (trailCount == 1) "" else "s"
+            val headerActions =
+                listOf(
+                    CustomAccessibilityAction("Rename") {
+                        onRename()
+                        true
+                    },
+                    CustomAccessibilityAction("Delete") {
+                        onDelete()
+                        true
+                    },
+                    CustomAccessibilityAction("Export GPX") {
+                        onExport()
+                        true
+                    },
+                    CustomAccessibilityAction("Add Waypoints") {
+                        onAddWaypoints()
+                        true
+                    },
+                    CustomAccessibilityAction("Add Trails") {
+                        onAddTrails()
+                        true
+                    },
+                )
+
+            // Clickable header row — mergeDescendants scoped only to this row.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth(),
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onToggle)
+                        .semantics(mergeDescendants = true) {
+                            // a11y: adds waypoint/trail counts, which aren't visible until expanded.
+                            // Expand state via stateDescription so TalkBack localises it; not baked into text.
+                            contentDescription = "${collection.name} collection, $wpLabel, $trailLabel"
+                            stateDescription = if (expanded) "Expanded" else "Collapsed"
+                            customActions = headerActions
+                        },
             ) {
                 Text(collection.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                TextButton(
-                    onClick = onRename,
-                    // a11y: names the collection — every row in the list has a "Rename" button.
-                    modifier = Modifier.semantics { contentDescription = "Rename collection ${collection.name}" },
-                ) { Text("Rename") }
-                TextButton(
-                    onClick = onDelete,
-                    // a11y: names the collection — every row in the list has a "Delete" button.
-                    modifier = Modifier.semantics { contentDescription = "Delete collection ${collection.name}" },
-                ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
-                TextButton(
-                    onClick = onExport,
-                    // a11y: names the collection — every row in the list has an "Export GPX" button.
-                    modifier = Modifier.semantics { contentDescription = "Export collection ${collection.name} as GPX" },
-                ) { Text("Export GPX") }
             }
 
             if (expanded) {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                // ── Collection-level actions (visible counterparts to the header custom actions).
+                // Single-expand means at most one set of these is ever on screen, so — unlike Trails'
+                // multi-expand cards — the visible text alone is unambiguous; no per-name disambiguator.
+                Row {
+                    TextButton(onClick = onRename) { Text("Rename") }
+                    TextButton(onClick = onDelete) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                    TextButton(onClick = onExport) { Text("Export GPX") }
+                }
 
                 Row {
                     TextButton(onClick = onAddWaypoints) { Text("Add Waypoints") }

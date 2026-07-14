@@ -53,10 +53,22 @@ class CollectionsViewModel
             locationProvider.locationFlow
                 .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
-        val collections: StateFlow<List<ExplorerCollection>> =
+        private val _allCollections: StateFlow<List<ExplorerCollection>> =
             collectionRepo
                 .observeAll()
                 .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
+
+        private val _query = MutableStateFlow("")
+        val query: StateFlow<String> = _query.asStateFlow()
+
+        val collections: StateFlow<List<ExplorerCollection>> =
+            combine(_allCollections, _query) { all, q ->
+                if (q.isBlank()) all else all.filter { it.name.contains(q, ignoreCase = true) }
+            }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
+
+        fun setQuery(q: String) {
+            _query.value = q
+        }
 
         val allWaypoints: StateFlow<List<Waypoint>> =
             combine(waypointRepo.observeAll(), location) { wps, loc ->
