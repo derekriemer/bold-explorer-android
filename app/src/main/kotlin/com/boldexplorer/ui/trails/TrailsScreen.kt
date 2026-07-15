@@ -24,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,10 +45,10 @@ import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.Waypoint
 import com.boldexplorer.ui.common.CollectionDropdown
 import com.boldexplorer.ui.common.CreateItemDialog
-import com.boldexplorer.ui.common.SpeakButton
+import com.boldexplorer.ui.common.MultiSelectItemDialog
+import com.boldexplorer.ui.common.SingleFieldDialog
 import com.boldexplorer.ui.common.TentativeCheckboxRow
 import com.boldexplorer.ui.common.ToastMessage
-import com.boldexplorer.ui.common.rememberSttLauncher
 import com.boldexplorer.ui.common.useToast
 
 /** Distance, in metres, within which a trail endpoint is treated as "here" for follow-from-end. */
@@ -62,8 +63,6 @@ fun TrailsScreen(
     val namedWaypoints by viewModel.namedWaypoints.collectAsStateWithLifecycle()
     val trackPointCounts by viewModel.trackPointCounts.collectAsStateWithLifecycle()
     val trackPoints by viewModel.trackPoints.collectAsStateWithLifecycle()
-    val expandedIds by viewModel.expandedTrailIds.collectAsStateWithLifecycle()
-    val trackExpandedIds by viewModel.trackExpandedTrailIds.collectAsStateWithLifecycle()
     val allWaypoints by viewModel.allWaypoints.collectAsStateWithLifecycle()
     val collections by viewModel.collections.collectAsStateWithLifecycle()
     val selectedCollectionId by viewModel.selectedCollectionId.collectAsStateWithLifecycle()
@@ -72,6 +71,8 @@ fun TrailsScreen(
     val exportStatus by viewModel.exportStatus.collectAsStateWithLifecycle()
     val currentLocation by viewModel.currentLocation.collectAsStateWithLifecycle()
 
+    var expandedId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var trackExpandedId by rememberSaveable { mutableStateOf<Long?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
     var showCreateCollection by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<Trail?>(null) }
@@ -139,8 +140,8 @@ fun TrailsScreen(
         } else {
             LazyColumn {
                 for (trail in trails) {
-                    val expanded = trail.id in expandedIds
-                    val trackExpanded = trail.id in trackExpandedIds
+                    val expanded = trail.id == expandedId
+                    val trackExpanded = trail.id == trackExpandedId
                     val wps = namedWaypoints[trail.id] ?: emptyList()
                     val trackCount = trackPointCounts[trail.id] ?: 0L
                     val tps = trackPoints[trail.id] ?: emptyList()
@@ -153,8 +154,24 @@ fun TrailsScreen(
                             expanded = expanded,
                             trackExpanded = trackExpanded,
                             currentLocation = currentLocation,
-                            onToggle = { viewModel.toggleExpand(trail.id) },
-                            onToggleTrackPoints = { viewModel.toggleTrackExpand(trail.id) },
+                            onToggle = {
+                                if (expanded) {
+                                    expandedId = null
+                                    trackExpandedId = null
+                                } else {
+                                    expandedId = trail.id
+                                    trackExpandedId = null
+                                    viewModel.loadNamedWaypoints(trail.id)
+                                }
+                            },
+                            onToggleTrackPoints = {
+                                if (trackExpanded) {
+                                    trackExpandedId = null
+                                } else {
+                                    trackExpandedId = trail.id
+                                    viewModel.loadTrackPoints(trail.id)
+                                }
+                            },
                             onRename = { renameTarget = trail },
                             onDelete = { deleteTarget = trail },
                             onExport = { viewModel.exportTrail(trail.id) },
@@ -222,7 +239,8 @@ fun TrailsScreen(
         CreateItemDialog(
             title = "New Collection",
             confirmLabel = "Create",
-            onConfirm = { name, _ ->
+            hasTentative = false,
+            onConfirm = { name, _, _ ->
                 viewModel.createCollection(name)
                 showCreateCollection = false
             },
@@ -274,17 +292,19 @@ fun TrailsScreen(
         )
     }
 
-    // Attach existing waypoint to trail
+    // Attach existing waypoint(s) to trail
     attachWpToTrail?.let { trailId ->
         val existing = namedWaypoints[trailId]?.map { it.id }?.toSet() ?: emptySet()
         val candidates = allWaypoints.filter { it.id !in existing }
-        AttachExistingDialog(
-            candidates = candidates,
-            onConfirm = { wpId ->
-                viewModel.attachExisting(trailId, wpId)
+        MultiSelectItemDialog(
+            title = "Attach Existing Waypoints",
+            entries = candidates.map { it.id to it.name },
+            onConfirm = { ids ->
+                viewModel.attachExisting(trailId, ids)
                 attachWpToTrail = null
             },
             onDismiss = { attachWpToTrail = null },
+            emptyMessage = "No unattached waypoints available",
         )
     }
 }
@@ -415,39 +435,21 @@ private fun TrailItem(
             if (expanded) {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
-                // ── Trail-level actions (visible counterparts to the header custom actions) ──
+                // ── Trail-level actions (visible counterparts to the header custom actions).
+                // Single-expand means at most one card's buttons are ever on screen, so the visible
+                // text alone is unambiguous — no per-name disambiguator needed (see Collections/Waypoints).
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (start != null) {
-                        TextButton(
-                            onClick = { onFollow(false) },
-                            // a11y: names the trail — several cards can be expanded at once.
-                            modifier = Modifier.semantics { contentDescription = "Follow trail ${trail.name}" },
-                        ) { Text("Follow") }
+                        TextButton(onClick = { onFollow(false) }) { Text("Follow") }
                         if (start.id != end?.id) {
-                            TextButton(
-                                onClick = { onFollow(true) },
-                                // a11y: names the trail — several cards can be expanded at once.
-                                modifier = Modifier.semantics { contentDescription = "Follow trail ${trail.name} in reverse" },
-                            ) { Text("Reverse") }
+                            TextButton(onClick = { onFollow(true) }) { Text("Reverse") }
                         }
                     }
-                    TextButton(
-                        onClick = onRecord,
-                        // a11y: names the trail — several cards can be expanded at once.
-                        modifier = Modifier.semantics { contentDescription = "Start recording trail ${trail.name}" },
-                    ) { Text("Record") }
+                    TextButton(onClick = onRecord) { Text("Record") }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(
-                        onClick = onRename,
-                        // a11y: names the trail — several cards can be expanded at once.
-                        modifier = Modifier.semantics { contentDescription = "Rename trail ${trail.name}" },
-                    ) { Text("Rename") }
-                    TextButton(
-                        onClick = onDelete,
-                        // a11y: names the trail — several cards can be expanded at once.
-                        modifier = Modifier.semantics { contentDescription = "Delete trail ${trail.name}" },
-                    ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                    TextButton(onClick = onRename) { Text("Rename") }
+                    TextButton(onClick = onDelete) { Text("Delete", color = MaterialTheme.colorScheme.error) }
                 }
 
                 // ── Named waypoints section ───────────────────────────────────
@@ -461,19 +463,11 @@ private fun TrailItem(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(
                         onClick = onAddWaypoint,
-                        // a11y: "Add" alone doesn't say what's being added or to which trail.
-                        modifier = Modifier.semantics { contentDescription = "Add new waypoint to trail ${trail.name}" },
+                        // a11y: "Add" alone doesn't say what's being added.
+                        modifier = Modifier.semantics { contentDescription = "Add new waypoint" },
                     ) { Text("Add") }
-                    TextButton(
-                        onClick = onAttachExisting,
-                        // a11y: names the trail — several cards can be expanded at once.
-                        modifier = Modifier.semantics { contentDescription = "Attach existing waypoint to trail ${trail.name}" },
-                    ) { Text("Attach Existing") }
-                    TextButton(
-                        onClick = onExport,
-                        // a11y: names the trail — several cards can be expanded at once.
-                        modifier = Modifier.semantics { contentDescription = "Export trail ${trail.name} as GPX" },
-                    ) { Text("Export GPX") }
+                    TextButton(onClick = onAttachExisting) { Text("Attach Existing") }
+                    TextButton(onClick = onExport) { Text("Export GPX") }
                 }
 
                 if (namedWaypoints.isEmpty()) {
@@ -528,19 +522,7 @@ private fun TrailItem(
                 // ── Track points section ──────────────────────────────────────
                 if (trackPointCount > 0) {
                     HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                    TextButton(
-                        onClick = onToggleTrackPoints,
-                        modifier =
-                            Modifier.semantics {
-                                // a11y: names the trail — several cards can be expanded at once.
-                                contentDescription =
-                                    if (trackExpanded) {
-                                        "Hide $trackPointCount track points for ${trail.name}"
-                                    } else {
-                                        "Show $trackPointCount track points for ${trail.name}"
-                                    }
-                            },
-                    ) {
+                    TextButton(onClick = onToggleTrackPoints) {
                         Text(
                             if (trackExpanded) {
                                 "Hide $trackPointCount track points"
@@ -603,54 +585,6 @@ private fun NameDescDialog(
                     error = "Name required"
                 } else {
                     onConfirm(name.trim(), desc.trim().ifBlank { null }, tentative)
-                }
-            }) { Text(confirmLabel) }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
-}
-
-@Composable
-private fun SingleFieldDialog(
-    title: String,
-    confirmLabel: String,
-    initial: String,
-    label: String,
-    onConfirm: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var value by remember { mutableStateOf(initial) }
-    var error by remember { mutableStateOf<String?>(null) }
-    val stt =
-        rememberSttLauncher(prompt = title) {
-            value = it
-            error = null
-        }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = value,
-                        onValueChange = { value = it },
-                        label = { Text(label) },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                    )
-                    SpeakButton(controller = stt)
-                }
-                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                if (value.isBlank()) {
-                    error = "Required"
-                } else {
-                    onConfirm(value.trim())
                 }
             }) { Text(confirmLabel) }
         },
@@ -741,37 +675,3 @@ private fun AddWaypointToTrailDialog(
     )
 }
 
-@Composable
-private fun AttachExistingDialog(
-    candidates: List<Waypoint>,
-    onConfirm: (waypointId: Long) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    if (candidates.isEmpty()) {
-        AlertDialog(
-            onDismissRequest = onDismiss,
-            title = { Text("Attach Waypoint") },
-            text = { Text("No unattached waypoints available.") },
-            confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
-        )
-        return
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Attach Existing Waypoint") },
-        text = {
-            Column {
-                candidates.forEach { wp ->
-                    TextButton(
-                        onClick = { onConfirm(wp.id) },
-                        // a11y: visible text is just the waypoint's name; this names the action too.
-                        modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Attach ${wp.name}" },
-                    ) { Text(wp.name) }
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
-}

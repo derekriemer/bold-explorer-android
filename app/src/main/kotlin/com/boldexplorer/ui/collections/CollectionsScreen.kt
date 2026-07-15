@@ -37,6 +37,8 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.boldexplorer.ui.common.CollectionGroupedMultiSelectDialog
+import com.boldexplorer.ui.common.CreateItemDialog
+import com.boldexplorer.ui.common.SingleFieldDialog
 import com.boldexplorer.ui.common.ToastMessage
 import com.boldexplorer.ui.common.useToast
 import com.boldexplorer.shared.model.Collection as ExplorerCollection
@@ -152,8 +154,12 @@ fun CollectionsScreen(
     }
 
     if (showAddDialog) {
-        AddCollectionDialog(
-            onConfirm = { name, desc ->
+        CreateItemDialog(
+            title = "New Collection",
+            confirmLabel = "Create",
+            hasDescription = true,
+            hasTentative = false,
+            onConfirm = { name, desc, _ ->
                 viewModel.create(name, desc)
                 showAddDialog = false
             },
@@ -162,37 +168,16 @@ fun CollectionsScreen(
     }
 
     renameTarget?.let { coll ->
-        var nameInput by remember { mutableStateOf(coll.name) }
-        var error by remember { mutableStateOf<String?>(null) }
-        AlertDialog(
-            onDismissRequest = { renameTarget = null },
-            title = { Text("Rename Collection") },
-            text = {
-                Column {
-                    OutlinedTextField(
-                        value = nameInput,
-                        onValueChange = {
-                            nameInput = it
-                            error = null
-                        },
-                        label = { Text("Name") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                }
+        SingleFieldDialog(
+            title = "Rename Collection",
+            confirmLabel = "Rename",
+            initial = coll.name,
+            label = "Name",
+            onConfirm = { name ->
+                viewModel.rename(coll.id, name)
+                renameTarget = null
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    if (nameInput.isBlank()) {
-                        error = "Name required"
-                    } else {
-                        viewModel.rename(coll.id, nameInput.trim())
-                        renameTarget = null
-                    }
-                }) { Text("Rename") }
-            },
-            dismissButton = { TextButton(onClick = { renameTarget = null }) { Text("Cancel") } },
+            onDismiss = { renameTarget = null },
         )
     }
 
@@ -391,48 +376,4 @@ private fun CollectionItem(
             }
         }
     }
-}
-
-@Composable
-private fun AddCollectionDialog(
-    onConfirm: (name: String, description: String?) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var name by remember { mutableStateOf("") }
-    var desc by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf<String?>(null) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("New Collection") },
-        text = {
-            Column {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = desc,
-                    onValueChange = { desc = it },
-                    label = { Text("Description (optional)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                if (name.isBlank()) {
-                    error = "Name required"
-                } else {
-                    onConfirm(name.trim(), desc.trim().ifBlank { null })
-                }
-            }) { Text("Create") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
 }

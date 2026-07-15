@@ -72,7 +72,8 @@ fun GpsRoute(
         CreateItemDialog(
             title = "New Collection",
             confirmLabel = "Create",
-            onConfirm = { name, _ ->
+            hasTentative = false,
+            onConfirm = { name, _, _ ->
                 viewModel.onAction(GpsAction.CreateCollection(name))
                 showCreateCollection = false
             },
@@ -86,7 +87,7 @@ fun GpsRoute(
                 title = "Name waypoint",
                 confirmLabel = "Mark",
                 launchSttOnOpen = pending.launchStt,
-                onConfirm = { name, tentative -> viewModel.onWaypointNamed(name, tentative) },
+                onConfirm = { name, _, tentative -> viewModel.onWaypointNamed(name, tentative) },
                 onDismiss = { viewModel.cancelPendingCreate() },
             )
         }
@@ -96,7 +97,7 @@ fun GpsRoute(
                 title = "Name trail",
                 confirmLabel = "Create",
                 launchSttOnOpen = pending.launchStt,
-                onConfirm = { name, tentative -> viewModel.onTrailNamed(name, tentative) },
+                onConfirm = { name, _, tentative -> viewModel.onTrailNamed(name, tentative) },
                 onDismiss = { viewModel.cancelPendingCreate() },
             )
         }

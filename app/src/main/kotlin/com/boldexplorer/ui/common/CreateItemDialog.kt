@@ -32,6 +32,10 @@ import androidx.compose.ui.unit.dp
  * @param launchSttOnOpen when true, fires the speech recognizer immediately on first composition so a
  *   "Speak new name" entry-point action lands the user directly in voice input with the result
  *   pre-filled.
+ * @param hasDescription adds an optional "Description" field; collections use this, waypoints/trails
+ *   (which have their own richer create dialogs) don't.
+ * @param hasTentative shows the "Mark as tentative" checkbox. Off for entry points (like collections)
+ *   whose target has no tentative concept, so the control never appears as a no-op.
  */
 @Composable
 fun CreateItemDialog(
@@ -39,10 +43,13 @@ fun CreateItemDialog(
     confirmLabel: String = "Create",
     initialName: String = "",
     launchSttOnOpen: Boolean = false,
-    onConfirm: (name: String, tentative: Boolean) -> Unit,
+    hasDescription: Boolean = false,
+    hasTentative: Boolean = true,
+    onConfirm: (name: String, description: String?, tentative: Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var name by remember { mutableStateOf(initialName) }
+    var description by remember { mutableStateOf("") }
     var tentative by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
@@ -87,11 +94,22 @@ fun CreateItemDialog(
                     )
                     SpeakButton(controller = stt, modifier = Modifier.padding(start = 4.dp))
                 }
-                TentativeCheckboxRow(
-                    tentative = tentative,
-                    onTentativeChange = { tentative = it },
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                if (hasDescription) {
+                    OutlinedTextField(
+                        value = description,
+                        onValueChange = { description = it },
+                        label = { Text("Description (optional)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                if (hasTentative) {
+                    TentativeCheckboxRow(
+                        tentative = tentative,
+                        onTentativeChange = { tentative = it },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 error?.let {
                     Text(it, color = MaterialTheme.colorScheme.error)
                 }
@@ -103,7 +121,7 @@ fun CreateItemDialog(
                 if (trimmed.isEmpty()) {
                     error = "Name required"
                 } else {
-                    onConfirm(trimmed, tentative)
+                    onConfirm(trimmed, description.trim().ifBlank { null }, tentative)
                 }
             }) { Text(confirmLabel) }
         },

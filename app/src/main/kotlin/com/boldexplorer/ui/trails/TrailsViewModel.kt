@@ -76,15 +76,17 @@ class TrailsViewModel
                 .observeAll()
                 .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
-        // Level-1 expanded trail IDs: show named waypoints + track point count.
-        private val _expandedTrailIds = MutableStateFlow<Set<Long>>(emptySet())
+        // Trail IDs whose named waypoints + track point count have ever been requested (the
+        // screen only asks once a card is expanded); grows only, mirrors CollectionsViewModel's
+        // loadContents/_loadedCollectionIds — expand/collapse itself is UI-local state.
+        private val _loadedTrailIds = MutableStateFlow<Set<Long>>(emptySet())
 
-        // Level-2 expanded trail IDs: also show the full track point list.
-        private val _trackExpandedTrailIds = MutableStateFlow<Set<Long>>(emptySet())
+        // Trail IDs whose full track point list has ever been requested. Grows only.
+        private val _loadedTrackPointIds = MutableStateFlow<Set<Long>>(emptySet())
 
-        // Named waypoints (kind='waypoint') per expanded trail. Reactive.
+        // Named waypoints (kind='waypoint') per loaded trail. Reactive.
         val namedWaypoints: StateFlow<Map<Long, List<Waypoint>>> =
-            _expandedTrailIds
+            _loadedTrailIds
                 .flatMapLatest { ids ->
                     if (ids.isEmpty()) {
                         flowOf(emptyMap())
@@ -99,9 +101,9 @@ class TrailsViewModel
                     }
                 }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyMap())
 
-        // Track point counts per expanded trail. Reactive.
+        // Track point counts per loaded trail. Reactive.
         val trackPointCounts: StateFlow<Map<Long, Long>> =
-            _expandedTrailIds
+            _loadedTrailIds
                 .flatMapLatest { ids ->
                     if (ids.isEmpty()) {
                         flowOf(emptyMap())
@@ -116,9 +118,9 @@ class TrailsViewModel
                     }
                 }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyMap())
 
-        // Full track point lists per level-2 expanded trail. Reactive.
+        // Full track point lists per loaded trail. Reactive.
         val trackPoints: StateFlow<Map<Long, List<Waypoint>>> =
-            _trackExpandedTrailIds
+            _loadedTrackPointIds
                 .flatMapLatest { ids ->
                     if (ids.isEmpty()) {
                         flowOf(emptyMap())
@@ -133,30 +135,20 @@ class TrailsViewModel
                     }
                 }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyMap())
 
-        val expandedTrailIds: StateFlow<Set<Long>> = _expandedTrailIds.asStateFlow()
-        val trackExpandedTrailIds: StateFlow<Set<Long>> = _trackExpandedTrailIds.asStateFlow()
-
         private val _toast = MutableStateFlow<String?>(null)
         val toast: StateFlow<String?> = _toast.asStateFlow()
 
         private val _exportStatus = MutableStateFlow<String?>(null)
         val exportStatus: StateFlow<String?> = _exportStatus.asStateFlow()
 
-        /** Toggle level-1 expand (named waypoints + count). */
-        fun toggleExpand(trailId: Long) {
-            val current = _expandedTrailIds.value
-            if (trailId in current) {
-                _expandedTrailIds.value = current - trailId
-                _trackExpandedTrailIds.value = _trackExpandedTrailIds.value - trailId
-            } else {
-                _expandedTrailIds.value = current + trailId
-            }
+        /** Request named waypoints + track point count for [trailId] (called when its card expands). */
+        fun loadNamedWaypoints(trailId: Long) {
+            _loadedTrailIds.value = _loadedTrailIds.value + trailId
         }
 
-        /** Toggle level-2 expand (full track point list). */
-        fun toggleTrackExpand(trailId: Long) {
-            val current = _trackExpandedTrailIds.value
-            _trackExpandedTrailIds.value = if (trailId in current) current - trailId else current + trailId
+        /** Request the full track point list for [trailId] (called when that sub-section expands). */
+        fun loadTrackPoints(trailId: Long) {
+            _loadedTrackPointIds.value = _loadedTrackPointIds.value + trailId
         }
 
         fun setQuery(q: String) {
@@ -179,7 +171,7 @@ class TrailsViewModel
                 }
             viewModelScope.launch {
                 val id = trailRepo.create(collectionId, name, description, tentative)
-                _expandedTrailIds.value = _expandedTrailIds.value + id
+                loadNamedWaypoints(id)
                 _toast.value = "Trail created"
             }
         }
@@ -206,8 +198,8 @@ class TrailsViewModel
         fun delete(id: Long) {
             viewModelScope.launch {
                 trailRepo.remove(id)
-                _expandedTrailIds.value = _expandedTrailIds.value - id
-                _trackExpandedTrailIds.value = _trackExpandedTrailIds.value - id
+                _loadedTrailIds.value = _loadedTrailIds.value - id
+                _loadedTrackPointIds.value = _loadedTrackPointIds.value - id
                 _toast.value = "Trail deleted"
             }
         }
@@ -253,11 +245,11 @@ class TrailsViewModel
 
         fun attachExisting(
             trailId: Long,
-            waypointId: Long,
+            waypointIds: Set<Long>,
         ) {
             viewModelScope.launch {
-                waypointRepo.attach(trailId, waypointId)
-                _toast.value = "Waypoint attached"
+                waypointIds.forEach { waypointRepo.attach(trailId, it) }
+                _toast.value = "${waypointIds.size} waypoint${if (waypointIds.size == 1) "" else "s"} attached"
             }
         }
 

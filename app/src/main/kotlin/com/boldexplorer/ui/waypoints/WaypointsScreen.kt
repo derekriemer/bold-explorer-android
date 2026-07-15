@@ -304,7 +304,8 @@ fun WaypointsScreen(
         CreateItemDialog(
             title = "New collection",
             confirmLabel = "Create",
-            onConfirm = { name, _ ->
+            hasTentative = false,
+            onConfirm = { name, _, _ ->
                 viewModel.createCollection(name)
                 showCreateCollection = false
             },
