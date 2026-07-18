@@ -19,12 +19,14 @@ class CollectionExplorerTest {
     @Test
     fun skipTarget_advancesToNextNearestUnvisitedPoint() {
         val explorer = CollectionExplorer()
-        explorer.load(listOf(west, east, north), exploreMode = false)
+        explorer.load(listOf(west, east, north), autoAdvance = false)
 
+        // No target yet — auto-advance is off, so nothing was auto-picked. Skip still works: it
+        // treats the nearest unvisited point as the one being rejected.
         explorer.onLocationUpdate(home)
 
         val firstState = explorer.state.value as CollectionExplorerState.Active
-        assertEquals(north.id, firstState.target?.id)
+        assertNull(firstState.target)
 
         val event = explorer.skipTarget()
 
@@ -45,7 +47,7 @@ class CollectionExplorerTest {
     @Test
     fun autoTarget_usesNearestPointWhenTravelHeadingIsMissing() {
         val explorer = CollectionExplorer()
-        explorer.load(listOf(east, north), exploreMode = false)
+        explorer.load(listOf(east, north), autoAdvance = true)
 
         explorer.onLocationUpdate(home)
 
@@ -56,7 +58,7 @@ class CollectionExplorerTest {
     @Test
     fun autoTarget_prefersFartherPointAheadOfTravelDirection() {
         val explorer = CollectionExplorer()
-        explorer.load(listOf(north, east), exploreMode = false)
+        explorer.load(listOf(north, east), autoAdvance = true)
 
         explorer.onLocationUpdate(home, travelHeadingDeg = 90.0)
 
@@ -65,9 +67,21 @@ class CollectionExplorerTest {
     }
 
     @Test
+    fun withAutoAdvanceOff_noTargetIsPickedUntilOneIsChosen() {
+        val explorer = CollectionExplorer()
+        explorer.load(listOf(north, east), autoAdvance = false)
+
+        explorer.onLocationUpdate(home)
+
+        val state = explorer.state.value as CollectionExplorerState.Active
+        assertNull(state.target)
+    }
+
+    @Test
     fun reachedTarget_withExploreOff_pausesInsteadOfPickingAnotherTarget() {
         val explorer = CollectionExplorer()
-        explorer.load(listOf(north, east), exploreMode = false)
+        explorer.load(listOf(north, east), autoAdvance = false)
+        explorer.selectTarget(north)
 
         val event = explorer.onLocationUpdate(LatLng(north.waypoint.lat, north.waypoint.lon))
 
@@ -75,27 +89,25 @@ class CollectionExplorerTest {
         assertNull(event.next)
 
         val reachedState = explorer.state.value as CollectionExplorerState.Active
-        assertIs<CollectionTargeting.Paused>(reachedState.targeting)
         assertNull(reachedState.target)
 
         explorer.onLocationUpdate(home)
 
         val laterState = explorer.state.value as CollectionExplorerState.Active
-        assertIs<CollectionTargeting.Paused>(laterState.targeting)
         assertNull(laterState.target)
     }
 
     @Test
-    fun turningExploreOnFromPaused_resumesAutomaticTargeting() {
+    fun turningAutoAdvanceOnAfterReach_resumesAutomaticTargeting() {
         val explorer = CollectionExplorer()
-        explorer.load(listOf(north, east), exploreMode = false)
+        explorer.load(listOf(north, east), autoAdvance = false)
+        explorer.selectTarget(north)
         explorer.onLocationUpdate(LatLng(north.waypoint.lat, north.waypoint.lon))
 
-        explorer.setExploreMode(true)
+        explorer.setAutoAdvance(true)
         explorer.onLocationUpdate(home)
 
         val state = explorer.state.value as CollectionExplorerState.Active
-        assertIs<CollectionTargeting.Auto>(state.targeting)
         assertEquals(east.id, state.target?.id)
     }
 
@@ -110,7 +122,7 @@ class CollectionExplorerTest {
         val p3 = point(3, "p3", lat = 0.0027, lon = 0.0)
         val p4 = point(4, "p4", lat = 0.0036, lon = 0.0)
         val p5 = point(5, "p5", lat = 0.0045, lon = 0.0)
-        explorer.load(listOf(p5, p4, p3, p2, p1), exploreMode = false)
+        explorer.load(listOf(p5, p4, p3, p2, p1), autoAdvance = false)
         explorer.onLocationUpdate(home)
 
         // Skip the four nearest in turn. VISITED_CAP = 3, so the oldest (p1) is evicted.
@@ -128,8 +140,11 @@ class CollectionExplorerTest {
 
     @Test
     fun clearVisited_resetsQueueAndResumesAutoTargeting() {
+        // Reachable in the UI only with auto-advance on ("Reset visited" is gated on it) —
+        // clearVisited() itself doesn't force a target, it just clears; the next GPS fix
+        // repopulates it because autoAdvance is on.
         val explorer = CollectionExplorer()
-        explorer.load(listOf(north, east, west), exploreMode = false)
+        explorer.load(listOf(north, east, west), autoAdvance = true)
         explorer.onLocationUpdate(home)
         explorer.skipTarget()
         explorer.skipTarget()
@@ -138,7 +153,7 @@ class CollectionExplorerTest {
 
         val cleared = explorer.state.value as CollectionExplorerState.Active
         assertEquals(emptyList(), cleared.visitedIds)
-        assertIs<CollectionTargeting.Auto>(cleared.targeting)
+        assertNull(cleared.target)
 
         explorer.onLocationUpdate(home)
         val state = explorer.state.value as CollectionExplorerState.Active
@@ -150,7 +165,7 @@ class CollectionExplorerTest {
     @Test
     fun reachedTarget_withExploreOn_autoAdvancesToNextNearest() {
         val explorer = CollectionExplorer()
-        explorer.load(listOf(north, east), exploreMode = true)
+        explorer.load(listOf(north, east), autoAdvance = true)
 
         val event = explorer.onLocationUpdate(LatLng(north.waypoint.lat, north.waypoint.lon))
 
@@ -159,7 +174,6 @@ class CollectionExplorerTest {
         assertEquals(east.id, event.next?.id)
 
         val state = explorer.state.value as CollectionExplorerState.Active
-        assertIs<CollectionTargeting.Auto>(state.targeting)
         assertEquals(east.id, state.target?.id)
         assertContentEquals(listOf(north.id), state.visitedIds)
     }
@@ -170,7 +184,7 @@ class CollectionExplorerTest {
     fun trailEnd_withinApproach_firesNearTrailEnd_andNeverAutoReaches() {
         val explorer = CollectionExplorer()
         val end = trailEnd(trailId = 7, "Loop end", lat = 0.0009, lon = 0.0)
-        explorer.load(listOf(end), exploreMode = true)
+        explorer.load(listOf(end), autoAdvance = true)
 
         // Standing exactly on the trail end: within both TRAIL_APPROACH_M and REACH_THRESHOLD_M.
         val event = explorer.onLocationUpdate(LatLng(end.waypoint.lat, end.waypoint.lon))
@@ -187,7 +201,7 @@ class CollectionExplorerTest {
     fun trailEnd_beyondApproach_clearsNearTrailEndAndStaysTargeted() {
         val explorer = CollectionExplorer()
         val end = trailEnd(trailId = 7, "Loop end", lat = 0.0009, lon = 0.0)
-        explorer.load(listOf(end), exploreMode = true)
+        explorer.load(listOf(end), autoAdvance = true)
 
         // ~100 m away — well beyond TRAIL_APPROACH_M.
         val event = explorer.onLocationUpdate(home)
@@ -205,7 +219,7 @@ class CollectionExplorerTest {
         val explorer = CollectionExplorer()
         val farTarget = point(1, "Far", lat = 0.005, lon = 0.0)
         val nearby = point(2, "Nearby", lat = 0.0001, lon = 0.0)
-        explorer.load(listOf(farTarget, nearby), exploreMode = false)
+        explorer.load(listOf(farTarget, nearby), autoAdvance = false)
         // Force a far manual target so the close point stays a non-target proximity hit.
         explorer.selectTarget(farTarget)
 

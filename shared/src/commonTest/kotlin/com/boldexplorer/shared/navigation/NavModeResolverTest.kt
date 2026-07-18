@@ -66,9 +66,9 @@ class NavModeResolverTest {
         nearTrailEndM: Double?,
     ) = CollectionExplorerState.Active(
         points = listOfNotNull(target),
-        targeting = if (target == null) CollectionTargeting.Auto() else CollectionTargeting.Manual(target),
+        target = target,
         visitedIds = emptyList(),
-        exploreMode = false,
+        autoAdvance = false,
         nearTrailEndM = nearTrailEndM,
     )
 
@@ -254,9 +254,9 @@ class NavModeResolverTest {
             listOfNotNull(target) +
                 trailEnd(trailId, isStart = true, lat = 0.0, lon = 0.0) +
                 trailEnd(trailId, isStart = false, lat = 0.001, lon = 0.0),
-        targeting = if (target == null) CollectionTargeting.Auto() else CollectionTargeting.Manual(target),
+        target = target,
         visitedIds = emptyList(),
-        exploreMode = false,
+        autoAdvance = false,
         nearTrailEndM = null,
     )
 
@@ -333,9 +333,9 @@ class NavModeResolverTest {
             explorerState.value =
                 CollectionExplorerState.Active(
                     points = listOf(end1a, end1b, end2a, end2b),
-                    targeting = CollectionTargeting.Auto(),
+                    target = null,
                     visitedIds = emptyList(),
-                    exploreMode = false,
+                    autoAdvance = false,
                     nearTrailEndM = null,
                 )
             // Trail 2 is nearest (distanceM=3), trail 1 is further (distanceM=8).

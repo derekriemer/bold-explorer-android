@@ -13,9 +13,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -29,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,7 +50,6 @@ import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.navigation.BearingComputer
 import com.boldexplorer.shared.navigation.CollectionExplorerState
 import com.boldexplorer.shared.navigation.CollectionPoint
-import com.boldexplorer.shared.navigation.CollectionTargeting
 import com.boldexplorer.shared.navigation.DirectionDescriptor
 import com.boldexplorer.shared.navigation.FollowOption
 import com.boldexplorer.shared.navigation.NavMode
@@ -378,21 +378,32 @@ private fun CollectionControls(
                 Modifier
                     .weight(1f)
                     .toggleable(
-                        value = active.exploreMode,
-                        onValueChange = { onAction(GpsAction.SetCollectionExploreMode(it)) },
+                        value = active.autoAdvance,
+                        onValueChange = { onAction(GpsAction.SetCollectionAutoAdvance(it)) },
                         role = Role.Switch,
                     ),
         ) {
             Text("Auto-advance", modifier = Modifier.weight(1f))
-            Switch(checked = active.exploreMode, onCheckedChange = null)
+            Switch(checked = active.autoAdvance, onCheckedChange = null)
         }
-        if (active.exploreMode && active.visitedIds.isNotEmpty()) {
+        if (active.autoAdvance && active.visitedIds.isNotEmpty()) {
             TextButton(
                 onClick = { onAction(GpsAction.ClearCollectionVisited) },
             ) { Text("Reset visited (${active.visitedIds.size})") }
         }
     }
 }
+
+// Fixed count of nearest points shown live (reordering as the user walks) above the fold.
+// Anything beyond this is only reachable via the frozen "show all" dialog.
+private const val VISIBLE_POINT_COUNT = 3
+
+private data class FrozenTargetRow(
+    val point: CollectionPoint,
+    val label: String,
+    val isTarget: Boolean,
+    val isVisited: Boolean,
+)
 
 @Composable
 private fun CollectionTargetList(
@@ -448,99 +459,154 @@ private fun CollectionTargetList(
         return
     }
 
-    val currentTargetId =
-        when (val targeting = active.targeting) {
-            is CollectionTargeting.Auto -> targeting.target?.id
-            is CollectionTargeting.Manual -> targeting.target.id
-            CollectionTargeting.Paused -> null
+    val currentTargetId = active.target?.id
+
+    // Resets if the collection changes, so a stale snapshot from a different collection can't
+    // linger open.
+    var showAllPoints by rememberSaveable(selectedCollectionId) { mutableStateOf(false) }
+
+    // Snapshot taken only at the instant the dialog opens (remember's key flips false -> true) —
+    // it does NOT recompute while active.points keeps re-sorting live underneath it, so the list
+    // and every distance label stay put while the user reads/scrolls/picks.
+    val frozenAllPoints =
+        remember(showAllPoints) {
+            if (!showAllPoints) {
+                emptyList()
+            } else {
+                active.points.map { point ->
+                    FrozenTargetRow(
+                        point = point,
+                        label = pointLabel(point),
+                        isTarget = point.id == currentTargetId,
+                        isVisited = point.id in active.visitedIds,
+                    )
+                }
+            }
         }
 
-    LazyColumn(modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-        item {
-            val autoSelected = active.targeting is CollectionTargeting.Auto
-            Row(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable { onAction(GpsAction.ClearCollectionTarget) }
-                        .padding(vertical = 12.dp)
-                        .semantics {
-                            // a11y: plain clickable Row has no native selected-state semantics, and
-                            // "selected" is otherwise only shown by color, which isn't accessible.
-                            contentDescription = "Nearest, automatic${if (autoSelected) ", selected" else ""}"
-                        },
+    Column(
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp),
+    ) {
+        nearbyTrails.forEach { trail ->
+            PointTargetRow(
+                label = trail.name,
+                isTarget = trail.id == selectedTrailId,
+                targetSuffix = "selected",
+                extraDescription = "nearby",
+                onClick = { onAction(GpsAction.SelectTrail(trail.id)) },
+            )
+        }
+        // Live, reactive — reorders as the user walks. Bounded to VISIBLE_POINT_COUNT so this
+        // never needs to scroll and a target row can't shift out from under a tap.
+        active.points.take(VISIBLE_POINT_COUNT).forEach { point ->
+            PointTargetRow(
+                label = pointLabel(point),
+                isTarget = point.id == currentTargetId,
+                isVisited = point.id in active.visitedIds,
+                onClick = { onAction(GpsAction.SelectCollectionPoint(point)) },
+            )
+        }
+        if (active.target != null) {
+            TextButton(
+                onClick = { onAction(GpsAction.ClearCollectionTarget) },
+                modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(
-                    "Nearest (auto)",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color =
-                        if (autoSelected) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        },
-                )
+                Text("Clear target")
             }
         }
-        items(nearbyTrails, key = { "nearby:${it.id}" }) { trail ->
-            val isSelected = trail.id == selectedTrailId
-            Row(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable { onAction(GpsAction.SelectTrail(trail.id)) }
-                        .padding(vertical = 12.dp)
-                        .semantics {
-                            // a11y: "nearby"/"selected" aren't shown by color alone; Row has no
-                            // native selected-state semantics.
-                            contentDescription = "${trail.name}, nearby${if (isSelected) ", selected" else ""}"
-                        },
+        if (active.points.size > VISIBLE_POINT_COUNT) {
+            TextButton(
+                onClick = { showAllPoints = true },
+                modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(
-                    trail.name,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color =
-                        if (isSelected) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        },
-                )
+                Text("Show all ${active.points.size} waypoints, sorted by distance")
             }
         }
-        items(active.points, key = { it.id }) { point ->
-            val label = pointLabel(point)
-            val isVisited = point.id in active.visitedIds
-            val isTarget = point.id == currentTargetId
-            Row(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable { onAction(GpsAction.SelectCollectionPoint(point)) }
-                        .padding(vertical = 12.dp)
-                        .semantics {
-                            // a11y: "current target"/"visited" aren't shown by color alone; Row has
-                            // no native selected-state semantics.
-                            contentDescription =
-                                buildString {
-                                    append(label)
-                                    if (isTarget) append(", current target")
-                                    if (isVisited) append(", visited")
-                                }
-                        },
-            ) {
-                Text(
-                    label,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color =
-                        when {
-                            isTarget -> MaterialTheme.colorScheme.primary
-                            isVisited -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                            else -> MaterialTheme.colorScheme.onSurface
-                        },
-                )
-            }
+    }
+
+    if (showAllPoints) {
+        AlertDialog(
+            onDismissRequest = { showAllPoints = false },
+            title = { Text("All waypoints (${frozenAllPoints.size}), nearest first") },
+            text = {
+                // Not lazy: AlertDialog's text slot already scrolls, and this keeps the whole
+                // frozen snapshot visible to a screen reader without extra windowing semantics.
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    frozenAllPoints.forEach { row ->
+                        PointTargetRow(
+                            label = row.label,
+                            isTarget = row.isTarget,
+                            isVisited = row.isVisited,
+                            onClick = {
+                                showAllPoints = false
+                                onAction(GpsAction.SelectCollectionPoint(row.point))
+                            },
+                        )
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showAllPoints = false }) { Text("Close") }
+            },
+        )
+    }
+}
+
+@Composable
+private fun PointTargetRow(
+    label: String,
+    isTarget: Boolean,
+    isVisited: Boolean = false,
+    // "current target" for an actual waypoint; "selected" for a mode choice like "Nearest (auto)"
+    // that isn't itself a point on the map.
+    targetSuffix: String = "current target",
+    // Spoken-only context (e.g. "nearby") that doesn't need to be shown to sighted users because
+    // it's not part of the row's visual state, unlike isTarget/isVisited.
+    extraDescription: String? = null,
+    onClick: () -> Unit,
+) {
+    // Visible text carries the same state, not just color/contentDescription — color alone isn't
+    // colorblind-friendly, and contentDescription alone isn't visible to sighted users.
+    val visibleLabel =
+        buildString {
+            append(label)
+            if (isTarget) append(" — $targetSuffix")
+            if (isVisited) append(" — visited")
         }
+    val accessibleLabel =
+        buildString {
+            append(label)
+            if (extraDescription != null) append(", $extraDescription")
+            if (isTarget) append(", $targetSuffix")
+            if (isVisited) append(", visited")
+        }
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onClick)
+                .padding(vertical = 12.dp)
+                .semantics {
+                    // a11y: Row has no native selected-state semantics; without this, only the
+                    // text node's own content would be announced.
+                    contentDescription = accessibleLabel
+                },
+    ) {
+        Text(
+            visibleLabel,
+            style = MaterialTheme.typography.bodyLarge,
+            color =
+                when {
+                    isTarget -> MaterialTheme.colorScheme.primary
+                    isVisited -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                    else -> MaterialTheme.colorScheme.onSurface
+                },
+        )
     }
 }
 

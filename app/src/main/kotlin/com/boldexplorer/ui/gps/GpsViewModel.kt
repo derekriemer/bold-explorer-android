@@ -137,7 +137,7 @@ sealed interface GpsAction {
 
     data object ClearCollectionVisited : GpsAction
 
-    data class SetCollectionExploreMode(
+    data class SetCollectionAutoAdvance(
         val enabled: Boolean,
     ) : GpsAction
 
@@ -801,8 +801,8 @@ class GpsViewModel
             collectionExplorer.clearVisited()
         }
 
-        fun setCollectionExploreMode(enabled: Boolean) {
-            collectionExplorer.setExploreMode(enabled)
+        fun setCollectionAutoAdvance(enabled: Boolean) {
+            collectionExplorer.setAutoAdvance(enabled)
             backgroundSession.setModeActive(GpsBackgroundMode.CollectionFollow, enabled)
             if (enabled) startLocationService() else stopLocationServiceIfIdle()
         }
@@ -1249,15 +1249,15 @@ class GpsViewModel
 
         /**
          * Load the CollectionExplorer with an already-composed point list (standalones + trail ends,
-         * derived reactively by [collectionNavPoints]), preserving the current explore-mode flag.
+         * derived reactively by [collectionNavPoints]), preserving the current auto-advance flag.
          * No-op when no collection is selected.
          */
         private fun reloadCollectionExplorer(points: List<CollectionPoint>) {
             if (selectedCollectionHolder.selectedCollectionId.value == null) return
-            val currentExploreMode =
+            val currentAutoAdvance =
                 (collectionExplorer.state.value as? CollectionExplorerState.Active)
-                    ?.exploreMode ?: false
-            collectionExplorer.load(points, currentExploreMode)
+                    ?.autoAdvance ?: false
+            collectionExplorer.load(points, currentAutoAdvance)
         }
 
         /**
@@ -1275,10 +1275,10 @@ class GpsViewModel
                             append("Reached $name.")
                             if (nextName != null) {
                                 append(" Next: $nextName.")
-                            } else if ((collectionExplorer.state.value as? CollectionExplorerState.Active)?.exploreMode ==
+                            } else if ((collectionExplorer.state.value as? CollectionExplorerState.Active)?.autoAdvance ==
                                 false
                             ) {
-                                append(" Choose another target or tap Nearest.")
+                                append(" Choose another target.")
                             } else {
                                 append(" No more unvisited points.")
                             }
@@ -1491,8 +1491,8 @@ class GpsViewModel
                     clearCollectionVisited()
                 }
 
-                is GpsAction.SetCollectionExploreMode -> {
-                    setCollectionExploreMode(action.enabled)
+                is GpsAction.SetCollectionAutoAdvance -> {
+                    setCollectionAutoAdvance(action.enabled)
                 }
 
                 is GpsAction.ExtendTrailFromCollectionEnd -> {

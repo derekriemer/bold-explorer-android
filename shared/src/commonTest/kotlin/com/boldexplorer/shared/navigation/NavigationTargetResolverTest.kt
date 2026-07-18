@@ -50,9 +50,9 @@ class NavigationTargetResolverTest {
     private fun explorerActive(target: CollectionPoint) =
         CollectionExplorerState.Active(
             points = listOf(target),
-            targeting = CollectionTargeting.Manual(target),
+            target = target,
             visitedIds = emptyList(),
-            exploreMode = false,
+            autoAdvance = false,
             nearTrailEndM = null,
         )
 
