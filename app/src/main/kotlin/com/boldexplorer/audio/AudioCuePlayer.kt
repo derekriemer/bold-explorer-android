@@ -113,8 +113,17 @@ class AudioCuePlayer
         }
 
         private fun dispatch(event: AudioCueEvent) {
-            val duck = runBlocking { settingsRepo.load().duckAudioEnabled }
+            val settings = runBlocking { settingsRepo.load() }
+            val duck = settings.duckAudioEnabled
             if (duck) requestAudioFocus()
+
+            // STOPGAP for #14 (absolute silence mode): earcons don't route through
+            // OutputManager/OutputPolicy yet — that unification is tracked in #22. Until then,
+            // this is a direct settings check here (same shape as the existing foreground check
+            // below), so "no automatic audio output whatsoever" is actually true. History still
+            // gets recorded below regardless of `silenced` — only the play calls are gated.
+            // Replace with real OutputPolicy routing once #22 lands.
+            val silenced = settings.absoluteSilenceEnabled
 
             val nowMs = System.currentTimeMillis()
             val relDeg = relativeDegFlow?.value
@@ -125,7 +134,7 @@ class AudioCuePlayer
 
             when (event) {
                 is AudioCueEvent.DirectionalBeacon -> {
-                    audioEngine.playDirectionalBeacon(event.pan, event.pitchHz)
+                    if (!silenced) audioEngine.playDirectionalBeacon(event.pan, event.pitchHz)
                     scope.launch {
                         val courseIsSmoothed = guidance?.courseIsSmoothed ?: false
                         val extra =
@@ -164,7 +173,12 @@ class AudioCuePlayer
                                         if (courseIsSmoothed) append(", smoothed=true")
                                     }.trimStart(',', ' '),
                                 outputs = "pan=${"%.3f".format(event.pan)}, pitchHz=${"%.0f".format(event.pitchHz)} Hz",
-                                played = "Tone @ ${"%.0f".format(event.pitchHz)} Hz",
+                                played =
+                                    if (silenced) {
+                                        "Suppressed (silence mode): tone @ ${"%.0f".format(event.pitchHz)} Hz"
+                                    } else {
+                                        "Tone @ ${"%.0f".format(event.pitchHz)} Hz"
+                                    },
                                 extra = extra,
                             ),
                         )
@@ -172,7 +186,7 @@ class AudioCuePlayer
                 }
 
                 is AudioCueEvent.AccuracyBeacon -> {
-                    audioEngine.playAccuracyBeacon(event.accuracyM)
+                    if (!silenced) audioEngine.playAccuracyBeacon(event.accuracyM)
                     val mappedHz = 880.0 - (880.0 - 220.0) * (event.accuracyM.coerceIn(0.0, 30.0) / 30.0)
                     scope.launch {
                         audioEventLog.append(
@@ -182,14 +196,19 @@ class AudioCuePlayer
                                 trigger = "GPS update",
                                 inputs = "accuracy=${"%.1f".format(event.accuracyM)}m",
                                 outputs = "pitchHz=${"%.0f".format(mappedHz)} Hz",
-                                played = "Accuracy tone @ ${"%.0f".format(mappedHz)} Hz",
+                                played =
+                                    if (silenced) {
+                                        "Suppressed (silence mode): accuracy tone @ ${"%.0f".format(mappedHz)} Hz"
+                                    } else {
+                                        "Accuracy tone @ ${"%.0f".format(mappedHz)} Hz"
+                                    },
                             ),
                         )
                     }
                 }
 
                 is AudioCueEvent.AlignmentPing -> {
-                    audioEngine.playAlignmentPing(event.pan, event.pitchHz)
+                    if (!silenced) audioEngine.playAlignmentPing(event.pan, event.pitchHz)
                     scope.launch {
                         audioEventLog.append(
                             AudioLogEntry(
@@ -198,14 +217,20 @@ class AudioCuePlayer
                                 trigger = "Alignment ping",
                                 inputs = relDeg?.let { "relativeDeg=${"%.1f".format(it)}°" } ?: "",
                                 outputs = "pan=${"%.3f".format(event.pan)}, pitchHz=${"%.0f".format(event.pitchHz)} Hz",
-                                played = "Alignment ping @ ${"%.0f".format(event.pitchHz)} Hz",
+                                played =
+                                    if (silenced) {
+                                        "Suppressed (silence mode): alignment ping @ ${"%.0f".format(event.pitchHz)} Hz"
+                                    } else {
+                                        "Alignment ping @ ${"%.0f".format(event.pitchHz)} Hz"
+                                    },
                             ),
                         )
                     }
                 }
 
                 is AudioCueEvent.WaypointApproach -> {
-                    if (!appForegroundState.isInForeground.value) {
+                    val spoke = !silenced && !appForegroundState.isInForeground.value
+                    if (spoke) {
                         scope.launch { ttsEngine.speak("Next waypoint: ${event.waypointName}") }
                     }
                     scope.launch {
@@ -216,14 +241,20 @@ class AudioCuePlayer
                                 trigger = "Waypoint reached",
                                 inputs = "waypointName=\"${event.waypointName}\"",
                                 outputs = "",
-                                played = "Spoke: 'Next waypoint: ${event.waypointName}'",
+                                played =
+                                    if (spoke) {
+                                        "Spoke: 'Next waypoint: ${event.waypointName}'"
+                                    } else {
+                                        "Suppressed: 'Next waypoint: ${event.waypointName}'"
+                                    },
                             ),
                         )
                     }
                 }
 
                 is AudioCueEvent.TrailComplete -> {
-                    if (!appForegroundState.isInForeground.value) {
+                    val spoke = !silenced && !appForegroundState.isInForeground.value
+                    if (spoke) {
                         scope.launch { ttsEngine.speak("Trail complete") }
                     }
                     scope.launch {
@@ -234,14 +265,14 @@ class AudioCuePlayer
                                 trigger = "Trail complete",
                                 inputs = "",
                                 outputs = "",
-                                played = "Spoke: 'Trail complete'",
+                                played = if (spoke) "Spoke: 'Trail complete'" else "Suppressed: 'Trail complete'",
                             ),
                         )
                     }
                 }
 
                 is AudioCueEvent.WrongVector -> {
-                    audioEngine.playWrongVector()
+                    if (!silenced) audioEngine.playWrongVector()
                     scope.launch {
                         audioEventLog.append(
                             AudioLogEntry(
@@ -250,7 +281,7 @@ class AudioCuePlayer
                                 trigger = "WrongVector",
                                 inputs = relDeg?.let { "relativeDeg=${"%.1f".format(it)}°" } ?: "",
                                 outputs = "660 Hz → 440 Hz descending",
-                                played = "Wrong-vector earcon",
+                                played = if (silenced) "Suppressed (silence mode): wrong-vector earcon" else "Wrong-vector earcon",
                             ),
                         )
                     }

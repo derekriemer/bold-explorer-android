@@ -152,6 +152,8 @@ AudioCueScheduler.events: SharedFlow<AudioCueEvent>
 
 **`AudioCueScheduler` is pure scheduling, not playback**: It decides what to emit and when via `SharedFlow<AudioCueEvent>`. `AudioCuePlayer` (:app) owns the active scheduler job, consumes the flow, and drives `AudioTrack` + TTS.
 
+**`OutputManager` is the single entry point for TTS/live-region output** — feature code (ViewModels, `AlignmentController`) must never call `TtsEngine`, a live-region `StateFlow`, or `AudioEventLog` directly; it builds an `OutputEvent` (`shared/.../output/`) and calls `OutputManager.emit(event)`. `OutputManager` (:shared, pure) queues events on a bounded `Channel` — not a `SharedFlow`, so there's exactly one consumer by construction — and `OutputRouter` (:app, `@Singleton`, started once from `BoldExplorerApp.onCreate()`) is that sole consumer: it evaluates `OutputPolicy`, then fans out to the live region (`OutputRouter.liveRegion: StateFlow<LiveRegionAnnouncement>`, read by `NavGraph`'s app-wide invisible `Text`), `TtsEngine` (only when backgrounded and policy allows), and `AudioEventLog` (always, regardless of suppression — the debug log is never filtered). `OutputEvent.origin` (`AUTOMATIC`/`USER_REQUESTED`/`INTERACTION_CONFIRMATION`) is recorded on every event; `DefaultOutputPolicy` uses it to implement absolute silence mode (`AppSettings.absoluteSilenceEnabled`, Settings screen): silence suppresses AUTOMATIC and INTERACTION_CONFIRMATION events but exempts USER_REQUESTED ones (e.g. "Read alignment now" still responds), and never auto-restores. Earcons (`AudioCueScheduler`/`AudioCuePlayer`) don't route through `OutputManager`/`OutputPolicy` yet — `AudioCuePlayer.dispatch()` has its own direct `absoluteSilenceEnabled` check as a documented stopgap so silence mode actually silences tones too; unifying earcons under `OutputPolicy` properly is tracked in Codeberg issue #22.
+
 **`WaypointRepository.withDistanceFrom`**: Does a bbox SQL query (anti-meridian aware, via `computeBbox()`) then re-sorts in Kotlin with `haversineDistanceMeters`. No SQLite trig required.
 
 **`WaypointRepository.setPosition`**: Uses `shiftDown`/`shiftUp` SQL transactions to maintain gapless integer positions — port of the two-step reorder in `waypoints.repo.ts`.
@@ -231,6 +233,7 @@ Safe to parallelize across agents:
 Coordination points that require sequencing:
 - Repository interface changes in `shared/.../repository/Repositories.kt` must land before `:app` impls are written or modified.
 - New `AudioCueEvent` variants in `:shared` must land before `AudioCuePlayer` handling in `:app`.
+- New `OutputKind`/`OutputCategory` variants in `shared/.../output/OutputEvent.kt` must land before `GpsViewModel`/`AlignmentController` call sites that emit them.
 - SQLDelight schema changes (`.sq` files) must be followed by `./gradlew :app:generateBoldExplorerDatabaseInterface` before any Kotlin that references the generated queries.
 - When architecture or commands change, update only `AGENTS.md`. `CLAUDE.md` defers to it and needs no sync.
 

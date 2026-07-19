@@ -98,7 +98,7 @@ fun NavGraph() {
             // App-wide live region — always in composition regardless of active tab.
             // 1×1 dp invisible text; TalkBack reads it on every change via liveRegion.
             Text(
-                text = announcement,
+                text = announcement.text,
                 modifier =
                     Modifier
                         .size(1.dp)
@@ -107,7 +107,9 @@ fun NavGraph() {
                             liveRegion = LiveRegionMode.Assertive
                             // a11y: TalkBack doesn't reliably re-announce on `text` alone for this
                             // live-region node; contentDescription is the actual delivery mechanism.
-                            contentDescription = announcement
+                            // announcement carries a sequence number (see LiveRegionAnnouncement)
+                            // so two consecutive identical announcements still change this state.
+                            contentDescription = announcement.text
                         },
             )
             NavHost(navController = navController, startDestination = Screen.Gps.route) {

@@ -125,6 +125,23 @@ fun SettingsScreen(
 
         HorizontalDivider()
 
+        // Minimal toggle for #14 — a faster-access HUD control is separately tracked in #15/#20.
+        SwitchRow(
+            label = "Silence Mode",
+            checked = settings.absoluteSilenceEnabled,
+            onCheckedChange = { viewModel.setAbsoluteSilence(it) },
+            // a11y: explains the sticky, no-exceptions-except-explicit-requests behavior, which
+            // the label + native on/off state don't convey on their own.
+            description =
+                if (settings.absoluteSilenceEnabled) {
+                    "Silence mode, on. No automatic speech, earcons, or announcements until turned off. Explicit requests like Read alignment now still respond."
+                } else {
+                    null
+                },
+        )
+
+        HorizontalDivider()
+
         // True north
         SwitchRow(
             label = "Use True North",

@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.boldexplorer.shared.repository.SettingsRepository
+import com.boldexplorer.shared.settings.AbsoluteSilencePrefSpec
 import com.boldexplorer.shared.settings.AppSettings
 import com.boldexplorer.shared.settings.AudioCuesPrefSpec
 import com.boldexplorer.shared.settings.BeaconCuesPrefSpec
@@ -37,6 +38,7 @@ private val AUDIO_KEY = stringPreferencesKey(AudioCuesPrefSpec.key)
 private val SPOKEN_GUIDANCE_KEY = stringPreferencesKey(SpokenGuidancePrefSpec.key)
 private val BEACON_CUES_KEY = stringPreferencesKey(BeaconCuesPrefSpec.key)
 private val DUCK_KEY = stringPreferencesKey(DuckAudioPrefSpec.key)
+private val ABSOLUTE_SILENCE_KEY = stringPreferencesKey(AbsoluteSilencePrefSpec.key)
 
 @Singleton
 class DataStoreSettingsRepository
@@ -56,6 +58,7 @@ class DataStoreSettingsRepository
             val spokenGuidance = migrateStoredValue(SpokenGuidancePrefSpec, prefs[SPOKEN_GUIDANCE_KEY] ?: legacyAudio)
             val beaconCues = migrateStoredValue(BeaconCuesPrefSpec, prefs[BEACON_CUES_KEY] ?: legacyAudio)
             val duck = migrateStoredValue(DuckAudioPrefSpec, prefs[DUCK_KEY])
+            val absoluteSilence = migrateStoredValue(AbsoluteSilencePrefSpec, prefs[ABSOLUTE_SILENCE_KEY])
             return AppSettings(
                 units = if (units == "metric") Units.METRIC else Units.IMPERIAL,
                 compassMode = if (compass == "true") CompassMode.TRUE else CompassMode.MAGNETIC,
@@ -68,6 +71,7 @@ class DataStoreSettingsRepository
                 spokenGuidanceEnabled = spokenGuidance,
                 beaconCuesEnabled = beaconCues,
                 duckAudioEnabled = duck,
+                absoluteSilenceEnabled = absoluteSilence,
             )
         }
 
@@ -111,6 +115,11 @@ class DataStoreSettingsRepository
                     serializeVersioned(
                         DuckAudioPrefSpec.currentVersion,
                         settings.duckAudioEnabled,
+                    )
+                prefs[ABSOLUTE_SILENCE_KEY] =
+                    serializeVersioned(
+                        AbsoluteSilencePrefSpec.currentVersion,
+                        settings.absoluteSilenceEnabled,
                     )
             }
         }

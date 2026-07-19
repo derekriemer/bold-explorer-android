@@ -72,6 +72,18 @@ class SettingsMigrationTest {
     }
 
     @Test
+    fun absoluteSilence_nullReturnsDefaultFalse() {
+        val result = migrateStoredValue(AbsoluteSilencePrefSpec, null)
+        assertEquals(false, result)
+    }
+
+    @Test
+    fun absoluteSilence_versionedWrapper_true() {
+        val result = migrateStoredValue(AbsoluteSilencePrefSpec, """{"v":1,"value":true}""")
+        assertEquals(true, result)
+    }
+
+    @Test
     fun bearingDisplay_legacyClock() {
         val result = migrateStoredValue(BearingDisplayPrefSpec, "\"clock\"")
         assertEquals("clock", result)

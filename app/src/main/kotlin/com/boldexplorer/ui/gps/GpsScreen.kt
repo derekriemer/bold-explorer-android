@@ -533,9 +533,10 @@ private fun CollectionTargetList(
             onDismissRequest = { showAllPoints = false },
             title = { Text("All waypoints (${frozenAllPoints.size}), nearest first") },
             text = {
-                // Not lazy: AlertDialog's text slot already scrolls, and this keeps the whole
-                // frozen snapshot visible to a screen reader without extra windowing semantics.
-                Column(modifier = Modifier.fillMaxWidth()) {
+                // Not lazy: keeps the whole frozen snapshot visible to a screen reader without
+                // extra windowing semantics. AlertDialog's text slot doesn't scroll on its own, so
+                // this Column needs its own verticalScroll to reach rows past the dialog's max height.
+                Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
                     frozenAllPoints.forEach { row ->
                         PointTargetRow(
                             label = row.label,

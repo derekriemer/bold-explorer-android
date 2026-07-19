@@ -35,6 +35,8 @@ class SettingsViewModel
 
         fun setDuckAudio(enabled: Boolean) = save { it.copy(duckAudioEnabled = enabled) }
 
+        fun setAbsoluteSilence(enabled: Boolean) = save { it.copy(absoluteSilenceEnabled = enabled) }
+
         fun setCompassMode(mode: CompassMode) = save { it.copy(compassMode = mode) }
 
         private fun save(transform: (AppSettings) -> AppSettings) {

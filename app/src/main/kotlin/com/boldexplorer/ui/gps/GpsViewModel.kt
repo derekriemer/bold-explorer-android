@@ -10,7 +10,8 @@ import androidx.lifecycle.viewModelScope
 import com.boldexplorer.BuildConfig
 import com.boldexplorer.audio.AudioEventLog
 import com.boldexplorer.audio.AudioLogEntry
-import com.boldexplorer.audio.SpokenGuidancePlayer
+import com.boldexplorer.audio.LiveRegionAnnouncement
+import com.boldexplorer.audio.OutputRouter
 import com.boldexplorer.compass.SensorCompassProvider
 import com.boldexplorer.location.BeaconAudioInputs
 import com.boldexplorer.location.GpsBackgroundMode
@@ -52,6 +53,11 @@ import com.boldexplorer.shared.navigation.TrailRecordingMachine
 import com.boldexplorer.shared.navigation.TrailRecordingState
 import com.boldexplorer.shared.navigation.collectionNavPoints
 import com.boldexplorer.shared.navigation.displayName
+import com.boldexplorer.shared.output.OutputCategory
+import com.boldexplorer.shared.output.OutputEvent
+import com.boldexplorer.shared.output.OutputKind
+import com.boldexplorer.shared.output.OutputManager
+import com.boldexplorer.shared.output.OutputOrigin
 import com.boldexplorer.shared.repository.CollectionRepository
 import com.boldexplorer.shared.repository.NavPointsRepository
 import com.boldexplorer.shared.repository.SettingsRepository
@@ -288,7 +294,8 @@ class GpsViewModel
         private val targetingStateHolder: TargetingStateHolder,
         private val selectedCollectionHolder: SelectedCollectionHolder,
         private val backgroundSession: GpsBackgroundSession,
-        private val spokenGuidancePlayer: SpokenGuidancePlayer,
+        private val outputManager: OutputManager,
+        private val outputRouter: OutputRouter,
         private val settingsRepo: SettingsRepository,
         private val audioEventLog: AudioEventLog,
         private val scheduler: AudioCueScheduler,
@@ -522,7 +529,7 @@ class GpsViewModel
                 scope = viewModelScope,
                 headingDeg = headingDeg,
                 targetBearingDeg = bearingDeg,
-                spokenGuidancePlayer = spokenGuidancePlayer,
+                outputManager = outputManager,
             )
         val alignmentActive: StateFlow<Boolean> = alignmentController.active
         val alignmentBearingDeg: StateFlow<Double?> = alignmentController.bearingDeg
@@ -566,8 +573,9 @@ class GpsViewModel
 
         // ── TalkBack announcements ────────────────────────────────────────────────────
 
-        private val _announcement = MutableStateFlow("")
-        val announcement: StateFlow<String> = _announcement.asStateFlow()
+        // Now sourced from OutputRouter (single centralized live-region sink) instead of a
+        // ViewModel-local MutableStateFlow — see issue #11.
+        val announcement: StateFlow<LiveRegionAnnouncement> = outputRouter.liveRegion
 
         // ── Navigation active ─────────────────────────────────────────────────────────
 
@@ -614,7 +622,7 @@ class GpsViewModel
         private val interactionGroup =
             combine(
                 combine(alignmentBearingDeg, alignmentRelativeDeg, announcement, navigationActive) { ab, ar, ann, na ->
-                    InteractionGroup(ab, ar, ann, na, TrailRecordingState.Idle, NavMode.NoCollection)
+                    InteractionGroup(ab, ar, ann.text, na, TrailRecordingState.Idle, NavMode.NoCollection)
                 },
                 combine(recordingState, navMode) { rec, nm -> rec to nm },
             ) { group, (rec, nm) -> group.copy(recordingState = rec, navMode = nm) }
@@ -794,7 +802,12 @@ class GpsViewModel
                         append(".")
                     }
                 } ?: " No more unvisited points."
-            announce("Skipping ${event.skipped.displayName()}.$nextText", speakInBackground = true, trigger = "CollectionSkip")
+            announce(
+                "Skipping ${event.skipped.displayName()}.$nextText",
+                kind = OutputKind.COLLECTION_SKIP,
+                category = OutputCategory.NAVIGATION,
+                origin = OutputOrigin.INTERACTION_CONFIRMATION,
+            )
         }
 
         fun clearCollectionVisited() {
@@ -848,8 +861,9 @@ class GpsViewModel
                         points,
                         loc,
                     ),
-                    speakInBackground = true,
-                    trigger = "TrailStartedFromCollection",
+                    kind = OutputKind.TRAIL_STARTED,
+                    category = OutputCategory.NAVIGATION,
+                    origin = OutputOrigin.INTERACTION_CONFIRMATION,
                 )
             }
         }
@@ -919,7 +933,12 @@ class GpsViewModel
             guidanceCoordinator.clear()
             backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, false)
             stopLocationServiceIfIdle()
-            announce("Trail navigation stopped", speakInBackground = true, trigger = "TrailStopped")
+            announce(
+                "Trail navigation stopped",
+                kind = OutputKind.TRAIL_STOPPED,
+                category = OutputCategory.NAVIGATION,
+                origin = OutputOrigin.INTERACTION_CONFIRMATION,
+            )
         }
 
         // ── Audio navigation ──────────────────────────────────────────────────────────
@@ -1013,7 +1032,14 @@ class GpsViewModel
                 (recordingMachine.state.value as? TrailRecordingState.Recording)?.let { rec ->
                     waypointRepo.attach(rec.trailId, waypointId)
                 }
-                _announcement.value = "Waypoint marked: $name"
+                // Previously set _announcement directly, bypassing TTS eligibility + the audio
+                // log entirely — now routed through announce() like every other output (issue #11).
+                announce(
+                    "Waypoint marked: $name",
+                    kind = OutputKind.WAYPOINT_MARKED,
+                    category = OutputCategory.SYSTEM,
+                    origin = OutputOrigin.INTERACTION_CONFIRMATION,
+                )
                 // waypoints StateFlow updates automatically via observeAll()
             }
         }
@@ -1026,13 +1052,23 @@ class GpsViewModel
         fun copyCoordinates() {
             val loc =
                 location.value ?: run {
-                    announce("No GPS fix to copy.", speakInBackground = true, trigger = "CopyCoordinates")
+                    announce(
+                        "No GPS fix to copy.",
+                        kind = OutputKind.COPY_COORDINATES,
+                        category = OutputCategory.SYSTEM,
+                        origin = OutputOrigin.INTERACTION_CONFIRMATION,
+                    )
                     return
                 }
             val text = "${"%.6f".format(loc.lat)}, ${"%.6f".format(loc.lon)}"
             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
             clipboard.setPrimaryClip(android.content.ClipData.newPlainText("coordinates", text))
-            announce("Coordinates copied: $text", speakInBackground = true, trigger = "CopyCoordinates")
+            announce(
+                "Coordinates copied: $text",
+                kind = OutputKind.COPY_COORDINATES,
+                category = OutputCategory.SYSTEM,
+                origin = OutputOrigin.INTERACTION_CONFIRMATION,
+            )
         }
 
         // ── Permissions ───────────────────────────────────────────────────────────────
@@ -1109,8 +1145,9 @@ class GpsViewModel
                     lastAdvancementReason = null
                     announce(
                         text,
-                        speakInBackground = true,
-                        trigger = "WaypointReached",
+                        kind = OutputKind.WAYPOINT_REACHED,
+                        category = OutputCategory.NAVIGATION,
+                        origin = OutputOrigin.AUTOMATIC,
                         sample = sample,
                         guidance = guidance,
                         extraOverride =
@@ -1130,7 +1167,13 @@ class GpsViewModel
 
                 is TrailFollowerEvent.TrailComplete -> {
                     guidanceCoordinator.clear()
-                    announce("Trail complete", speakInBackground = true, trigger = "TrailComplete", sample = sample)
+                    announce(
+                        "Trail complete",
+                        kind = OutputKind.TRAIL_COMPLETED,
+                        category = OutputCategory.NAVIGATION,
+                        origin = OutputOrigin.AUTOMATIC,
+                        sample = sample,
+                    )
                     trailFollower.stop()
                 }
 
@@ -1181,8 +1224,9 @@ class GpsViewModel
             val distLabel = formatDistanceM(decision.distanceToTargetM, settings.value.units)
             announce(
                 "Checkpoint ${decision.checkpointN} of ${decision.total}. $distLabel, ${directionHint(decision.relativeDeg)}.",
-                speakInBackground = true,
-                trigger = "OrdinaryTrailGuidance",
+                kind = OutputKind.ORDINARY_GUIDANCE,
+                category = OutputCategory.NAVIGATION,
+                origin = OutputOrigin.AUTOMATIC,
                 sample = sample,
                 guidance = guidance,
             )
@@ -1211,7 +1255,14 @@ class GpsViewModel
                 )
             }
             if (!eval.fired) return
-            announce("You may be off trail.", speakInBackground = true, trigger = "OffTrailAlert", sample = sample, guidance = guidance)
+            announce(
+                "You may be off trail.",
+                kind = OutputKind.OFF_TRAIL_ALERT,
+                category = OutputCategory.PROXIMITY,
+                origin = OutputOrigin.AUTOMATIC,
+                sample = sample,
+                guidance = guidance,
+            )
             viewModelScope.launch { scheduler.emitWrongVector() }
         }
 
@@ -1240,8 +1291,9 @@ class GpsViewModel
             if (!eval.fired) return
             announce(
                 "You may be going the wrong way.",
-                speakInBackground = true,
-                trigger = "BacktrackAlert",
+                kind = OutputKind.BACKTRACK_ALERT,
+                category = OutputCategory.PROXIMITY,
+                origin = OutputOrigin.AUTOMATIC,
                 sample = sample,
                 guidance = guidance,
             )
@@ -1283,7 +1335,12 @@ class GpsViewModel
                                 append(" No more unvisited points.")
                             }
                         }
-                    announce(text, speakInBackground = true, trigger = "CollectionPointReached")
+                    announce(
+                        text,
+                        kind = OutputKind.COLLECTION_POINT_REACHED,
+                        category = OutputCategory.PROXIMITY,
+                        origin = OutputOrigin.AUTOMATIC,
+                    )
                 }
 
                 is CollectionExplorerEvent.NearTrailEnd -> {
@@ -1296,7 +1353,12 @@ class GpsViewModel
 
                 is CollectionExplorerEvent.NearbyPoint -> {
                     val dist = formatDistanceM(event.distanceM, settings.value.units)
-                    announce("Nearby: ${event.point.displayName()}, $dist", speakInBackground = true, trigger = "NearbyPoint")
+                    announce(
+                        "Nearby: ${event.point.displayName()}, $dist",
+                        kind = OutputKind.NEARBY_POINT,
+                        category = OutputCategory.PROXIMITY,
+                        origin = OutputOrigin.AUTOMATIC,
+                    )
                 }
 
                 null -> {
@@ -1323,75 +1385,81 @@ class GpsViewModel
                 recordingMachine.addPoint()
                 val count = (recordingMachine.state.value as? TrailRecordingState.Recording)?.pointCount ?: 0
                 if (count % AUTO_RECORD_TTS_INTERVAL == 0) {
-                    spokenGuidancePlayer.speak("$count track points recorded")
+                    // Previously called spokenGuidancePlayer.speak() directly, bypassing the live
+                    // region + audio log entirely — now routed through announce() (issue #11).
+                    announce(
+                        "$count track points recorded",
+                        kind = OutputKind.TRACK_POINT_COUNT,
+                        category = OutputCategory.RECORDING,
+                        origin = OutputOrigin.AUTOMATIC,
+                    )
                 }
                 // trailWaypoints updates automatically via observeWaypointsForTrail
             }
         }
 
+        /**
+         * Single entry point for GPS-screen output — builds an [OutputEvent] and hands it to
+         * [OutputManager]. Non-suspending: [OutputManager.emit] doesn't suspend, so emission
+         * order here exactly matches emission order into the router (see issue #11).
+         */
         private fun announce(
             text: String,
-            speakInBackground: Boolean = false,
-            trigger: String = "unknown",
+            kind: OutputKind,
+            category: OutputCategory,
+            origin: OutputOrigin,
             sample: LocationSample? = null,
             guidance: TrailGuidanceState? = null,
             extraOverride: Map<String, Any?> = emptyMap(),
         ) {
-            _announcement.value = text
-            val ttsDelivered = speakInBackground && spokenGuidancePlayer.speak(text)
-            viewModelScope.launch {
-                val extra =
-                    buildMap<String, Any?> {
-                        putAll(extraOverride)
-                        put("ttsDelivered", ttsDelivered)
-                        sample?.let {
-                            if (BuildConfig.SHOW_DEBUG_FEATURES) {
-                                put("userLat", it.lat)
-                                put("userLng", it.lon)
-                                it.altitude?.let { v -> put("userElev_m", v) }
-                                it.heading?.let { v -> put("userHeading", v) }
-                                it.speed?.let { v -> put("userSpeed_ms", v) }
-                            }
-                            it.accuracy?.let { v -> put("userAccuracy_m", v) }
+            val context =
+                buildMap<String, Any?> {
+                    putAll(extraOverride)
+                    sample?.let {
+                        if (BuildConfig.SHOW_DEBUG_FEATURES) {
+                            put("userLat", it.lat)
+                            put("userLng", it.lon)
+                            it.altitude?.let { v -> put("userElev_m", v) }
+                            it.heading?.let { v -> put("userHeading", v) }
+                            it.speed?.let { v -> put("userSpeed_ms", v) }
                         }
-                        guidance?.let {
-                            put("targetIndex", it.targetIndex)
-                            put("distToTarget_m", it.distanceToTargetM)
-                            put("trailProgress_pct", (it.targetIndex.toDouble() / it.total) * 100.0)
-                            val active = trailFollower.state.value as? TrailFollowerState.Active
-                            val target = active?.waypoints?.getOrNull(it.targetIndex)
-                            if (BuildConfig.SHOW_DEBUG_FEATURES) {
-                                target?.let { wp ->
-                                    put("targetLat", wp.lat)
-                                    put("targetLng", wp.lon)
-                                    wp.elevationM?.let { e -> put("targetElev_m", e) }
-                                }
+                        it.accuracy?.let { v -> put("userAccuracy_m", v) }
+                    }
+                    guidance?.let {
+                        put("targetIndex", it.targetIndex)
+                        put("distToTarget_m", it.distanceToTargetM)
+                        put("trailProgress_pct", (it.targetIndex.toDouble() / it.total) * 100.0)
+                        val active = trailFollower.state.value as? TrailFollowerState.Active
+                        val target = active?.waypoints?.getOrNull(it.targetIndex)
+                        if (BuildConfig.SHOW_DEBUG_FEATURES) {
+                            target?.let { wp ->
+                                put("targetLat", wp.lat)
+                                put("targetLng", wp.lon)
+                                wp.elevationM?.let { e -> put("targetElev_m", e) }
                             }
-                            if (active != null && it.targetIndex > 0 && target != null) {
-                                val prev = active.waypoints[it.targetIndex - 1]
-                                val loc = sample?.let { s -> LatLng(s.lat, s.lon) }
-                                if (loc != null) {
-                                    val prevLL = LatLng(prev.lat, prev.lon)
-                                    val targetLL = LatLng(target.lat, target.lon)
-                                    put("crossTrackErr_m", distanceToSegmentMeters(loc, prevLL, targetLL))
-                                    val t = segmentFraction(loc, prevLL, targetLL).coerceIn(0.0, 1.0)
-                                    put("alongTrackDist_m", t * haversineDistanceMeters(prevLL, targetLL))
-                                }
+                        }
+                        if (active != null && it.targetIndex > 0 && target != null) {
+                            val prev = active.waypoints[it.targetIndex - 1]
+                            val loc = sample?.let { s -> LatLng(s.lat, s.lon) }
+                            if (loc != null) {
+                                val prevLL = LatLng(prev.lat, prev.lon)
+                                val targetLL = LatLng(target.lat, target.lon)
+                                put("crossTrackErr_m", distanceToSegmentMeters(loc, prevLL, targetLL))
+                                val t = segmentFraction(loc, prevLL, targetLL).coerceIn(0.0, 1.0)
+                                put("alongTrackDist_m", t * haversineDistanceMeters(prevLL, targetLL))
                             }
                         }
                     }
-                audioEventLog.append(
-                    AudioLogEntry(
-                        timestampMs = System.currentTimeMillis(),
-                        kind = AudioLogEntry.Kind.TTS_ANNOUNCEMENT,
-                        trigger = trigger,
-                        inputs = "text=\"$text\"",
-                        outputs = "",
-                        played = if (ttsDelivered) "Spoke: '$text'" else "Suppressed: '$text'",
-                        extra = extra,
-                    ),
-                )
-            }
+                }
+            outputManager.emit(
+                OutputEvent(
+                    kind = kind,
+                    category = category,
+                    origin = origin,
+                    speech = text,
+                    context = context,
+                ),
+            )
         }
 
         // ── Trail recording ───────────────────────────────────────────────────────────
@@ -1414,7 +1482,14 @@ class GpsViewModel
                 recordingMachine.stop()
                 recordingMachine.selectTrail(id, hasPoints = false)
                 // trails and trailWaypoints update automatically via observe flows
-                _announcement.value = "New trail: $name. Tap mark to add waypoints, or use auto-record."
+                // Previously set _announcement directly, bypassing TTS eligibility + the audio
+                // log entirely — now routed through announce() like every other output (issue #11).
+                announce(
+                    "New trail: $name. Tap mark to add waypoints, or use auto-record.",
+                    kind = OutputKind.TRAIL_CREATED,
+                    category = OutputCategory.SYSTEM,
+                    origin = OutputOrigin.INTERACTION_CONFIRMATION,
+                )
             }
         }
 
@@ -1429,7 +1504,12 @@ class GpsViewModel
             _lastAutoRecordLoc = location.value?.let { LatLng(it.lat, it.lon) }
             backgroundSession.setModeActive(GpsBackgroundMode.AutoRecord, true)
             startLocationService() // keep process alive when screen is off
-            announce("Auto-recording started. Move to capture track points.", speakInBackground = true, trigger = "AutoRecordStart")
+            announce(
+                "Auto-recording started. Move to capture track points.",
+                kind = OutputKind.AUTO_RECORD_STARTED,
+                category = OutputCategory.RECORDING,
+                origin = OutputOrigin.INTERACTION_CONFIRMATION,
+            )
         }
 
         fun stopAutoRecord() {
@@ -1440,8 +1520,9 @@ class GpsViewModel
             stopLocationServiceIfIdle()
             announce(
                 "Auto-recording stopped. $count points recorded.",
-                speakInBackground = true,
-                trigger = "AutoRecordStop",
+                kind = OutputKind.AUTO_RECORD_STOPPED,
+                category = OutputCategory.RECORDING,
+                origin = OutputOrigin.INTERACTION_CONFIRMATION,
             )
         }
 

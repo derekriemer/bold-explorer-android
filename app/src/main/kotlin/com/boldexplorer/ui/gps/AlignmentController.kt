@@ -1,8 +1,12 @@
 package com.boldexplorer.ui.gps
 
-import com.boldexplorer.audio.SpokenGuidancePlayer
 import com.boldexplorer.shared.geo.deltaAngle
 import com.boldexplorer.shared.navigation.BearingComputer
+import com.boldexplorer.shared.output.OutputCategory
+import com.boldexplorer.shared.output.OutputEvent
+import com.boldexplorer.shared.output.OutputKind
+import com.boldexplorer.shared.output.OutputManager
+import com.boldexplorer.shared.output.OutputOrigin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -28,7 +32,7 @@ class AlignmentController(
     scope: CoroutineScope,
     private val headingDeg: StateFlow<Double?>,
     private val targetBearingDeg: StateFlow<Double?>,
-    private val spokenGuidancePlayer: SpokenGuidancePlayer,
+    private val outputManager: OutputManager,
 ) {
     private val _active = MutableStateFlow(false)
     val active: StateFlow<Boolean> = _active.asStateFlow()
@@ -70,10 +74,19 @@ class AlignmentController(
         targetBearingDeg.value?.let { setBearing(it) }
     }
 
-    /** Speak the current alignment delta on demand (e.g. the modal's opt-in 5 s ticker). */
+    /** Speak the current alignment delta on demand (e.g. the modal's "Read alignment now" action). */
     fun speakDelta() {
         if (!_active.value) return
         val delta = relativeDeg.value ?: return
-        spokenGuidancePlayer.speak(BearingComputer.toAlignmentRelative(delta))
+        outputManager.emit(
+            OutputEvent(
+                kind = OutputKind.ALIGNMENT_DELTA,
+                category = OutputCategory.ALIGNMENT,
+                // User explicitly requested this reading — distinct from AUTOMATIC guidance, so a
+                // future silence-mode policy can suppress automatic chatter without silencing this.
+                origin = OutputOrigin.USER_REQUESTED,
+                speech = BearingComputer.toAlignmentRelative(delta),
+            ),
+        )
     }
 }
