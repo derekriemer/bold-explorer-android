@@ -147,6 +147,11 @@ sealed interface GpsAction {
         val enabled: Boolean,
     ) : GpsAction
 
+    /** Toggle absolute silence mode (#14) — primary control lives in the HUD controls row (#15). */
+    data class SetAbsoluteSilence(
+        val enabled: Boolean,
+    ) : GpsAction
+
     data class ExtendTrailFromCollectionEnd(
         val trailEnd: CollectionPoint.TrailEnd,
     ) : GpsAction
@@ -818,6 +823,12 @@ class GpsViewModel
             collectionExplorer.setAutoAdvance(enabled)
             backgroundSession.setModeActive(GpsBackgroundMode.CollectionFollow, enabled)
             if (enabled) startLocationService() else stopLocationServiceIfIdle()
+        }
+
+        fun setAbsoluteSilence(enabled: Boolean) {
+            viewModelScope.launch {
+                settingsRepo.save(settings.value.copy(absoluteSilenceEnabled = enabled))
+            }
         }
 
         /**
@@ -1574,6 +1585,10 @@ class GpsViewModel
 
                 is GpsAction.SetCollectionAutoAdvance -> {
                     setCollectionAutoAdvance(action.enabled)
+                }
+
+                is GpsAction.SetAbsoluteSilence -> {
+                    setAbsoluteSilence(action.enabled)
                 }
 
                 is GpsAction.ExtendTrailFromCollectionEnd -> {

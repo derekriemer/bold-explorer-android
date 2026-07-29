@@ -212,6 +212,11 @@ fun GpsScreen(
                 },
             )
 
+            // ── HUD controls row (#15) — primary entry point for silence mode (#14),
+            // room left to grow with more controls nearby (e.g. #20's shake gesture is an
+            // alternate trigger for the same setting, not a replacement for this row). ──
+            HudControlsRow(state = state, onAction = onAction)
+
             // ── Announcement display (visual only — live region is in NavGraph) ──────
             Text(
                 text = state.announcement,
@@ -288,6 +293,32 @@ fun GpsScreen(
             onAction = onAction,
             onDismiss = { showAlignmentDialog = false },
         )
+    }
+}
+
+/**
+ * Quick-access controls near the HUD telemetry (#15). Currently just the silence-mode toggle
+ * (#14); a plain Row so future controls can be added alongside without restructuring the layout.
+ */
+@Composable
+private fun HudControlsRow(
+    state: GpsUiState,
+    onAction: (GpsAction) -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+                .toggleable(
+                    value = state.settings.absoluteSilenceEnabled,
+                    onValueChange = { onAction(GpsAction.SetAbsoluteSilence(it)) },
+                    role = Role.Switch,
+                ),
+    ) {
+        Text("Silence Mode", modifier = Modifier.weight(1f))
+        Switch(checked = state.settings.absoluteSilenceEnabled, onCheckedChange = null)
     }
 }
 
