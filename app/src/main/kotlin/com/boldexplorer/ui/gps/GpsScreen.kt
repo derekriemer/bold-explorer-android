@@ -4,6 +4,8 @@ import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -19,6 +21,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -239,12 +242,7 @@ fun GpsScreen(
 
             val active = state.collectionExplorerState as? CollectionExplorerState.Active
 
-            // ── Collection controls (explore mode + add) ────────────────────────────
-            if (active != null) {
-                CollectionControls(active = active, onAction = onAction)
-            }
-
-            // ── Scrolling target list (the only scrollable region) ──────────────────
+            // ── Waypoint quick-access row + controls (#17) ───────────────────────────
             val nearbyTrails = (state.navMode as? NavMode.NearTrail)?.trails ?: emptyList()
             CollectionTargetList(
                 active = active,
@@ -400,43 +398,10 @@ private fun TelemetryCard(
     }
 }
 
-@Composable
-private fun CollectionControls(
-    active: CollectionExplorerState.Active,
-    onAction: (GpsAction) -> Unit,
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier =
-                Modifier
-                    .weight(1f)
-                    .toggleable(
-                        value = active.autoAdvance,
-                        onValueChange = { onAction(GpsAction.SetCollectionAutoAdvance(it)) },
-                        role = Role.Switch,
-                    ),
-        ) {
-            Text("Auto-advance", modifier = Modifier.weight(1f))
-            Switch(checked = active.autoAdvance, onCheckedChange = null)
-        }
-        if (active.autoAdvance && active.visitedIds.isNotEmpty()) {
-            TextButton(
-                onClick = { onAction(GpsAction.ClearCollectionVisited) },
-            ) { Text("Reset visited (${active.visitedIds.size})") }
-        }
-    }
-}
-
-// Fixed count of nearest points shown live (reordering as the user walks) above the fold.
-// Anything beyond this is only reachable via the frozen "show all" dialog.
-private const val VISIBLE_POINT_COUNT = 3
+// Fixed count of nearest points shown live (reordering as the user walks) in the quick-access
+// row (#17). Anything beyond this is only reachable via the frozen "show all" dialog — bounded
+// (not the full reactive list) so a target chip can't shift out from under a tap mid-interaction.
+private const val VISIBLE_POINT_COUNT = 4
 
 private data class FrozenTargetRow(
     val point: CollectionPoint,
@@ -524,46 +489,71 @@ private fun CollectionTargetList(
             }
         }
 
-    Column(
-        modifier =
-            modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp),
-    ) {
-        nearbyTrails.forEach { trail ->
-            PointTargetRow(
-                label = trail.name,
-                isTarget = trail.id == selectedTrailId,
-                targetSuffix = "selected",
-                extraDescription = "nearby",
-                onClick = { onAction(GpsAction.SelectTrail(trail.id)) },
-            )
-        }
-        // Live, reactive — reorders as the user walks. Bounded to VISIBLE_POINT_COUNT so this
-        // never needs to scroll and a target row can't shift out from under a tap.
-        active.points.take(VISIBLE_POINT_COUNT).forEach { point ->
-            PointTargetRow(
-                label = pointLabel(point),
-                isTarget = point.id == currentTargetId,
-                isVisited = point.id in active.visitedIds,
-                onClick = { onAction(GpsAction.SelectCollectionPoint(point)) },
-            )
-        }
-        if (active.target != null) {
-            TextButton(
-                onClick = { onAction(GpsAction.ClearCollectionTarget) },
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text("Clear target")
+    Column(modifier = modifier.fillMaxWidth()) {
+        // ── Row 1: horizontal quick-access chips (#17) — nearby trails first, then the
+        // nearest VISIBLE_POINT_COUNT collection points, nearest first. TalkBack swipes through
+        // them left-to-right like any other row of nodes.
+        Row(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            nearbyTrails.forEach { trail ->
+                WaypointChip(
+                    label = trail.name,
+                    selected = trail.id == selectedTrailId,
+                    onClick = { onAction(GpsAction.SelectTrail(trail.id)) },
+                )
+            }
+            active.points.take(VISIBLE_POINT_COUNT).forEach { point ->
+                WaypointChip(
+                    label = pointLabel(point),
+                    selected = point.id == currentTargetId,
+                    isVisited = point.id in active.visitedIds,
+                    onClick = { onAction(GpsAction.SelectCollectionPoint(point)) },
+                )
             }
         }
-        if (active.points.size > VISIBLE_POINT_COUNT) {
-            TextButton(
-                onClick = { showAllPoints = true },
-                modifier = Modifier.fillMaxWidth(),
+
+        // ── Row 2: Show All | Clear | Auto Advance | (future e.g. Add Waypoint) ──────────
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            if (active.points.size > VISIBLE_POINT_COUNT) {
+                TextButton(onClick = { showAllPoints = true }) {
+                    Text("Show all ${active.points.size}")
+                }
+            }
+            if (active.target != null) {
+                TextButton(onClick = { onAction(GpsAction.ClearCollectionTarget) }) {
+                    Text("Clear target")
+                }
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier =
+                    Modifier.toggleable(
+                        value = active.autoAdvance,
+                        onValueChange = { onAction(GpsAction.SetCollectionAutoAdvance(it)) },
+                        role = Role.Switch,
+                    ),
             ) {
-                Text("Show all ${active.points.size} waypoints, sorted by distance")
+                Text("Auto-advance")
+                Switch(checked = active.autoAdvance, onCheckedChange = null)
+            }
+            if (active.autoAdvance && active.visitedIds.isNotEmpty()) {
+                TextButton(onClick = { onAction(GpsAction.ClearCollectionVisited) }) {
+                    Text("Reset visited (${active.visitedIds.size})")
+                }
             }
         }
     }
@@ -596,6 +586,27 @@ private fun CollectionTargetList(
             },
         )
     }
+}
+
+/**
+ * One chip in the horizontal quick-access row (#17). Uses [FilterChip]'s native `selected` state
+ * for "current target" (TalkBack announces selected/not-selected for free, same reasoning as
+ * `Modifier.toggleable`/`Switch` elsewhere in this file — see AGENTS.md's contentDescription
+ * guidance). "Visited" isn't a native chip concept, so it's folded into the visible label text
+ * instead, consistent with [PointTargetRow]'s "visible text carries the same state" convention.
+ */
+@Composable
+private fun WaypointChip(
+    label: String,
+    selected: Boolean,
+    isVisited: Boolean = false,
+    onClick: () -> Unit,
+) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = { Text(if (isVisited) "$label — visited" else label) },
+    )
 }
 
 @Composable
