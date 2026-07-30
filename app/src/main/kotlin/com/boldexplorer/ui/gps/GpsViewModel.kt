@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import com.boldexplorer.BuildConfig
 import com.boldexplorer.audio.AudioEventLog
 import com.boldexplorer.audio.AudioLogEntry
+import com.boldexplorer.audio.LastOutput
 import com.boldexplorer.audio.LiveRegionAnnouncement
 import com.boldexplorer.audio.OutputRouter
 import com.boldexplorer.compass.SensorCompassProvider
@@ -115,6 +116,9 @@ data class GpsUiState(
     val alignmentBearingDeg: Double? = null,
     val alignmentRelativeDeg: Double? = null,
     val announcement: String = "",
+    // Most recent output, whether or not it was actually spoken (#18) — surfaced as plain
+    // telemetry (not a live region), so silence mode doesn't defeat itself by auto-announcing this.
+    val lastOutput: LastOutput? = null,
     val navigationActive: Boolean = false,
     val recordingState: TrailRecordingState = TrailRecordingState.Idle,
     val navMode: NavMode = NavMode.NoCollection,
@@ -282,6 +286,7 @@ private data class InteractionGroup(
     val navigationActive: Boolean,
     val recordingState: TrailRecordingState,
     val navMode: NavMode,
+    val lastOutput: LastOutput? = null,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -626,8 +631,14 @@ class GpsViewModel
             }
         private val interactionGroup =
             combine(
-                combine(alignmentBearingDeg, alignmentRelativeDeg, announcement, navigationActive) { ab, ar, ann, na ->
-                    InteractionGroup(ab, ar, ann.text, na, TrailRecordingState.Idle, NavMode.NoCollection)
+                combine(
+                    alignmentBearingDeg,
+                    alignmentRelativeDeg,
+                    announcement,
+                    navigationActive,
+                    outputRouter.lastOutput,
+                ) { ab, ar, ann, na, lastOut ->
+                    InteractionGroup(ab, ar, ann.text, na, TrailRecordingState.Idle, NavMode.NoCollection, lastOut)
                 },
                 combine(recordingState, navMode) { rec, nm -> rec to nm },
             ) { group, (rec, nm) -> group.copy(recordingState = rec, navMode = nm) }
@@ -664,6 +675,7 @@ class GpsViewModel
                     alignmentBearingDeg = inter.alignmentBearingDeg,
                     alignmentRelativeDeg = inter.alignmentRelativeDeg,
                     announcement = inter.announcement,
+                    lastOutput = inter.lastOutput,
                     navigationActive = inter.navigationActive,
                     recordingState = inter.recordingState,
                     navMode = inter.navMode,

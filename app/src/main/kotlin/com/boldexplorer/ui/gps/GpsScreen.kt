@@ -43,6 +43,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.boldexplorer.audio.OutputDisposition
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.haversineDistanceMeters
 import com.boldexplorer.shared.model.LocationSample
@@ -387,6 +388,14 @@ private fun TelemetryCard(
                     BearingComputer.formatDistance(it, state.settings.units)
                 } ?: "—"
             TelemetryRow(label = "GPS Accuracy", value = accText)
+
+            // #18: plain telemetry, not a live region — reading this must never auto-announce,
+            // or it would defeat the point of silence mode. Navigable/readable on demand only.
+            val lastOutputText =
+                state.lastOutput?.let {
+                    if (it.disposition == OutputDisposition.SILENCED) "${it.text} (silenced)" else it.text
+                } ?: "—"
+            TelemetryRow(label = "Last announcement", value = lastOutputText)
         }
     }
 }
