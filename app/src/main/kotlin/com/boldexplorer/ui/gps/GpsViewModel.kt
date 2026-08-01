@@ -115,7 +115,6 @@ data class GpsUiState(
     val alignmentActive: Boolean = false,
     val alignmentBearingDeg: Double? = null,
     val alignmentRelativeDeg: Double? = null,
-    val announcement: String = "",
     // Most recent output, whether or not it was actually spoken (#18) — surfaced as plain
     // telemetry (not a live region), so silence mode doesn't defeat itself by auto-announcing this.
     val lastOutput: LastOutput? = null,
@@ -282,7 +281,6 @@ private data class AudioNavigationGroup(
 private data class InteractionGroup(
     val alignmentBearingDeg: Double?,
     val alignmentRelativeDeg: Double?,
-    val announcement: String,
     val navigationActive: Boolean,
     val recordingState: TrailRecordingState,
     val navMode: NavMode,
@@ -634,11 +632,10 @@ class GpsViewModel
                 combine(
                     alignmentBearingDeg,
                     alignmentRelativeDeg,
-                    announcement,
                     navigationActive,
                     outputRouter.lastOutput,
-                ) { ab, ar, ann, na, lastOut ->
-                    InteractionGroup(ab, ar, ann.text, na, TrailRecordingState.Idle, NavMode.NoCollection, lastOut)
+                ) { ab, ar, na, lastOut ->
+                    InteractionGroup(ab, ar, na, TrailRecordingState.Idle, NavMode.NoCollection, lastOut)
                 },
                 combine(recordingState, navMode) { rec, nm -> rec to nm },
             ) { group, (rec, nm) -> group.copy(recordingState = rec, navMode = nm) }
@@ -674,7 +671,6 @@ class GpsViewModel
                     alignmentActive = bear.alignmentActive,
                     alignmentBearingDeg = inter.alignmentBearingDeg,
                     alignmentRelativeDeg = inter.alignmentRelativeDeg,
-                    announcement = inter.announcement,
                     lastOutput = inter.lastOutput,
                     navigationActive = inter.navigationActive,
                     recordingState = inter.recordingState,

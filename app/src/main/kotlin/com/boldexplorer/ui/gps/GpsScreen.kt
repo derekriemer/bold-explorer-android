@@ -189,8 +189,13 @@ fun GpsScreen(
             }
         },
     ) { innerPadding ->
-        // Pinned layout: telemetry + collection selector stay fixed at the top, only the target
-        // list scrolls, and the contextual actions + navigation button stay pinned at the bottom.
+        // Pinned layout: telemetry, HUD controls, collection selector, and the waypoint
+        // quick-access rows are all fixed-height and stay put. Only the contextual actions bar
+        // (bottom) is genuinely variable height — 0 to several buttons depending on state — so
+        // it alone gets weight(1f) + its own scroll, rather than the fixed-height sections above
+        // it fighting over a shrinking allocation as it grows (see the layout-overlap bug this
+        // replaced: a Column doesn't clip overflowing content, so a shrinking weighted region
+        // visually bled into whatever rendered after it).
         Column(
             modifier =
                 Modifier
@@ -216,17 +221,12 @@ fun GpsScreen(
                 },
             )
 
-            // ── HUD controls row (#15) — primary entry point for silence mode (#14),
-            // room left to grow with more controls nearby (e.g. #20's shake gesture is an
-            // alternate trigger for the same setting, not a replacement for this row). ──
+            // ── HUD controls row (#15) — primary entry point for silence mode (#14) and
+            // audio navigation start/stop (relocated here from the screen bottom during the
+            // pre-release layout pass). Horizontally scrollable so more controls (e.g. #20's
+            // shake gesture is an alternate trigger for the same silence setting, not a
+            // replacement for this row) can be added without restructuring. ──
             HudControlsRow(state = state, onAction = onAction)
-
-            // ── Announcement display (visual only — live region is in NavGraph) ──────
-            Text(
-                text = state.announcement,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                style = MaterialTheme.typography.bodySmall,
-            )
 
             // ── Pinned collection selector ──────────────────────────────────────────
             CollectionDropdown(
@@ -252,36 +252,23 @@ fun GpsScreen(
                 nearbyTrails = nearbyTrails,
                 selectedTrailId = state.selectedTrailId,
                 onAction = onAction,
-                modifier = Modifier.weight(1f),
             )
 
-            // ── Pinned contextual trail actions ─────────────────────────────────────
+            // ── Contextual trail actions — the one variable-height section, so it alone
+            // gets weight(1f) + scroll (see comment on the outer Column above). ───────────
             ContextualTrailActions(
                 navMode = state.navMode,
-                selectedCollectionId = state.selectedCollectionId,
+                active = active,
                 selectedTrailId = state.selectedTrailId,
                 recordingState = state.recordingState,
                 onAction = onAction,
+                modifier =
+                    Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState()),
             )
 
             Spacer(Modifier.height(8.dp))
-
-            // ── Pinned navigation button ────────────────────────────────────────────
-            Button(
-                onClick = {
-                    if (state.navigationActive) {
-                        onAction(GpsAction.StopNavigation)
-                    } else {
-                        onAction(GpsAction.StartNavigation)
-                    }
-                },
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-            ) {
-                Text(if (state.navigationActive) "Stop Audio Navigation" else "Start Audio Navigation")
-            }
         }
     }
 
@@ -296,8 +283,10 @@ fun GpsScreen(
 }
 
 /**
- * Quick-access controls near the HUD telemetry (#15). Currently just the silence-mode toggle
- * (#14); a plain Row so future controls can be added alongside without restructuring the layout.
+ * Primary HUD controls (#15): silence mode (#14) and audio navigation start/stop, relocated here
+ * from the screen bottom during the pre-release layout pass so the screen's one truly permanent
+ * "primary actions" row lives right under telemetry. Horizontally scrollable — same pattern as
+ * the waypoint controls row (#17) — so more controls can be added without restructuring.
  */
 @Composable
 private fun HudControlsRow(
@@ -309,15 +298,33 @@ private fun HudControlsRow(
         modifier =
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp)
-                .toggleable(
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier =
+                Modifier.toggleable(
                     value = state.settings.absoluteSilenceEnabled,
                     onValueChange = { onAction(GpsAction.SetAbsoluteSilence(it)) },
                     role = Role.Switch,
                 ),
-    ) {
-        Text("Silence Mode", modifier = Modifier.weight(1f))
-        Switch(checked = state.settings.absoluteSilenceEnabled, onCheckedChange = null)
+        ) {
+            Text("Silence Mode")
+            Switch(checked = state.settings.absoluteSilenceEnabled, onCheckedChange = null)
+        }
+        Button(
+            onClick = {
+                if (state.navigationActive) {
+                    onAction(GpsAction.StopNavigation)
+                } else {
+                    onAction(GpsAction.StartNavigation)
+                }
+            },
+        ) {
+            Text(if (state.navigationActive) "Stop Audio Navigation" else "Start Audio Navigation")
+        }
     }
 }
 
@@ -518,7 +525,11 @@ private fun CollectionTargetList(
             }
         }
 
-        // ── Row 2: Show All | Clear | Auto Advance | (future e.g. Add Waypoint) ──────────
+        // ── Row 2: permanent list-level controls (pre-release layout pass) — Auto-advance |
+        // Show All | Record New Trail. All three always occupy a slot; Show All/Record New Trail
+        // are disabled (not hidden) when not applicable, so this row's contents never shift
+        // position. Genuinely contextual actions (Clear target, Reset visited) moved to
+        // ContextualTrailActions, since they only make sense given a current target/visited-set.
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier =
@@ -528,16 +539,6 @@ private fun CollectionTargetList(
                     .padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            if (active.points.size > VISIBLE_POINT_COUNT) {
-                TextButton(onClick = { showAllPoints = true }) {
-                    Text("Show all ${active.points.size}")
-                }
-            }
-            if (active.target != null) {
-                TextButton(onClick = { onAction(GpsAction.ClearCollectionTarget) }) {
-                    Text("Clear target")
-                }
-            }
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier =
@@ -550,11 +551,13 @@ private fun CollectionTargetList(
                 Text("Auto-advance")
                 Switch(checked = active.autoAdvance, onCheckedChange = null)
             }
-            if (active.autoAdvance && active.visitedIds.isNotEmpty()) {
-                TextButton(onClick = { onAction(GpsAction.ClearCollectionVisited) }) {
-                    Text("Reset visited (${active.visitedIds.size})")
-                }
+            TextButton(
+                onClick = { showAllPoints = true },
+                enabled = active.points.size > VISIBLE_POINT_COUNT,
+            ) {
+                Text("Show all ${active.points.size}")
             }
+            RecordNewTrailButton(selectedCollectionId = selectedCollectionId, onAction = onAction)
         }
     }
 
@@ -662,23 +665,29 @@ private fun PointTargetRow(
     }
 }
 
+/**
+ * Genuinely contextual actions — things that only make sense given the current target/trail/
+ * recording state. `Record New Trail` used to live here too, but it showed in 5 of 7 [navMode]
+ * branches (i.e. it wasn't actually contextual); it moved to the permanent controls row in
+ * [CollectionTargetList] during the pre-release layout pass. `Clear target`/`Reset visited` moved
+ * the other direction, from that same permanent row down into this one, since both only make
+ * sense given a specific current target/visited-set.
+ */
 @Composable
 private fun ContextualTrailActions(
     navMode: NavMode,
-    selectedCollectionId: Long?,
+    active: CollectionExplorerState.Active?,
     selectedTrailId: Long?,
     recordingState: TrailRecordingState,
     onAction: (GpsAction) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+    Column(modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
         when (navMode) {
-            NavMode.NoCollection, NavMode.NoTarget -> {
-                RecordNewTrailButton(selectedCollectionId = selectedCollectionId, onAction = onAction)
-            }
+            NavMode.NoCollection, NavMode.NoTarget -> Unit
 
             is NavMode.CollectionTarget -> {
                 SkipTargetButton(onAction)
-                RecordNewTrailButton(selectedCollectionId = selectedCollectionId, onAction = onAction)
             }
 
             is NavMode.AtTrailEnd -> {
@@ -699,7 +708,6 @@ private fun ContextualTrailActions(
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("Extend ${end.trail.name}") }
                 }
-                RecordNewTrailButton(selectedCollectionId = selectedCollectionId, onAction = onAction)
             }
 
             is NavMode.NearTrail -> {
@@ -712,7 +720,6 @@ private fun ContextualTrailActions(
                         onAction = onAction,
                     )
                 }
-                RecordNewTrailButton(selectedCollectionId = selectedCollectionId, onAction = onAction)
             }
 
             is NavMode.FollowingTrail -> {
@@ -740,6 +747,15 @@ private fun ContextualTrailActions(
                 onClick = { onAction(GpsAction.StartAutoRecord) },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Start Auto-Record") }
+        }
+
+        if (active?.target != null) {
+            TextButton(onClick = { onAction(GpsAction.ClearCollectionTarget) }) { Text("Clear target") }
+        }
+        if (active?.autoAdvance == true && active.visitedIds.isNotEmpty()) {
+            TextButton(
+                onClick = { onAction(GpsAction.ClearCollectionVisited) },
+            ) { Text("Reset visited (${active.visitedIds.size})") }
         }
     }
 }
@@ -835,7 +851,6 @@ private fun RecordNewTrailButton(
         enabled = selectedCollectionId != null,
         modifier =
             Modifier
-                .fillMaxWidth()
                 .semantics {
                     // a11y: visible "Record New Trail" doesn't convey the disabled reason or which
                     // collection it applies to.
