@@ -83,7 +83,20 @@ class CollectionExplorer {
     private val _state = MutableStateFlow<CollectionExplorerState>(CollectionExplorerState.Idle)
     val state: StateFlow<CollectionExplorerState> = _state.asStateFlow()
 
-    /** Load a collection's resolved points and start targeting. */
+    /**
+     * Load a collection's resolved points and start targeting.
+     *
+     * Called both for a genuine collection switch (preceded by [stop], so there is no previous
+     * Active state to preserve) and for a reactive refresh of the *same* collection's point list
+     * (e.g. a new waypoint was saved) — in the latter case the caller must not lose an
+     * in-progress target or visited history just because the list changed underneath it.
+     * Otherwise a freshly-saved waypoint, created at the user's current GPS fix (so effectively
+     * distance 0), would win the next nearest-unvisited auto-target selection and silently
+     * replace whatever target was active (issue #7). We preserve target/visited/proximity state
+     * from the previous Active state whenever the referenced point ids still exist in the new
+     * list; ids are globally unique waypoint/trail-end keys, so stale state from a different
+     * collection can never accidentally match.
+     */
     fun load(
         points: List<CollectionPoint>,
         autoAdvance: Boolean = false,
@@ -92,13 +105,16 @@ class CollectionExplorer {
             _state.value = CollectionExplorerState.Idle
             return
         }
+        val previous = _state.value as? CollectionExplorerState.Active
+        val byId = points.associateBy { it.id }
         _state.value =
             CollectionExplorerState.Active(
                 points = points,
-                target = null, // auto-filled on first GPS fix if autoAdvance is on
-                visitedIds = emptyList(),
+                target = previous?.target?.id?.let { byId[it] }, // auto-filled on next GPS fix if still null
+                visitedIds = previous?.visitedIds?.filter { it in byId } ?: emptyList(),
                 autoAdvance = autoAdvance,
-                nearTrailEndM = null,
+                nearTrailEndM = null, // recomputed on the next GPS fix against the (possibly new) target
+                proximityAnnouncedIds = previous?.proximityAnnouncedIds?.filter { it in byId }?.toSet() ?: emptySet(),
             )
     }
 

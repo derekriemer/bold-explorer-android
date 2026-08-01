@@ -212,6 +212,82 @@ class CollectionExplorerTest {
         assertNull(state.nearTrailEndM)
     }
 
+    // ── Reload preserves in-progress targeting (issue #7) ────────────────────────────
+    // Saving a waypoint reactively re-runs `load()` with the updated point list. That must not
+    // discard an already-selected target or visited history — otherwise the freshly-saved point
+    // (created at the user's current GPS fix, so it is essentially distance 0) wins the next
+    // auto-target selection and silently hijacks navigation.
+
+    @Test
+    fun reload_preservesManualTarget_whenNewPointIsSaved() {
+        val explorer = CollectionExplorer()
+        explorer.load(listOf(north, east), autoAdvance = false)
+        explorer.selectTarget(east)
+
+        // A new waypoint is saved at the user's current location and the point list reloads.
+        val justSaved = point(4, "Just saved", lat = home.lat, lon = home.lon)
+        explorer.load(listOf(north, east, justSaved), autoAdvance = false)
+
+        val state = explorer.state.value as CollectionExplorerState.Active
+        assertEquals(east.id, state.target?.id)
+
+        // Confirm it sticks on the next GPS fix too, even standing right on top of the new point.
+        explorer.onLocationUpdate(home)
+        val afterFix = explorer.state.value as CollectionExplorerState.Active
+        assertEquals(east.id, afterFix.target?.id)
+    }
+
+    @Test
+    fun reload_preservesAutoTarget_whenNewPointIsSavedAtCurrentLocation() {
+        val explorer = CollectionExplorer()
+        explorer.load(listOf(north, east), autoAdvance = true)
+        explorer.onLocationUpdate(home)
+        val before = explorer.state.value as CollectionExplorerState.Active
+        assertEquals(north.id, before.target?.id)
+
+        // Save a new waypoint right at the user's current location (distance ~0) — this is the
+        // scenario from issue #7: it must not steal the active target.
+        val justSaved = point(4, "Just saved", lat = home.lat, lon = home.lon)
+        explorer.load(listOf(north, east, justSaved), autoAdvance = true)
+
+        val reloaded = explorer.state.value as CollectionExplorerState.Active
+        assertEquals(north.id, reloaded.target?.id)
+
+        explorer.onLocationUpdate(home)
+        val afterFix = explorer.state.value as CollectionExplorerState.Active
+        assertEquals(north.id, afterFix.target?.id)
+    }
+
+    @Test
+    fun reload_preservesVisitedHistory_whenNewPointIsSaved() {
+        val explorer = CollectionExplorer()
+        explorer.load(listOf(north, east, west), autoAdvance = false)
+        explorer.onLocationUpdate(home)
+        explorer.skipTarget() // visits north
+
+        val justSaved = point(4, "Just saved", lat = home.lat, lon = home.lon)
+        explorer.load(listOf(north, east, west, justSaved), autoAdvance = false)
+
+        val state = explorer.state.value as CollectionExplorerState.Active
+        assertEquals(listOf(north.id), state.visitedIds)
+    }
+
+    @Test
+    fun reload_afterStop_startsFreshAutoTargeting() {
+        // A genuine collection switch goes through stop() first, so no stale target/visited state
+        // should leak into the newly loaded collection.
+        val explorer = CollectionExplorer()
+        explorer.load(listOf(north, east), autoAdvance = false)
+        explorer.selectTarget(east)
+
+        explorer.stop()
+        explorer.load(listOf(north, east), autoAdvance = false)
+
+        val state = explorer.state.value as CollectionExplorerState.Active
+        assertNull(state.target)
+        assertEquals(emptyList(), state.visitedIds)
+    }
+
     // ── Proximity announcements (once per point per session) ────────────────────────
 
     @Test
