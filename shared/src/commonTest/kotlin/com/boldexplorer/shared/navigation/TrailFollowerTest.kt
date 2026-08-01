@@ -326,6 +326,46 @@ class TrailFollowerTest {
         assertNull(event, "divergence should be blocked when dNext exceeds 1.5 × segment length")
     }
 
+    // ── Cascade guard (issue #9) ─────────────────────────────────────────────────
+    //
+    // Dense checkpoints (5 m apart, closer than the 15 m threshold) so several are
+    // simultaneously within radial range of one stationary position.
+
+    private val denseA = TrailPoint(80, "A", 0.0, 0.0)
+    private val denseB = TrailPoint(81, "B", 0.000045, 0.0) // ~5 m north
+    private val denseC = TrailPoint(82, "C", 0.00009, 0.0) // ~10 m north
+    private val denseD = TrailPoint(83, "D", 0.000135, 0.0) // ~15 m north
+
+    @Test
+    fun cascade_blockedWhenStationaryNearDenseCheckpoints() {
+        val f = TrailFollower()
+        f.start(listOf(denseA, denseB, denseC, denseD), thresholdM = 15.0)
+
+        // First fix: user is standing at denseA — legitimate "already here" advance to denseB.
+        val first = f.onLocationUpdate(LatLng(denseA.lat, denseA.lon))
+        assertIs<TrailFollowerEvent.WaypointReached>(first)
+        assertEquals(1, first.index)
+
+        // Second fix: same physical position (no movement) — denseB is only ~5m away, well
+        // within the 15m threshold, but the user hasn't actually walked anywhere. Must not cascade.
+        val second = f.onLocationUpdate(LatLng(denseA.lat, denseA.lon))
+        assertNull(second)
+        assertEquals(1, (f.state.value as TrailFollowerState.Active).currentIndex)
+    }
+
+    @Test
+    fun cascade_allowedAfterRealMovement() {
+        val f = TrailFollower()
+        f.start(listOf(denseA, denseB, denseC, denseD), thresholdM = 15.0)
+
+        f.onLocationUpdate(LatLng(denseA.lat, denseA.lon)) // advance to denseB
+
+        // User genuinely walks to denseB (~5 m north) — a real advance should still fire.
+        val event = f.onLocationUpdate(LatLng(denseB.lat, denseB.lon))
+        assertIs<TrailFollowerEvent.WaypointReached>(event)
+        assertEquals(2, event.index)
+    }
+
     // ── startNearest with bearing ─────────────────────────────────────────────────
 
     @Test

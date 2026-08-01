@@ -69,6 +69,11 @@ class TrailFollower(
     // Closest approach to the current target seen since last advance. Reset on each advance.
     private var closestApproachM = Double.MAX_VALUE
 
+    // Location at the moment of the last advance; null until the first advance in a session.
+    // Guards against an instant cascade through closely-spaced checkpoints (issue #9) — see
+    // onLocationUpdate().
+    private var positionAtLastAdvance: LatLng? = null
+
     /** Optional callback fired on every waypoint advance with diagnostic information. */
     var onAdvancement: ((AdvancementReason) -> Unit)? = null
 
@@ -80,6 +85,7 @@ class TrailFollower(
         if (waypoints.isEmpty()) return
         val idx = fromIndex.coerceIn(0, waypoints.size - 1)
         closestApproachM = Double.MAX_VALUE
+        positionAtLastAdvance = null
         _state.value = TrailFollowerState.Active(waypoints, idx, thresholdM)
     }
 
@@ -118,11 +124,13 @@ class TrailFollower(
                 } ?: 0
             }
         closestApproachM = Double.MAX_VALUE
+        positionAtLastAdvance = null
         _state.value = TrailFollowerState.Active(waypoints, nearestIdx, thresholdM)
     }
 
     fun stop() {
         closestApproachM = Double.MAX_VALUE
+        positionAtLastAdvance = null
         _state.value = TrailFollowerState.Idle
     }
 
@@ -150,6 +158,19 @@ class TrailFollower(
         val d = haversineDistanceMeters(location, LatLng(target.lat, target.lon))
 
         if (d < closestApproachM) closestApproachM = d
+
+        // Guard against an instant cascade through several closely-spaced checkpoints (issue #9):
+        // require the user to have actually moved since the last advance before another one can
+        // fire. Without this, a user standing still near a cluster of checkpoints spaced closer
+        // together than thresholdM (e.g. auto-recorded track points, 10 m apart, vs. the default
+        // 15 m threshold) could have several consecutive checkpoints simultaneously within radial
+        // range of one stationary position — each new GPS fix, even with zero real movement,
+        // would then independently satisfy the radial check for whatever the new target is. Does
+        // not gate the very first advance in a session (positionAtLastAdvance is null then) —
+        // reaching a checkpoint you're already standing at when you start is legitimate.
+        positionAtLastAdvance?.let { last ->
+            if (haversineDistanceMeters(location, last) < MIN_MOVEMENT_SINCE_ADVANCE_M) return null
+        }
 
         // 1. Radial threshold — the primary, fast-path check.
         if (d <= current.thresholdM) {
@@ -216,6 +237,7 @@ class TrailFollower(
                 LatLng(current.waypoints[current.currentIndex].lat, current.waypoints[current.currentIndex].lon),
             )
         closestApproachM = Double.MAX_VALUE
+        positionAtLastAdvance = location
 
         fun emitCallback() =
             onAdvancement?.invoke(
@@ -271,5 +293,13 @@ class TrailFollower(
 
         /** Divergence: next waypoint must be within this factor of the current segment length. */
         private const val DIVERGE_NEXT_PROXIMITY_FACTOR = 1.5
+
+        /**
+         * Minimum real movement required since the last advance before another one can fire
+         * (issue #9). Larger than typical GPS jitter for a stationary user (a few metres), smaller
+         * than both the default reach threshold (15 m) and the auto-record track-point spacing
+         * (10 m), so normal sequential advances while actually walking are unaffected.
+         */
+        private const val MIN_MOVEMENT_SINCE_ADVANCE_M = 5.0
     }
 }
