@@ -1371,6 +1371,13 @@ class GpsViewModel
                 }
 
                 is CollectionExplorerEvent.NearbyPoint -> {
+                    // Suppress "nearby" chatter for the trail currently being recorded (issue #6)
+                    // — the user is necessarily near its endpoint by definition of extending it
+                    // from there, so this would otherwise announce on every fix while recording.
+                    val recordingTrailId = (recordingMachine.state.value as? TrailRecordingState.Recording)?.trailId
+                    val onRecordingTrail = (event.point as? CollectionPoint.TrailEnd)?.trail?.id == recordingTrailId
+                    if (onRecordingTrail) return
+
                     val dist = formatDistanceM(event.distanceM, settings.value.units)
                     announce(
                         "Nearby: ${event.point.displayName()}, $dist",
