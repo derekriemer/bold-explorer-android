@@ -58,6 +58,13 @@ class LocationProviderRouter
                     if (gnssActive) gnss.locationFlow else fused.locationFlow
                 }.shareIn(scope, SharingStarted.WhileSubscribed(5_000L), replay = 1)
 
+        /** Raw-fix telemetry (issue #23) from whichever provider is currently active. */
+        val lastRawFix: StateFlow<RawFixEvent?> =
+            useGnss
+                .flatMapLatest { gnssActive ->
+                    if (gnssActive) gnss.lastRawFix else fused.lastRawFix
+                }.stateIn(scope, SharingStarted.Eagerly, null)
+
         fun setBackgroundMode(enabled: Boolean) {
             fused.setBackgroundMode(enabled)
             gnss.setBackgroundMode(enabled)

@@ -21,6 +21,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,6 +36,8 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.boldexplorer.audio.AudioLogEntry
+import com.boldexplorer.location.RawFixEvent
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -52,6 +55,19 @@ fun DebugScreen(
     val logEntries by viewModel.logEntries.collectAsStateWithLifecycle()
     val logStatus by viewModel.logStatus.collectAsStateWithLifecycle()
     val showMarkerDialog by viewModel.showMarkerDialog.collectAsStateWithLifecycle()
+    val lastRawFix by viewModel.lastRawFix.collectAsStateWithLifecycle()
+
+    // Ticks so the "Ns ago" fix-age text (below) keeps advancing even when no new fix arrives —
+    // that stalling *is* the signal for issue #23, so it must be visible live, not just on the
+    // next recomposition triggered by other state. Plain text, not a live region: this would spam
+    // TalkBack every tick if it auto-announced.
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            nowMs = System.currentTimeMillis()
+            delay(500L)
+        }
+    }
 
     Column(
         modifier =
@@ -98,6 +114,11 @@ fun DebugScreen(
                 DebugRow("Accuracy", location?.accuracy?.let { "${"%.1f".format(it)} m" } ?: "—")
                 DebugRow("Speed", location?.speed?.let { "${"%.1f".format(it)} m/s" } ?: "—")
                 DebugRow("Provider", location?.provider ?: "—")
+
+                // Issue #23: shows every raw fix, accepted or accuracy-gate-dropped, so a
+                // freezing distance/bearing reading can be diagnosed live in the field instead of
+                // guessed at afterward from an exported log.
+                RawFixRow(lastRawFix, nowMs)
 
                 Spacer(Modifier.height(8.dp))
                 Row(
@@ -314,6 +335,51 @@ private fun MarkerNoteDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
+}
+
+/**
+ * Live "Last GPS fix: Ns ago" row for issue #23 — distinguishes an accepted fix from one the
+ * accuracy gate dropped, and shows the current discard streak so a long run of drops (accuracy
+ * gate rejecting fixes) reads differently from a long gap between raw fixes at all (OS/OEM
+ * throttling not delivering fixes in the first place).
+ */
+@Composable
+private fun RawFixRow(
+    fix: RawFixEvent?,
+    nowMs: Long,
+) {
+    if (fix == null) {
+        DebugRow("Last GPS fix", "No fix yet")
+        return
+    }
+    val ageSec = ((nowMs - fix.timestampMs) / 1000L).coerceAtLeast(0L)
+    val ageText = if (ageSec < 60) "${ageSec}s ago" else "${ageSec / 60}m ${ageSec % 60}s ago"
+    val accuracyText = fix.accuracyM?.let { "${"%.0f".format(it)}m" } ?: "unknown"
+    val statusText =
+        if (fix.accepted) {
+            "$ageText, accepted, accuracy $accuracyText"
+        } else {
+            "$ageText, DISCARDED (accuracy $accuracyText), ${fix.consecutiveDiscards} in a row"
+        }
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 2.dp)
+                .semantics(mergeDescendants = true) {},
+    ) {
+        Text(
+            "Last GPS fix:",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            statusText,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (fix.accepted) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
+        )
+    }
 }
 
 @Composable

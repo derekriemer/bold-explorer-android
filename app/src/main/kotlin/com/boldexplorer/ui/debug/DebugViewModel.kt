@@ -9,6 +9,7 @@ import com.boldexplorer.audio.AudioLogEntry
 import com.boldexplorer.compass.SensorCompassProvider
 import com.boldexplorer.gpx.GpxFileWriter
 import com.boldexplorer.location.LocationProviderRouter
+import com.boldexplorer.location.RawFixEvent
 import com.boldexplorer.shared.audio.AudioCueScheduler
 import com.boldexplorer.shared.gpx.GpxExporter
 import com.boldexplorer.shared.model.HeadingReading
@@ -53,6 +54,9 @@ class DebugViewModel
         val accuracyBeaconEnabled: StateFlow<Boolean> = scheduler.accuracyBeaconEnabled
 
         val useGnss: StateFlow<Boolean> = locationRouter.useGnss
+
+        /** Raw-fix telemetry (issue #23) — updates on every fix, accepted or accuracy-gate-dropped. */
+        val lastRawFix: StateFlow<RawFixEvent?> = locationRouter.lastRawFix
 
         // ── Audio log ─────────────────────────────────────────────────────────────────
 
