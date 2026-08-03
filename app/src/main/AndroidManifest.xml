@@ -10,7 +10,7 @@
 
     <application
         android:name=".BoldExplorerApp"
-        android:label="Bold Explorer"
+        android:label="@string/app_name"
         android:theme="@style/Theme.BoldExplorer">
 
         <activity

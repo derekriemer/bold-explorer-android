@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Distinct from the google-flavor label so both can be told apart when installed
+         side-by-side for comparison testing (they already have distinct app IDs). -->
+    <string name="app_name">Bold Explorer (FOSS)</string>
+</resources>
