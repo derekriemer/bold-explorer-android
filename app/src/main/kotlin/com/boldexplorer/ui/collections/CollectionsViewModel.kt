@@ -7,11 +7,11 @@ import androidx.lifecycle.viewModelScope
 import com.boldexplorer.gpx.GpxFileWriter
 import com.boldexplorer.gpx.GpxParseResult
 import com.boldexplorer.gpx.GpxParser
-import com.boldexplorer.location.FusedLocationProviderImpl
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.haversineDistanceMeters
 import com.boldexplorer.shared.gpx.GpxExporter
 import com.boldexplorer.shared.gpx.GpxTrail
+import com.boldexplorer.shared.location.LocationProvider
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.Waypoint
 import com.boldexplorer.shared.repository.CollectionRepository
@@ -46,7 +46,7 @@ class CollectionsViewModel
         private val collectionRepo: CollectionRepository,
         private val waypointRepo: WaypointRepository,
         private val trailRepo: TrailRepository,
-        locationProvider: FusedLocationProviderImpl,
+        locationProvider: LocationProvider,
     ) : ViewModel() {
         // Eagerly so we always have a cached location when the add-waypoints dialog opens,
         // even if the user navigates here without the GPS screen active.

@@ -41,3 +41,9 @@ jobs:
 
       - name: make lint
         run: make lint
+
+      # Compile-only check for the foss (no Google Play Services) flavor — catches a foss-only
+      # file referencing something google-only, or vice versa. Cheaper than a full assemble/test
+      # run for this flavor, which the already-tight 10-minute budget can't easily absorb.
+      - name: make check-foss
+        run: make check-foss

@@ -120,7 +120,7 @@ class SensorCompassProvider
 
         /**
          * Provide a GPS fix so the compass can compute true-north declination.
-         * Call this from LocationViewModel whenever [FusedLocationProviderImpl.locationFlow] emits.
+         * Call this from LocationViewModel whenever the active location provider's locationFlow emits.
          */
         fun setLocation(
             lat: Double,

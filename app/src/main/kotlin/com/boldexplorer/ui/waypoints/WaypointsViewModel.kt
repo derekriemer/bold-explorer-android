@@ -2,11 +2,11 @@ package com.boldexplorer.ui.waypoints
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.boldexplorer.location.FusedLocationProviderImpl
 import com.boldexplorer.location.SelectedCollectionHolder
 import com.boldexplorer.location.TargetingStateHolder
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.haversineDistanceMeters
+import com.boldexplorer.shared.location.LocationProvider
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.Waypoint
 import com.boldexplorer.shared.repository.CollectionRepository
@@ -57,7 +57,7 @@ class WaypointsViewModel
         private val targetingStateHolder: TargetingStateHolder,
         private val selectedCollectionHolder: SelectedCollectionHolder,
         settingsRepo: SettingsRepository,
-        locationProvider: FusedLocationProviderImpl,
+        locationProvider: LocationProvider,
     ) : ViewModel() {
         // ── Filter / sort state ───────────────────────────────────────────────────────
 

@@ -4,11 +4,11 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.boldexplorer.gpx.GpxFileWriter
-import com.boldexplorer.location.FusedLocationProviderImpl
 import com.boldexplorer.location.SelectedCollectionHolder
 import com.boldexplorer.location.TargetingStateHolder
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.gpx.GpxExporter
+import com.boldexplorer.shared.location.LocationProvider
 import com.boldexplorer.shared.model.Collection
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.Waypoint
@@ -41,7 +41,7 @@ class TrailsViewModel
         private val collectionRepo: CollectionRepository,
         private val targetingStateHolder: TargetingStateHolder,
         private val selectedCollectionHolder: SelectedCollectionHolder,
-        locationProvider: FusedLocationProviderImpl,
+        locationProvider: LocationProvider,
     ) : ViewModel() {
         // Current fix, used to decide which trail end is nearest for the end-proximity actions.
         val currentLocation: StateFlow<LatLng?> =

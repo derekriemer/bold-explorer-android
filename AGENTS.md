@@ -29,7 +29,37 @@ Run a single test class:
 
 ### Build variants
 
-| Variant | `SHOW_DEBUG_FEATURES` | Debug tab | Coordinates in logs | Signing |
+Two orthogonal dimensions — **distribution flavor** × **build type** — giving 6 total variants
+(`googleDebug`, `googleBeta`, `googleRelease`, `fossDebug`, `fossBeta`, `fossRelease`).
+
+**Distribution flavors**
+
+| Flavor | Location provider | Google Play Services in APK | applicationId |
+|--------|-------------------|------------------------------|----------------|
+| `google` (default) | Fused + GNSS, switchable via the Debug screen's "Raw GNSS" toggle | Yes (`play-services-location`) | `com.boldexplorer` |
+| `foss` | GNSS only (`LocationManager.GPS_PROVIDER`, pure AOSP) | No — absent from the classpath, not just unused | `com.boldexplorer.foss` |
+
+`foss` exists for F-Droid, which requires no proprietary SDK compiled into the APK — not merely
+"unused at runtime." `FusedLocationProviderImpl` and the `play-services-location` dependency are
+scoped out entirely via `app/src/google/kotlin` vs `app/src/foss/kotlin` source sets and
+`"googleImplementation"(libs.play.services.location)` in `app/build.gradle.kts` — see
+`app/src/{google,foss}/kotlin/com/boldexplorer/location/LocationProviderRouter.kt` (same public
+API in both flavors, so nothing else in the app needs to know which one is active). In `foss`
+builds the Debug screen's "Raw GNSS" switch always shows on and toggling it is a no-op (there's
+nothing else to switch to). Verify the split actually holds:
+```bash
+./gradlew :app:dependencies --configuration fossReleaseRuntimeClasspath | grep -i "play-services"
+# expect no output — compare against googleReleaseRuntimeClasspath, which shows the dependency
+```
+`foss` has a distinct `applicationId` (not shared with `google`) because F-Droid always re-signs
+with its own key — a shared ID couldn't be installed alongside a Play/beta-signed build anyway
+(signature mismatch), and a distinct ID lets both be side-loaded on one device for comparison
+testing. Hilt and KSP are Google-published but open-source (Apache-2.0) *build tooling*, not
+runtime SDKs — they need no flavor scoping and aren't an F-Droid concern.
+
+**Build types** (unchanged, orthogonal to the flavor above)
+
+| Build type | `SHOW_DEBUG_FEATURES` | Debug tab | Coordinates in logs | Signing |
 |---------|-----------------------|-----------|---------------------|---------|
 | `debug` | `true` | ✓ | ✓ | debug key |
 | `beta`  | `true` | ✓ | ✓ | release key |
@@ -44,15 +74,19 @@ Run a single test class:
 ### Building each variant
 
 ```bash
-# Debug (sideload for dev)
-make assemble          # → app/build/outputs/apk/debug/app-debug.apk
+# Google flavor (default — Fused+GNSS, switchable)
+make assemble          # → app/build/outputs/apk/google/debug/app-google-debug.apk
 make install           # build + push to connected device in one step
 
-# Beta (for distribution / testing)
-make assemble-beta     # → app/build/outputs/apk/beta/app-beta.apk
+make assemble-beta     # → app/build/outputs/apk/google/beta/app-google-beta.apk
+make assemble-release  # → app/build/outputs/apk/google/release/app-google-release-unsigned.apk
 
-# Release (production)
-make assemble-release  # → app/build/outputs/apk/release/app-release-unsigned.apk
+# FOSS flavor (GNSS-only, no Google Play Services — for F-Droid)
+make assemble-foss         # → app/build/outputs/apk/foss/debug/app-foss-debug.apk
+make install-foss          # build + push to connected device in one step
+make assemble-foss-beta    # → app/build/outputs/apk/foss/beta/app-foss-beta.apk
+make assemble-foss-release # → app/build/outputs/apk/foss/release/app-foss-release-unsigned.apk
+make check-foss            # compile-only check that the foss flavor still builds (used by CI)
 ```
 
 ### Signing setup (required for beta + release)
@@ -100,13 +134,13 @@ Keep `boldexplorer.jks` and `keystore.properties` out of version control. Back u
 
 ### F-Droid
 
-F-Droid builds from source, so the signing setup above is not needed for the F-Droid track (they sign with their own key). What F-Droid requires:
+F-Droid builds from source, so the signing setup above is not needed for the F-Droid track (they sign with their own key). The `foss` product flavor (see "Distribution flavors" above) is what actually gets built — `:app:assembleFossRelease` — with zero Google Play Services compiled in. What F-Droid requires:
 
 - A public Git repo
-- A reproducible build (standard Gradle, no proprietary SDKs in the build path — play-services-location is a dependency but is only used at runtime and can be replaced with a pure GNSS provider for a fully FOSS build)
-- A metadata file in their `fdroiddata` repo describing the build recipe
+- A reproducible build (standard Gradle, no proprietary SDKs in the build path — satisfied by the `foss` flavor; verify with the `fossReleaseRuntimeClasspath` check above)
+- A metadata file in their `fdroiddata` repo describing the build recipe (flavor `foss`, no `gradleProps` overrides needed)
 
-For now the `beta` APK can be distributed directly (shared as a file, or via a self-hosted F-Droid repo) before the app is accepted into the main F-Droid catalog.
+For now the `google`-flavor `beta` APK can be distributed directly (shared as a file, or via a self-hosted F-Droid repo) before the `foss` flavor is submitted to and accepted into the main F-Droid catalog.
 
 ## Architecture
 
@@ -114,7 +148,7 @@ For now the `beta` APK can be distributed directly (shared as a file, or via a s
 
 `:shared` — pure Kotlin, zero Android or iOS deps. Targets `jvm` (for fast local tests), `androidTarget`, `iosArm64`, `iosSimulatorArm64`, and `iosX64`. All algorithms, state machines, domain models, and repository interfaces live here. Tests run on the JVM without an emulator. The iOS artifact is `BoldExplorerShared.xcframework` (built via `make xcframework` on macOS).
 
-`:app` — Android-only. Consumes `:shared`. Contains all Android API usage: SQLDelight driver, FusedLocationProvider, SensorManager, AudioTrack, TextToSpeech, DataStore, Hilt DI, Jetpack Compose UI.
+`:app` — Android-only. Consumes `:shared`. Contains all Android API usage: SQLDelight driver, location providers (`FusedLocationProviderImpl`, `google` flavor only; `GnssLocationProviderImpl`, both flavors — see "Distribution flavors" above), SensorManager, AudioTrack, TextToSpeech, DataStore, Hilt DI, Jetpack Compose UI.
 
 ### Original Vue/Capacitor source as reference
 
