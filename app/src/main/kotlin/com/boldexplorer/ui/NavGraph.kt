@@ -104,7 +104,7 @@ fun NavGraph() {
                         .size(1.dp)
                         .alpha(0f)
                         .semantics {
-                            liveRegion = LiveRegionMode.Assertive
+                            liveRegion = LiveRegionMode.Polite
                             // a11y: TalkBack doesn't reliably re-announce on `text` alone for this
                             // live-region node; contentDescription is the actual delivery mechanism.
                             // announcement carries a sequence number (see LiveRegionAnnouncement)
