@@ -10,6 +10,7 @@ import com.boldexplorer.audio.AudioEventLog
 import com.boldexplorer.audio.AudioLogEntry
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.haversineDistanceMeters
+import com.boldexplorer.shared.location.AccuracyGate
 import com.boldexplorer.shared.location.LocationProvider
 import com.boldexplorer.shared.model.LocationSample
 import com.google.android.gms.location.LocationCallback
@@ -55,6 +56,12 @@ class FusedLocationProviderImpl
         val lastRawFix: StateFlow<RawFixEvent?> = _lastRawFix.asStateFlow()
         private var consecutiveDiscards = 0
 
+        // Issue #23: movement-relative gate replaces the old flat FOREGROUND_ACCURACY_M ceiling
+        // while in the foreground — see AccuracyGate for why. Background mode keeps the simple
+        // flat check against BACKGROUND_ACCURACY_M unchanged.
+        private val accuracyGate =
+            AccuracyGate(baseAccuracyM = FOREGROUND_ACCURACY_M, absoluteCeilingM = BACKGROUND_ACCURACY_M)
+
         // Port of locationStream.ts gating logic:
         //   accuracy gate → interval gate → distance gate
         // WhileSubscribed: upstream GPS runs only while there is at least one collector.
@@ -85,9 +92,19 @@ class FusedLocationProviderImpl
                 fusedClient.requestLocationUpdates(request, callback, Looper.getMainLooper())
                 awaitClose { fusedClient.removeLocationUpdates(callback) }
             }.combine(_backgroundMode) { loc, bg ->
-                val limit = if (bg) BACKGROUND_ACCURACY_M else FOREGROUND_ACCURACY_M
-                // Accuracy is 0 when unavailable on some devices; treat <=0 as acceptable
-                val accepted = loc.accuracy <= 0f || loc.accuracy <= limit
+                // Accuracy is 0 when unavailable on some devices; treat <=0 as acceptable.
+                val accepted =
+                    if (bg) {
+                        loc.accuracy <= 0f || loc.accuracy <= BACKGROUND_ACCURACY_M
+                    } else {
+                        accuracyGate.evaluate(
+                            accuracyM = loc.accuracy,
+                            timestampMs = loc.time,
+                            speedMps = if (loc.hasSpeed()) loc.speed else null,
+                            lat = loc.latitude,
+                            lon = loc.longitude,
+                        )
+                    }
                 recordRawFix(loc.accuracy, loc.provider ?: "fused", accepted)
                 if (accepted) loc else null
             }.filterNotNull()

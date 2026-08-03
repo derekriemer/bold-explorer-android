@@ -380,11 +380,14 @@ private fun TelemetryCard(
                         state.bearingDeg?.let { "${BearingComputer.toCardinal(it)} (${"%.0f".format(it)}°)" } ?: "—"
                     }
                 }
-            TelemetryRow(label = bearingLabel, value = directionText)
+            // #23: bearingDeg/distanceM freeze on the last accepted GPS fix when new fixes stop
+            // arriving; hedge instead of silently repeating a frozen number as if it were live.
+            val staleSuffix = if (state.locationStale) " (GPS signal weak, may be outdated)" else ""
+            TelemetryRow(label = bearingLabel, value = if (directionText != "—") directionText + staleSuffix else directionText)
 
             val distText =
                 state.distanceM?.let {
-                    BearingComputer.formatDistance(it, state.settings.units)
+                    BearingComputer.formatDistance(it, state.settings.units) + staleSuffix
                 } ?: "—"
             TelemetryRow(label = "Distance to target", value = distText)
 

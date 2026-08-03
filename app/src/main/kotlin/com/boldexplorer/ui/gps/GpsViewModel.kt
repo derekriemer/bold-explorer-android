@@ -28,6 +28,7 @@ import com.boldexplorer.shared.geo.distanceToSegmentMeters
 import com.boldexplorer.shared.geo.haversineDistanceMeters
 import com.boldexplorer.shared.geo.segmentFraction
 import com.boldexplorer.shared.location.LocationProvider
+import com.boldexplorer.shared.location.isLocationStale
 import com.boldexplorer.shared.model.Collection
 import com.boldexplorer.shared.model.LocationSample
 import com.boldexplorer.shared.model.Trail
@@ -69,6 +70,7 @@ import com.boldexplorer.shared.settings.Units
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -78,6 +80,7 @@ import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapLatest
@@ -112,6 +115,7 @@ data class GpsUiState(
     val bearingDeg: Double? = null,
     val distanceM: Double? = null,
     val relativeDeg: Double? = null,
+    val locationStale: Boolean = false,
     val alignmentActive: Boolean = false,
     val alignmentBearingDeg: Double? = null,
     val alignmentRelativeDeg: Double? = null,
@@ -264,6 +268,7 @@ private data class BearingGroup(
     val distanceM: Double?,
     val relativeDeg: Double?,
     val alignmentActive: Boolean,
+    val locationStale: Boolean = false,
 )
 
 private data class AudioAlignmentGroup(
@@ -325,6 +330,21 @@ class GpsViewModel
         val location =
             locationProvider.locationFlow
                 .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
+
+        // Issue #23: distance/bearing derived from `location` freeze when fixes stop arriving, but
+        // nothing re-checks the clock on its own — a ticker is required so staleness can flip true
+        // even without a new fix, instead of only ever being noticed retroactively once one arrives.
+        val locationStale: StateFlow<Boolean> =
+            combine(
+                location,
+                flow {
+                    while (true) {
+                        emit(Unit)
+                        delay(1_000L)
+                    }
+                },
+            ) { loc, _ -> isLocationStale(System.currentTimeMillis(), loc?.timestamp) }
+                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), false)
 
         // Compass heading — always driven by the sensor, never GPS course.
         val headingDeg: StateFlow<Double?> =
@@ -621,10 +641,12 @@ class GpsViewModel
                 combine(alignmentActive, trailFollowState, trailGuidance) { aa, fs, guidance ->
                     Triple(aa, fs is TrailFollowerState.Active, guidance)
                 },
-            ) { group, (aa, trailActive, guidance) ->
+                locationStale,
+            ) { group, (aa, trailActive, guidance), stale ->
                 group.copy(
                     relativeDeg = if (trailActive) guidance?.relativeDeg else group.relativeDeg,
                     alignmentActive = aa,
+                    locationStale = stale,
                 )
             }
         private val interactionGroup =
@@ -668,6 +690,7 @@ class GpsViewModel
                     bearingDeg = bear.bearingDeg,
                     distanceM = bear.distanceM,
                     relativeDeg = bear.relativeDeg,
+                    locationStale = bear.locationStale,
                     alignmentActive = bear.alignmentActive,
                     alignmentBearingDeg = inter.alignmentBearingDeg,
                     alignmentRelativeDeg = inter.alignmentRelativeDeg,

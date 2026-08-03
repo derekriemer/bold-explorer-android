@@ -7,6 +7,7 @@ import android.media.AudioManager
 import com.boldexplorer.BuildConfig
 import com.boldexplorer.shared.audio.AudioCueEvent
 import com.boldexplorer.shared.audio.AudioCueScheduler
+import com.boldexplorer.shared.location.isLocationStale
 import com.boldexplorer.shared.model.LocationSample
 import com.boldexplorer.shared.navigation.SmoothedHeading
 import com.boldexplorer.shared.navigation.TrailGuidanceState
@@ -134,7 +135,13 @@ class AudioCuePlayer
 
             when (event) {
                 is AudioCueEvent.DirectionalBeacon -> {
-                    if (!silenced) audioEngine.playDirectionalBeacon(event.pan, event.pitchHz)
+                    // Issue #23: the beacon is driven by relativeDeg, which keeps changing with
+                    // heading even when the underlying GPS fix (and thus the absolute bearing to
+                    // target) is stale — so a live-sounding beacon over a frozen number gives a
+                    // false impression of live tracking. Go silent instead of playing a
+                    // confidently-wrong tone.
+                    val stale = isLocationStale(nowMs, loc?.timestamp)
+                    if (!silenced && !stale) audioEngine.playDirectionalBeacon(event.pan, event.pitchHz)
                     scope.launch {
                         val courseIsSmoothed = guidance?.courseIsSmoothed ?: false
                         val extra =
@@ -174,10 +181,14 @@ class AudioCuePlayer
                                     }.trimStart(',', ' '),
                                 outputs = "pan=${"%.3f".format(event.pan)}, pitchHz=${"%.0f".format(event.pitchHz)} Hz",
                                 played =
-                                    if (silenced) {
-                                        "Suppressed (silence mode): tone @ ${"%.0f".format(event.pitchHz)} Hz"
-                                    } else {
-                                        "Tone @ ${"%.0f".format(event.pitchHz)} Hz"
+                                    when {
+                                        stale -> {
+                                            val ageMs = loc?.let { nowMs - it.timestamp }
+                                            "Suppressed (stale GPS fix${ageMs?.let { ", ${it}ms old" } ?: ""}): " +
+                                                "tone @ ${"%.0f".format(event.pitchHz)} Hz"
+                                        }
+                                        silenced -> "Suppressed (silence mode): tone @ ${"%.0f".format(event.pitchHz)} Hz"
+                                        else -> "Tone @ ${"%.0f".format(event.pitchHz)} Hz"
                                     },
                                 extra = extra,
                             ),
