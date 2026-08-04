@@ -312,6 +312,34 @@ class CollectionExplorerTest {
         assertEquals(farTarget.id, state.target?.id)
     }
 
+    @Test
+    fun nearbyPoint_firesWithNoTargetSelected_autoAdvanceOff() {
+        val explorer = CollectionExplorer()
+        val far = point(1, "Far", lat = 0.005, lon = 0.0)
+        val nearby = point(2, "Nearby", lat = 0.0001, lon = 0.0)
+        explorer.load(listOf(far, nearby), autoAdvance = false)
+        // No selectTarget(): auto-advance is off, so target stays null — the scan must still run.
+
+        val event = explorer.onLocationUpdate(home)
+
+        assertIs<CollectionExplorerEvent.NearbyPoint>(event)
+        assertEquals(nearby.id, event.point.id)
+        assertNull((explorer.state.value as CollectionExplorerState.Active).target)
+    }
+
+    @Test
+    fun nearbyPoint_withNoTarget_stillFiresOnlyOncePerPoint() {
+        val explorer = CollectionExplorer()
+        val nearby = point(1, "Nearby", lat = 0.0001, lon = 0.0)
+        explorer.load(listOf(nearby), autoAdvance = false)
+
+        val first = explorer.onLocationUpdate(home)
+        assertIs<CollectionExplorerEvent.NearbyPoint>(first)
+
+        val second = explorer.onLocationUpdate(home)
+        assertNull(second)
+    }
+
     private fun point(
         id: Long,
         name: String,

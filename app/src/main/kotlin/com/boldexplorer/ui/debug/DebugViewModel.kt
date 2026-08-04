@@ -8,6 +8,7 @@ import com.boldexplorer.audio.AudioEventLog
 import com.boldexplorer.audio.AudioLogEntry
 import com.boldexplorer.compass.SensorCompassProvider
 import com.boldexplorer.gpx.GpxFileWriter
+import com.boldexplorer.location.AccuracyHapticMonitor
 import com.boldexplorer.location.LocationProviderRouter
 import com.boldexplorer.location.RawFixEvent
 import com.boldexplorer.shared.audio.AudioCueScheduler
@@ -38,6 +39,7 @@ class DebugViewModel
         private val audioEngine: AudioEngine,
         private val scheduler: AudioCueScheduler,
         private val audioEventLog: AudioEventLog,
+        private val hapticMonitor: AccuracyHapticMonitor,
     ) : ViewModel() {
         val location: StateFlow<LocationSample?> =
             locationRouter.locationFlow
@@ -57,6 +59,11 @@ class DebugViewModel
 
         /** Raw-fix telemetry (issue #23) — updates on every fix, accepted or accuracy-gate-dropped. */
         val lastRawFix: StateFlow<RawFixEvent?> = locationRouter.lastRawFix
+
+        /** App-scoped so it keeps buzzing on whichever screen is open, not just this one. */
+        val accuracyHapticsEnabled: StateFlow<Boolean> = hapticMonitor.enabled
+
+        fun setAccuracyHapticsEnabled(enabled: Boolean) = hapticMonitor.setEnabled(enabled)
 
         // ── Audio log ─────────────────────────────────────────────────────────────────
 

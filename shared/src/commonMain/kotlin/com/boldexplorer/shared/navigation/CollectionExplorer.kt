@@ -193,8 +193,22 @@ class CollectionExplorer {
             }
 
         if (target == null) {
-            _state.value = s.copy(points = sorted, target = null, nearTrailEndM = null)
-            return null
+            // No target selected (manual or auto-advance) — still worth scanning for nearby
+            // points. The proximity scan is about points *other than* the target, so it
+            // shouldn't require one to exist; this is what lets NearbyPoint fire while just
+            // walking around with nothing picked, or trail-following without a synced explorer
+            // target (issue filed 2026-08-04).
+            val nearby = proximityCheck(sorted, excludeId = null, s, location)
+            _state.value =
+                s.copy(
+                    points = sorted,
+                    target = null,
+                    nearTrailEndM = null,
+                    proximityAnnouncedIds = if (nearby != null) s.proximityAnnouncedIds + nearby.id else s.proximityAnnouncedIds,
+                )
+            return nearby?.let {
+                CollectionExplorerEvent.NearbyPoint(it, haversineDistanceMeters(location, LatLng(it.waypoint.lat, it.waypoint.lon)))
+            }
         }
 
         val distToTarget =
@@ -208,7 +222,7 @@ class CollectionExplorer {
         if (target is CollectionPoint.TrailEnd) {
             val near = distToTarget <= TRAIL_APPROACH_M
             val nearTrailEndM: Double? = if (near) distToTarget else null
-            val nearby = proximityCheck(sorted, target, s, location)
+            val nearby = proximityCheck(sorted, target.id, s, location)
             _state.value =
                 s.copy(
                     points = sorted,
@@ -254,7 +268,7 @@ class CollectionExplorer {
         }
 
         // Proximity scan: announce unvisited non-target points within PROXIMITY_M once per session.
-        val nearby = proximityCheck(sorted, target, s, location)
+        val nearby = proximityCheck(sorted, target.id, s, location)
         _state.value =
             s.copy(
                 points = sorted,
@@ -272,12 +286,12 @@ class CollectionExplorer {
 
     private fun proximityCheck(
         sorted: List<CollectionPoint>,
-        target: CollectionPoint,
+        excludeId: Long?,
         s: CollectionExplorerState.Active,
         location: LatLng,
     ): CollectionPoint? =
         sorted.firstOrNull { p ->
-            p.id != target.id &&
+            p.id != excludeId &&
                 p.id !in s.visitedIds &&
                 p.id !in s.proximityAnnouncedIds &&
                 haversineDistanceMeters(location, LatLng(p.waypoint.lat, p.waypoint.lon)) <= PROXIMITY_M

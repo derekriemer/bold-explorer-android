@@ -56,6 +56,7 @@ fun DebugScreen(
     val logStatus by viewModel.logStatus.collectAsStateWithLifecycle()
     val showMarkerDialog by viewModel.showMarkerDialog.collectAsStateWithLifecycle()
     val lastRawFix by viewModel.lastRawFix.collectAsStateWithLifecycle()
+    val accuracyHapticsEnabled by viewModel.accuracyHapticsEnabled.collectAsStateWithLifecycle()
 
     // Ticks so the "Ns ago" fix-age text (below) keeps advancing even when no new fix arrives —
     // that stalling *is* the signal for issue #23, so it must be visible live, not just on the
@@ -145,6 +146,32 @@ fun DebugScreen(
                     Switch(
                         checked = useGnss,
                         onCheckedChange = { viewModel.setUseGnss(it) },
+                    )
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                // Debug diagnostic for #23: keeps buzzing on whichever screen is open (unlike
+                // reading this Debug screen, which was itself suspected of masking the freeze by
+                // forcing a recomposition when you switch to it and back).
+                Row(
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .semantics(mergeDescendants = true) {
+                                // a11y: explains the buzz pattern, which the visible label + switch
+                                // alone don't convey.
+                                contentDescription =
+                                    "Accuracy haptics ${if (accuracyHapticsEnabled) "on" else "off"}: " +
+                                        "every 5 seconds, one buzz if fixes were accepted, three quick " +
+                                        "buzzes if any were discarded"
+                            },
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("Accuracy haptics", style = MaterialTheme.typography.bodyMedium)
+                    Switch(
+                        checked = accuracyHapticsEnabled,
+                        onCheckedChange = { viewModel.setAccuracyHapticsEnabled(it) },
                     )
                 }
             }
