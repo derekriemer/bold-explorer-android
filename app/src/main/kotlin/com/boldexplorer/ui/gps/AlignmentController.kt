@@ -50,9 +50,16 @@ class AlignmentController(
             }
         }.stateIn(scope, SharingStarted.WhileSubscribed(5_000L), null)
 
-    /** Activate alignment, seeding the target bearing from the current heading when unset. */
+    /**
+     * Activate alignment, seeding the target bearing from the current heading when unset.
+     *
+     * Order matters here: keep whatever bearing is already set (e.g. just set by [alignToTarget]
+     * or a prior session) and only fall back to the live heading if there is none yet. The reverse
+     * order previously clobbered a bearing set immediately beforehand — see [alignToTarget]'s
+     * caller in GpsViewModel, which calls this right after setting the target bearing.
+     */
     fun start() {
-        _bearingDeg.value = headingDeg.value ?: _bearingDeg.value ?: 0.0
+        _bearingDeg.value = _bearingDeg.value ?: headingDeg.value ?: 0.0
         _active.value = true
     }
 
