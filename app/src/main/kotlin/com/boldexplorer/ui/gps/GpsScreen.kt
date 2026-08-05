@@ -383,7 +383,24 @@ private fun TelemetryCard(
             // #23: bearingDeg/distanceM freeze on the last accepted GPS fix when new fixes stop
             // arriving; hedge instead of silently repeating a frozen number as if it were live.
             val staleSuffix = if (state.locationStale) " (GPS signal weak, may be outdated)" else ""
-            TelemetryRow(label = bearingLabel, value = if (directionText != "—") directionText + staleSuffix else directionText)
+            TelemetryRow(
+                label = bearingLabel,
+                value = if (directionText != "—") directionText + staleSuffix else directionText,
+                // #37: on the row's own merged node (like "Open alignment" on Heading above) rather
+                // than the Card's customActions, which sits beside several already-merged rows and
+                // isn't reliably reachable as its own TalkBack stop.
+                customActions =
+                    if ((state.collectionExplorerState as? CollectionExplorerState.Active)?.target != null) {
+                        listOf(
+                            CustomAccessibilityAction("Clear waypoint target") {
+                                onAction(GpsAction.ClearCollectionTarget)
+                                true
+                            },
+                        )
+                    } else {
+                        emptyList()
+                    },
+            )
 
             val distText =
                 state.distanceM?.let {
