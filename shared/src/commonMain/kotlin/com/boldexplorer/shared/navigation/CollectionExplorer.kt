@@ -50,6 +50,11 @@ sealed class CollectionExplorerState {
         val autoAdvance: Boolean, // when on, the system picks/re-picks a target whenever there isn't one
         val nearTrailEndM: Double?, // distance to target if it's a TrailEnd, else null
         val proximityAnnouncedIds: Set<Long> = emptySet(), // points already proximity-announced this session
+        // Id of the standalone waypoint PointReached last fired for, so lingering near an
+        // already-reached target doesn't re-announce it every fix (issue #8). Separate from
+        // visitedIds, which is permanent for the session: this resets on selectTarget/clearTarget
+        // so manually re-targeting an already-visited point can still fire a fresh reach event.
+        val lastReachedId: Long? = null,
     ) : CollectionExplorerState()
 }
 
@@ -115,6 +120,7 @@ class CollectionExplorer {
                 autoAdvance = autoAdvance,
                 nearTrailEndM = null, // recomputed on the next GPS fix against the (possibly new) target
                 proximityAnnouncedIds = previous?.proximityAnnouncedIds?.filter { it in byId }?.toSet() ?: emptySet(),
+                lastReachedId = previous?.lastReachedId?.takeIf { it in byId },
             )
     }
 
@@ -124,19 +130,23 @@ class CollectionExplorer {
 
     fun setAutoAdvance(enabled: Boolean) {
         val s = _state.value as? CollectionExplorerState.Active ?: return
-        _state.value = s.copy(autoAdvance = enabled)
+        // Turning auto-advance on while lingering at an already-reached target (issue #8) should
+        // resume the tour, not get stuck re-targeting a point that's already been visited —
+        // release it so the top-of-fix auto-select picks the next unvisited point instead.
+        val target = if (enabled && s.target?.id == s.lastReachedId) null else s.target
+        _state.value = s.copy(autoAdvance = enabled, target = target)
     }
 
     /** User explicitly selected a target from the list. */
     fun selectTarget(point: CollectionPoint) {
         val s = _state.value as? CollectionExplorerState.Active ?: return
-        _state.value = s.copy(target = point, nearTrailEndM = null)
+        _state.value = s.copy(target = point, nearTrailEndM = null, lastReachedId = null)
     }
 
     /** Clear the current target — no target, no auto-pick, silence until the next GPS fix decides otherwise. */
     fun clearTarget() {
         val s = _state.value as? CollectionExplorerState.Active ?: return
-        _state.value = s.copy(target = null, nearTrailEndM = null)
+        _state.value = s.copy(target = null, nearTrailEndM = null, lastReachedId = null)
     }
 
     /** Reset visited queue (useful to re-tour in auto-advance mode). */
@@ -148,6 +158,7 @@ class CollectionExplorer {
                 target = null,
                 nearTrailEndM = null,
                 proximityAnnouncedIds = emptySet(),
+                lastReachedId = null,
             )
     }
 
@@ -248,23 +259,27 @@ class CollectionExplorer {
             }
         }
 
-        // Standalone waypoint: check reach threshold.
+        // Standalone waypoint: check reach threshold. Fires PointReached once per fresh reach
+        // (lastReachedId guards re-firing while lingering); the target itself now stays selected
+        // instead of going null, so bearing/distance keep resolving for the final approach —
+        // issue #8. Auto-advance still moves on immediately, since lingering isn't the point of a
+        // self-guided tour.
         val nearTrailEndM: Double? = null
-        if (distToTarget <= REACH_THRESHOLD_M) {
+        if (distToTarget <= REACH_THRESHOLD_M && target.id != s.lastReachedId) {
             val newVisited = (s.visitedIds + target.id).takeLast(VISITED_CAP)
 
-            // Auto-advance: immediately pick the next nearest unvisited; otherwise fall silent.
-            val nextTarget =
+            val autoNext =
                 if (s.autoAdvance) selectAutomaticTarget(sorted, newVisited, location, travelHeadingDeg) else null
 
             _state.value =
                 s.copy(
                     points = sorted,
-                    target = nextTarget,
+                    target = autoNext ?: target,
                     visitedIds = newVisited,
                     nearTrailEndM = null,
+                    lastReachedId = target.id,
                 )
-            return CollectionExplorerEvent.PointReached(target, nextTarget)
+            return CollectionExplorerEvent.PointReached(target, autoNext)
         }
 
         // Proximity scan: announce unvisited non-target points within PROXIMITY_M once per session.

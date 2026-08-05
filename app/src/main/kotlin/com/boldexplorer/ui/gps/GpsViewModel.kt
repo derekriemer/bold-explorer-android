@@ -1372,7 +1372,9 @@ class GpsViewModel
                             } else if ((collectionExplorer.state.value as? CollectionExplorerState.Active)?.autoAdvance ==
                                 false
                             ) {
-                                append(" Choose another target.")
+                                // Issue #8: target stays selected on reach, not cleared — reflect that
+                                // instead of implying the user must pick something before it works again.
+                                append(" Still targeting it.")
                             } else {
                                 append(" No more unvisited points.")
                             }

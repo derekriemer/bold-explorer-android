@@ -78,7 +78,10 @@ class CollectionExplorerTest {
     }
 
     @Test
-    fun reachedTarget_withExploreOff_pausesInsteadOfPickingAnotherTarget() {
+    fun reachedTarget_withAutoAdvanceOff_keepsTargetingSamePoint() {
+        // Issue #8: reaching a manually-targeted waypoint must not clear it — the user may still
+        // want to close the last stretch of distance, and only an explicit clear/re-select should
+        // change the target.
         val explorer = CollectionExplorer()
         explorer.load(listOf(north, east), autoAdvance = false)
         explorer.selectTarget(north)
@@ -86,15 +89,34 @@ class CollectionExplorerTest {
         val event = explorer.onLocationUpdate(LatLng(north.waypoint.lat, north.waypoint.lon))
 
         assertIs<CollectionExplorerEvent.PointReached>(event)
-        assertNull(event.next)
+        assertNull(event.next) // no auto-pick happened — but the state still targets `north`, below.
 
         val reachedState = explorer.state.value as CollectionExplorerState.Active
-        assertNull(reachedState.target)
+        assertEquals(north.id, reachedState.target?.id)
 
+        // Lingering at the same spot must not re-fire PointReached every fix.
+        val second = explorer.onLocationUpdate(LatLng(north.waypoint.lat, north.waypoint.lon))
+        assertNull(second)
+
+        // Walking away doesn't clear it either — only an explicit clear/re-select does.
         explorer.onLocationUpdate(home)
-
         val laterState = explorer.state.value as CollectionExplorerState.Active
-        assertNull(laterState.target)
+        assertEquals(north.id, laterState.target?.id)
+    }
+
+    @Test
+    fun reachedTarget_reselectingSamePointAfterClear_firesAgain() {
+        val explorer = CollectionExplorer()
+        explorer.load(listOf(north, east), autoAdvance = false)
+        explorer.selectTarget(north)
+        explorer.onLocationUpdate(LatLng(north.waypoint.lat, north.waypoint.lon))
+
+        explorer.clearTarget()
+        explorer.selectTarget(north)
+        val event = explorer.onLocationUpdate(LatLng(north.waypoint.lat, north.waypoint.lon))
+
+        assertIs<CollectionExplorerEvent.PointReached>(event)
+        assertEquals(north.id, event.reached.id)
     }
 
     @Test
