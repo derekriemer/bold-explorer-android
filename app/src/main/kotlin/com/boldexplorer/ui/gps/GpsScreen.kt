@@ -249,6 +249,7 @@ fun GpsScreen(
                 selectedCollectionId = state.selectedCollectionId,
                 settings = state.settings,
                 location = state.location,
+                locationStale = state.locationStale,
                 nearbyTrails = nearbyTrails,
                 selectedTrailId = state.selectedTrailId,
                 onAction = onAction,
@@ -443,6 +444,7 @@ private fun CollectionTargetList(
     selectedCollectionId: Long?,
     settings: AppSettings,
     location: LocationSample?,
+    locationStale: Boolean,
     nearbyTrails: List<Trail>,
     selectedTrailId: Long?,
     onAction: (GpsAction) -> Unit,
@@ -462,7 +464,11 @@ private fun CollectionTargetList(
                         LatLng(loc.lat, loc.lon),
                         LatLng(point.waypoint.lat, point.waypoint.lon),
                     )
-                BearingComputer.formatDistance(dist, settings.units)
+                // #23: this distance is computed straight from the last accepted fix, same as the
+                // telemetry card's "Distance to target" — hedge it the same way instead of showing
+                // a plausible-looking but potentially stale/wrong number with no indication.
+                val suffix = if (locationStale) " (GPS signal weak, may be outdated)" else ""
+                BearingComputer.formatDistance(dist, settings.units) + suffix
             }
         return if (distStr != null) "$baseName — $distStr" else baseName
     }
