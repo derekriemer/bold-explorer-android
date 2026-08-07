@@ -200,13 +200,14 @@ with a floor and no upper cap: `max(15, 2 * accuracy)` (`NavModeResolver.kt:138-
 reported "about 30 m" early completion is not a constant: `TrailFollower`'s projection branch
 completes when the user is 90 percent along the final segment and within `4 x threshold` (60 m)
 (`TrailFollower.kt:184-202`), so a 300 m final leg completes at 30 m out. The divergence branch
-cannot fire on the last waypoint, so it is not the cause.
+cannot fire on the last waypoint, so it is not the cause. We need to fix this before IOS. Note that the user was testing trails with the typical segment length from recorded trails. ~65 FT was about when I see "trail complete" at the high end.
 
 **Tests.** `shared/src/commonTest/kotlin/com/boldexplorer/shared/navigation/TrailFollowerTest.kt`,
 `TrailGuidanceTest.kt`, `TrailGuidanceCoordinatorTest.kt`, `CollectionExplorerTest.kt`,
 `NearbyTrailResolverTest.kt`, `NavigationTargetResolverTest.kt`, `GpsHeadingSmootherTest.kt`.
 
 **Tracker.** #55 (new); #35, #23 (pre-existing, cross-linked).
+Note: We need not tune the thresholds before the major IOS push. We simply must centralize things so both apps get the same thresholds.
 
 ### 1.7 Skipped waypoints and re-entry
 
@@ -313,7 +314,7 @@ Exit criteria:
 - Completion no longer depends on an unbounded fraction of the final segment.
 - Every accuracy-scaled gate has an upper cap.
 - Off-trail consults cross-track distance, not only the angle to a possibly stale target.
-- Re-entry after a 30-point skip advances progress within a bounded confirmation window, verified
+- Re-entry after a n-point skip advances progress within a bounded confirmation window, verified
   against recorded field logs and synthetic fixtures.
 
 ### Phase C: shared state correction
@@ -491,6 +492,7 @@ Enable "Don't keep activities", then repeat M3's four cases plus alignment activ
 either preserved or safely refused; no recording resumes into an unknown trail.
 
 **M5 - field diagnostics for thresholds.**
+ This will be defered until after the IOS push once centralized.
 Walk the same route under open sky, tree cover, an urban edge, and at slow walking pace. Export the
 session JSONL each time (see the audio log format in AGENTS.md) and check that every
 nearby/acceptance/advance/completion decision carries the section 6 fields.
