@@ -14,3 +14,7 @@ android-sdk/
 a.txt
 *.sqlite
 
+# Stray files that were once committed by accident
+kls_database.db
+new.txt
+old.txt
