@@ -332,6 +332,10 @@ Both are free-form `key=value, key=value` strings. Common fields in `DIRECTIONAL
 - Before committing, run `jj diff` and confirm the change matches the intended scope. If unrelated changes crept in, split them with `jj split` before committing.
 - Do not bundle unrelated fixes or features into a single commit even if they are small.
 - If work spans multiple phases of a plan, each phase gets its own commit unless a phase is trivially small (e.g. a one-line config change directly enabling the next phase — squash that in).
+- When you finish planning in plan mode, always write the final plan to docs/adr/NNNN-short-title.md in this repo (not just the scratch plan file), using the next available ADR number, before calling ExitPlanMode. This way, we track the history of projects we are working on for durability.
+- use docs/plans/... for large  scale refactors or major features, only when I ask for such design. Example of such features may include the actual redesign of the app's fast follows list before IOS push, the overall architecture of the IOS design, etc.
+
+
 
 
 ### Version control

@@ -566,11 +566,37 @@ Not required before the iOS push:
 
 ## Open questions
 
-1. **Swipe-away policy (blocking for #54).** Which of the four candidate policies is intended?
-   The code currently implements none of them deliberately. Recommendation: navigation and
-   recording survive removal from recents only when the user explicitly started a foreground
-   session, debug-only outputs always stop, and the notification always carries a stop action.
-   This is a product decision and should be confirmed before #54 is implemented.
+1. **Swipe-away policy (DECIDED 2026-08-07, was blocking for #54).** Persist explicit sessions
+   only. Navigation and recording survive removal from recents if and only if the user
+   deliberately started them; debug-only outputs always stop; the notification always names the
+   live session and carries a stop action.
+
+   Rationale: an accidental swipe is a realistic TalkBack gesture outcome in the field, and both
+   failure modes it guards against are severe — losing an in-progress recording means re-walking
+   the trail, and losing guidance mid-hike is a safety issue. Unbounded persistence was rejected
+   because invisible battery drain while navigating is its own safety issue; the notification's
+   honesty requirement is what makes persistence acceptable.
+
+   Implementation consequences, from reading the code at `f845bc8`:
+
+   - `GpsBackgroundSessionState.activeModes` is already the "user explicitly started this"
+     signal, since it is only mutated by deliberate actions in `GpsViewModel`. The policy needs
+     no new state, only an owner for clearing it.
+   - `ACTION_STOP` is gated on `!needsForegroundService` (`LocationForegroundService.kt:57`), so
+     while any mode is registered the stop path is unreachable. The notification's stop action
+     must bypass this gate: an explicit user stop clears the modes rather than being refused by
+     them.
+   - `GpsViewModel.onCleared()` (`GpsViewModel.kt:1740`) stops beacon navigation but leaves
+     `TrailFollow`, `CollectionFollow` and `AutoRecord` registered. That asymmetry is why audio
+     dies on swipe-away while GPS, the notification and the session modes persist. Under this
+     policy `onCleared` must stop nothing — task removal is not a stop signal — and the audio
+     teardown currently living there moves to the explicit stop path.
+   - `AccuracyHapticMonitor` is debug-only and must therefore always stop. Its `init` block
+     launches a `while (true)` ticker on a `@Singleton` scope that is never cancelled
+     (`AccuracyHapticMonitor.kt:37,53-66`), so it survives task removal regardless of policy.
+     This is a leak to fix rather than a policy choice.
+   - The notification is static ("GPS tracking active", `LocationForegroundService.kt:119-126`)
+     with no stop action. It must reflect which modes are actually live.
 2. **Keepalive versus dictation (open for #53).** Whether the continuous `AudioTrack` is genuinely
    what blocks dictation is a hypothesis consistent with the code, not a measured fact. M1 settles
    it. If it is not the cause, #53's scope narrows to focus hygiene.
