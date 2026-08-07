@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-and-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # GitHub's ubuntu-latest image ships JDK 17 and the Android SDK
+      # preinstalled, so the manual JDK + cmdline-tools installation the
+      # Codeberg workflow needed is gone. ANDROID_HOME is already exported.
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: make test
+        run: make test
+
+      - name: make lint
+        run: make lint
+
+      # Compile-only check for the foss (no Google Play Services) flavor -
+      # catches a foss-only file referencing something google-only, or vice
+      # versa. Kept from the Codeberg workflow; the runtime-budget rationale
+      # that motivated "compile-only instead of full assemble" no longer
+      # applies on GitHub's runners, so this can be widened to a full
+      # assembleFossDebug later if it turns out to be worth the minutes.
+      - name: make check-foss
+        run: make check-foss
