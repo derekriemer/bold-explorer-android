@@ -175,13 +175,17 @@ class TrailGuidanceCoordinatorTest {
     // ── Backtrack detection ─────────────────────────────────────────────────────────
 
     @Test
-    fun backtrack_firesAfterConsecutiveIncreasesAboveNoiseFloor() {
+    fun backtrack_firesAfterConsecutiveAlongTrackRegressions() {
+        // Wrong-way is decided on along-track regression, so the fix has to actually move back down
+        // the trail. Previously this test held position and merely grew distanceToTargetM, which is
+        // the false-positive pattern the change removes: distance grows whenever the user passes a
+        // turn or the target is stale, neither of which is going the wrong way.
         val c = coordinator()
-        // First sample seeds prevDist; subsequent samples must increase by > 2 m noise floor.
-        assertEquals(0, c.evaluateBacktrack(active, sample(100_000), guidance(90.0, distanceToTargetM = 100.0))!!.consecutiveCount)
-        assertEquals(1, c.evaluateBacktrack(active, sample(101_000), guidance(90.0, distanceToTargetM = 105.0))!!.consecutiveCount)
-        assertEquals(2, c.evaluateBacktrack(active, sample(102_000), guidance(90.0, distanceToTargetM = 110.0))!!.consecutiveCount)
-        val fired = c.evaluateBacktrack(active, sample(103_000), guidance(90.0, distanceToTargetM = 115.0))
+        // Trail runs north from (0,0); walking south is genuine regression, ~22 m per fix.
+        assertEquals(0, c.evaluateBacktrack(active, sample(100_000, lat = 0.0008), guidance(90.0))!!.consecutiveCount)
+        assertEquals(1, c.evaluateBacktrack(active, sample(101_000, lat = 0.0006), guidance(90.0))!!.consecutiveCount)
+        assertEquals(2, c.evaluateBacktrack(active, sample(102_000, lat = 0.0004), guidance(90.0))!!.consecutiveCount)
+        val fired = c.evaluateBacktrack(active, sample(103_000, lat = 0.0002), guidance(90.0))
         assertNotNull(fired)
         assertTrue(fired.fired)
         assertEquals("FIRING", fired.disposition)

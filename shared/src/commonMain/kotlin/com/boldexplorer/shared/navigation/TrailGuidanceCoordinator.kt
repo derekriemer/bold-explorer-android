@@ -75,6 +75,9 @@ class TrailGuidanceCoordinator(
     // Backtrack detection.
     private var consecutiveBacktrackCount = 0
     private var prevDistToTargetM: Double? = null
+
+    /** Projected along-track position at the previous fix — what wrong-way is decided on. */
+    private var prevAlongTrackM: Double? = null
     private var backtrackAlertFiredAt = 0L
     private var backtrackGraceUntilMs = 0L
 
@@ -100,7 +103,10 @@ class TrailGuidanceCoordinator(
         followState: TrailFollowerState,
         sample: LocationSample,
     ): TrailGuidanceState? {
-        val guidance = TrailGuidance.compute(followState, sample, lastTrustedCourse)
+        // Pass the cached polyline so the desired course comes from a chord over a physical
+        // baseline rather than one noisy recorded segment. Without this the new path is dead code.
+        val polyline = (followState as? TrailFollowerState.Active)?.let { polylineFor(it) }
+        val guidance = TrailGuidance.compute(followState, sample, lastTrustedCourse, polyline)
         _guidance.value = guidance
         return guidance
     }
@@ -131,6 +137,7 @@ class TrailGuidanceCoordinator(
         offTrailGraceUntilMs = 0L
         consecutiveBacktrackCount = 0
         prevDistToTargetM = null
+        prevAlongTrackM = null
         backtrackAlertFiredAt = 0L
         backtrackGraceUntilMs = 0L
     }
@@ -146,6 +153,7 @@ class TrailGuidanceCoordinator(
         offTrailGraceUntilMs = sample.timestamp + OFF_TRAIL_GRACE_MS
         consecutiveBacktrackCount = 0
         prevDistToTargetM = null
+        prevAlongTrackM = null
         backtrackAlertFiredAt = 0L
         backtrackGraceUntilMs = sample.timestamp + BACKTRACK_GRACE_MS
     }
@@ -303,30 +311,36 @@ class TrailGuidanceCoordinator(
         sample: LocationSample,
         guidance: TrailGuidanceState?,
     ): BacktrackEvaluation? {
-        if (followState !is TrailFollowerState.Active) return null
+        val active = followState as? TrailFollowerState.Active ?: return null
         if (sample.timestamp < backtrackGraceUntilMs) return null
 
+        // Decided on along-track regression, not on distance to the current target. Distance grows
+        // whenever the user walks past *any* turn, or whenever the target is stale and behind them,
+        // so keying on it announced "wrong way" to people going the right way — and did so about
+        // five times faster than off-trail could report the real problem.
         val distM = guidance?.distanceToTargetM
-        val prev = prevDistToTargetM
+        val alongM = polylineFor(active)?.project(LatLng(sample.lat, sample.lon))?.alongTrackM
+        val prev = prevAlongTrackM
         val sinceLastAlertMs = sample.timestamp - backtrackAlertFiredAt
 
-        if (distM == null) {
+        prevDistToTargetM = distM
+        if (alongM == null) {
             consecutiveBacktrackCount = 0
-            prevDistToTargetM = null
+            prevAlongTrackM = null
         } else {
-            if (prev != null && distM > prev + BACKTRACK_NOISE_FLOOR_M) {
+            if (prev != null && alongM < prev - BACKTRACK_NOISE_FLOOR_M) {
                 consecutiveBacktrackCount++
             } else {
                 consecutiveBacktrackCount = 0
                 backtrackAlertFiredAt = 0L
             }
-            prevDistToTargetM = distM
+            prevAlongTrackM = alongM
         }
 
         val disposition =
             when {
-                distM == null -> {
-                    "bail:no_guidance"
+                alongM == null -> {
+                    "bail:no_geometry"
                 }
 
                 consecutiveBacktrackCount < BACKTRACK_CONSECUTIVE_THRESHOLD -> {
@@ -345,8 +359,10 @@ class TrailGuidanceCoordinator(
         if (fired) backtrackAlertFiredAt = sample.timestamp
 
         return BacktrackEvaluation(
+            alongTrackM = alongM,
+            prevAlongTrackM = prev,
             distanceToTargetM = distM,
-            prevDistanceToTargetM = prev,
+            prevDistanceToTargetM = prevDistToTargetM,
             consecutiveCount = consecutiveBacktrackCount,
             sinceLastAlertMs = sinceLastAlertMs,
             disposition = disposition,
@@ -414,6 +430,10 @@ data class OffTrailEvaluation(
 
 /** Backtrack detection outcome for one GPS fix; effect-free, ready for log + optional alert. */
 data class BacktrackEvaluation(
+    /** Projected position along the trail; the value the decision is actually made on. */
+    val alongTrackM: Double? = null,
+    /** The previous fix's along-track position. */
+    val prevAlongTrackM: Double? = null,
     val distanceToTargetM: Double?,
     val prevDistanceToTargetM: Double?,
     val consecutiveCount: Int,
