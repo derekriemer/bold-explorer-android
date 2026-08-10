@@ -2,6 +2,10 @@ package com.boldexplorer.shared.navigation
 
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.LocalFrame
+import com.boldexplorer.shared.geo.Vec2
+import com.boldexplorer.shared.geo.crossTrackRightM
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.sqrt
 
 /**
@@ -75,4 +79,101 @@ class TrailPolyline(
 
     /** Total along-trail length in metres. Zero for a single-point polyline. */
     val totalLengthM: Double get() = cumulativeM[size - 1]
+
+    /**
+     * Projects [point] onto this polyline, returning the nearest position on it.
+     *
+     * @param window optional restriction on `alongTrackM`. Only segments whose cumulative span
+     *   intersects the window are considered; `null` scans the whole polyline.
+     *
+     *   The window is load-bearing twice. It keeps a 10k-point trail viable at 1 Hz, and it is the
+     *   mechanism that stops a fix snapping onto a geometrically-near stretch the user has not
+     *   walked — the switchback case. Callers that widen it are trading safety for reach and should
+     *   do so deliberately.
+     *
+     * @return the nearest position, or `null` if the window admits no segment. Null is a real
+     *   answer, not an error: the caller decides whether that means "uncertain" or "search wider".
+     *
+     * Ties are broken toward the lower `alongTrackM` so the result is deterministic. Ranking by
+     * anything richer — a predicted position, for instance — belongs to the caller, which is the
+     * only layer that knows where the user was a moment ago.
+     */
+    fun project(
+        point: LatLng,
+        window: ClosedFloatingPointRange<Double>? = null,
+    ): TrailPosition? {
+        val p = frame.toLocal(point)
+
+        // A single-point polyline has no segments; the only position is the vertex itself.
+        if (segmentCount == 0) {
+            if (window != null && 0.0 !in window) return null
+            val dx = p.x - xs[0]
+            val dy = p.y - ys[0]
+            return TrailPosition(
+                segmentIndex = 0,
+                fraction = 0.0,
+                alongTrackM = 0.0,
+                crossTrackM = sqrt(dx * dx + dy * dy),
+                snapped = frame.toLatLng(Vec2(xs[0], ys[0])),
+            )
+        }
+
+        var best: TrailPosition? = null
+        var bestDistM = Double.MAX_VALUE
+
+        for (i in 0 until segmentCount) {
+            val segStartM = cumulativeM[i]
+            val segLenM = cumulativeM[i + 1] - segStartM
+
+            // Express the window as a range of segment fractions, so a segment straddling the
+            // window boundary yields a position *at* the boundary rather than outside it.
+            var tMin = 0.0
+            var tMax = 1.0
+            if (window != null) {
+                if (segLenM <= DEGENERATE_SEGMENT_M) {
+                    if (segStartM !in window) continue
+                } else {
+                    tMin = max(0.0, (window.start - segStartM) / segLenM)
+                    tMax = min(1.0, (window.endInclusive - segStartM) / segLenM)
+                    if (tMin > tMax) continue // segment lies wholly outside the window
+                }
+            }
+
+            val ax = xs[i]
+            val ay = ys[i]
+            val abx = xs[i + 1] - ax
+            val aby = ys[i + 1] - ay
+            val len2 = abx * abx + aby * aby
+            val tRaw = if (len2 <= DEGENERATE_SEGMENT_M) 0.0 else ((p.x - ax) * abx + (p.y - ay) * aby) / len2
+            val t = tRaw.coerceIn(tMin, tMax)
+
+            val footX = ax + t * abx
+            val footY = ay + t * aby
+            val dx = p.x - footX
+            val dy = p.y - footY
+            val distM = sqrt(dx * dx + dy * dy)
+
+            // Strict `<` keeps the first winner, so ties resolve toward the lower alongTrackM.
+            if (distM < bestDistM) {
+                bestDistM = distM
+                // Magnitude is the distance to the nearest point (which may be an endpoint);
+                // the sign is which side of the segment the fix lies on.
+                val side = crossTrackRightM(p, Vec2(ax, ay), Vec2(xs[i + 1], ys[i + 1]))
+                best =
+                    TrailPosition(
+                        segmentIndex = i,
+                        fraction = t,
+                        alongTrackM = segStartM + t * segLenM,
+                        crossTrackM = if (side < 0.0) -distM else distM,
+                        snapped = frame.toLatLng(Vec2(footX, footY)),
+                    )
+            }
+        }
+        return best
+    }
+
+    private companion object {
+        /** Below this length a segment carries no direction and is treated as a point. */
+        const val DEGENERATE_SEGMENT_M = 1e-9
+    }
 }
