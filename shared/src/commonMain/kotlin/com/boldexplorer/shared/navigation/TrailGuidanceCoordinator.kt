@@ -3,6 +3,10 @@ package com.boldexplorer.shared.navigation
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.haversineDistanceMeters
 import com.boldexplorer.shared.model.LocationSample
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -52,6 +56,21 @@ class TrailGuidanceCoordinator(
     private var consecutiveOffTrailCount = 0
     private var offTrailAlertFiredAt = 0L
     private var offTrailGraceUntilMs = 0L
+
+    /** |cross-track| at the previous fix, for the divergence rate. */
+    private var prevAbsCrossTrackM: Double? = null
+    private var prevCrossTrackAtMs = 0L
+
+    /**
+     * Cached polyline for the followed trail.
+     *
+     * Keyed on the waypoint list's *identity*, not its contents: [TrailFollower] copies its state
+     * on every advance but carries the same list instance forward, so identity holds for a session
+     * and changes exactly when a different trail is followed. Rebuilding a 10k-point polyline on
+     * every fix would not be viable.
+     */
+    private var cachedPolylineFor: List<TrailPoint>? = null
+    private var cachedPolyline: TrailPolyline? = null
 
     // Backtrack detection.
     private var consecutiveBacktrackCount = 0
@@ -107,6 +126,8 @@ class TrailGuidanceCoordinator(
         lastOrdinaryGuidanceLocation = null
         consecutiveOffTrailCount = 0
         offTrailAlertFiredAt = 0L
+        prevAbsCrossTrackM = null
+        prevCrossTrackAtMs = 0L
         offTrailGraceUntilMs = 0L
         consecutiveBacktrackCount = 0
         prevDistToTargetM = null
@@ -120,6 +141,8 @@ class TrailGuidanceCoordinator(
         lastOrdinaryGuidanceLocation = LatLng(sample.lat, sample.lon)
         consecutiveOffTrailCount = 0
         offTrailAlertFiredAt = 0L
+        prevAbsCrossTrackM = null
+        prevCrossTrackAtMs = 0L
         offTrailGraceUntilMs = sample.timestamp + OFF_TRAIL_GRACE_MS
         consecutiveBacktrackCount = 0
         prevDistToTargetM = null
@@ -171,50 +194,104 @@ class TrailGuidanceCoordinator(
         sample: LocationSample,
         guidance: TrailGuidanceState?,
     ): OffTrailEvaluation? {
-        val followerActive = followState is TrailFollowerState.Active
-        if (!followerActive) return null
+        val active = followState as? TrailFollowerState.Active ?: return null
         if (sample.timestamp < offTrailGraceUntilMs) return null
 
         val relative = guidance?.relativeDeg
-        val sinceLastAlertMs = sample.timestamp - offTrailAlertFiredAt
+        val signedCrossTrackM =
+            polylineFor(active)?.project(LatLng(sample.lat, sample.lon))?.crossTrackM
+        val absCrossTrackM = signedCrossTrackM?.let { abs(it) }
+        val rateMps = updateCrossTrackRate(absCrossTrackM, sample.timestamp)
 
-        if (relative != null && TrailGuidance.isMajorCorrection(relative)) {
+        // The gate *widens* as accuracy degrades, so poor GPS yields fewer confident alerts — the
+        // opposite direction from completion, where good GPS tightens the radius. Both are bounded:
+        // an implausible accuracy report must not be able to switch off-trail detection off.
+        val gateM = offTrailGateM(sample.accuracy)
+        val overGate = absCrossTrackM != null && absCrossTrackM > gateM
+
+        if (overGate) {
             consecutiveOffTrailCount++
         } else {
             consecutiveOffTrailCount = 0
             offTrailAlertFiredAt = 0L
         }
 
+        // Corroboration shortens the sustain window; it never gates whether a fix counts. Angle is
+        // evidence here, not a veto — demoting it is the whole point, since a stale target is what
+        // produced the original defect.
+        val diverging = rateMps != null && rateMps > DIVERGENCE_FLOOR_MPS
+        val far = absCrossTrackM != null && absCrossTrackM > OFF_TRAIL_FAR_M
+        val angleAgrees = relative != null && TrailGuidance.isMajorCorrection(relative)
+        val required =
+            if (diverging || far || angleAgrees) OFF_TRAIL_CONSECUTIVE_FAST else OFF_TRAIL_CONSECUTIVE_SLOW
+
+        val sinceLastAlertMs = sample.timestamp - offTrailAlertFiredAt
+        val xt = absCrossTrackM?.roundToInt()
+        val trend = if (diverging) "diverging" else "converging"
         val disposition =
             when {
-                relative == null -> {
-                    "bail:no_relative_deg"
-                }
-
-                consecutiveOffTrailCount < OFF_TRAIL_CONSECUTIVE_THRESHOLD -> {
-                    "bail:count_${consecutiveOffTrailCount}_of_$OFF_TRAIL_CONSECUTIVE_THRESHOLD"
-                }
-
-                sinceLastAlertMs < OFF_TRAIL_ALERT_INTERVAL_MS -> {
-                    "bail:cooldown_${sinceLastAlertMs}ms"
-                }
-
-                else -> {
-                    "FIRING"
-                }
+                absCrossTrackM == null -> "bail:no_geometry"
+                !overGate -> "bail:on_line_xt_${xt}m_gate_${gateM.roundToInt()}m"
+                consecutiveOffTrailCount < required ->
+                    "hold:xt_${xt}m_${trend}_${consecutiveOffTrailCount}of$required"
+                sinceLastAlertMs < OFF_TRAIL_ALERT_INTERVAL_MS -> "bail:cooldown_${sinceLastAlertMs}ms"
+                else -> "fire:xt_${xt}m_$trend"
             }
-        val fired = disposition == "FIRING"
+        val fired = disposition.startsWith("fire:")
         if (fired) offTrailAlertFiredAt = sample.timestamp
 
         return OffTrailEvaluation(
             relativeDeg = relative,
-            followerActive = followerActive,
+            followerActive = true,
             consecutiveCount = consecutiveOffTrailCount,
             sinceLastAlertMs = sinceLastAlertMs,
             disposition = disposition,
             fired = fired,
+            crossTrackM = signedCrossTrackM,
+            crossTrackRateMps = rateMps,
+            gateM = gateM,
+            requiredCount = required,
         )
     }
+
+    /** Builds or reuses the polyline for [active]'s geometry. Null when there is no segment yet. */
+    private fun polylineFor(active: TrailFollowerState.Active): TrailPolyline? {
+        if (active.waypoints.size < 2) return null
+        if (cachedPolylineFor !== active.waypoints) {
+            cachedPolyline = TrailPolyline(active.waypoints.map { LatLng(it.lat, it.lon) })
+            cachedPolylineFor = active.waypoints
+        }
+        return cachedPolyline
+    }
+
+    /**
+     * Signed rate of change of |cross-track|, in m/s. Positive means moving away from the trail.
+     *
+     * Density-independent and target-free, unlike a bearing against a possibly-stale waypoint —
+     * which is why this, not the angle, is the primary divergence signal.
+     */
+    private fun updateCrossTrackRate(
+        absCrossTrackM: Double?,
+        nowMs: Long,
+    ): Double? {
+        val prev = prevAbsCrossTrackM
+        val elapsedS = (nowMs - prevCrossTrackAtMs) / 1000.0
+        val rate =
+            if (prev != null && absCrossTrackM != null && elapsedS > 0.0) {
+                (absCrossTrackM - prev) / elapsedS
+            } else {
+                null
+            }
+        if (absCrossTrackM != null) {
+            prevAbsCrossTrackM = absCrossTrackM
+            prevCrossTrackAtMs = nowMs
+        }
+        return rate
+    }
+
+    /** Accuracy-aware off-trail gate, widening with uncertainty but hard-capped. */
+    private fun offTrailGateM(accuracyM: Double?): Double =
+        min(OFF_TRAIL_GATE_CAP_M, max(OFF_TRAIL_BASE_M, OFF_TRAIL_ACCURACY_FACTOR * (accuracyM ?: 0.0)))
 
     /**
      * Update backtrack detection state and decide whether to alert. Returns null while inactive or
@@ -280,7 +357,26 @@ class TrailGuidanceCoordinator(
     companion object {
         const val ORDINARY_GUIDANCE_INTERVAL_MS = 30_000L
         const val ORDINARY_GUIDANCE_DISTANCE_M = 25.0
-        const val OFF_TRAIL_CONSECUTIVE_THRESHOLD = 2
+        /** Consecutive over-gate fixes required when divergence, distance, or angle corroborates. */
+        const val OFF_TRAIL_CONSECUTIVE_FAST = 2
+
+        /** Required when the user is parallel or converging — the ambiguous case, so alert later. */
+        const val OFF_TRAIL_CONSECUTIVE_SLOW = 5
+
+        /** Cross-track gate floor, before accuracy widening. */
+        const val OFF_TRAIL_BASE_M = 20.0
+
+        /** Accuracy multiplier for the gate; bounded by [OFF_TRAIL_GATE_CAP_M]. */
+        const val OFF_TRAIL_ACCURACY_FACTOR = 2.0
+
+        /** Hard ceiling on the gate, so an implausible accuracy cannot disable detection. */
+        const val OFF_TRAIL_GATE_CAP_M = 40.0
+
+        /** Beyond this, alert on the fast path regardless of trend — worth one utterance. */
+        const val OFF_TRAIL_FAR_M = 60.0
+
+        /** Minimum |cross-track| growth to count as diverging rather than GPS jitter. */
+        const val DIVERGENCE_FLOOR_MPS = 0.2
         const val OFF_TRAIL_ALERT_INTERVAL_MS = 45_000L
         const val OFF_TRAIL_GRACE_MS = 30_000L
         const val BACKTRACK_CONSECUTIVE_THRESHOLD = 3
@@ -306,6 +402,14 @@ data class OffTrailEvaluation(
     val sinceLastAlertMs: Long,
     val disposition: String,
     val fired: Boolean,
+    /** Signed distance from the trail; positive means the user is to the right of travel. */
+    val crossTrackM: Double? = null,
+    /** Rate of change of |cross-track|, m/s. Positive means diverging from the trail. */
+    val crossTrackRateMps: Double? = null,
+    /** The accuracy-aware gate |cross-track| had to exceed for this fix to count. */
+    val gateM: Double? = null,
+    /** Consecutive qualifying fixes required before alerting, given the corroborating evidence. */
+    val requiredCount: Int = 0,
 )
 
 /** Backtrack detection outcome for one GPS fix; effect-free, ready for log + optional alert. */

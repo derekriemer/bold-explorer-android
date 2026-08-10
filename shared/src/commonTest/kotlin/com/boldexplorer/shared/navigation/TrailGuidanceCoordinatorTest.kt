@@ -42,6 +42,24 @@ class TrailGuidanceCoordinatorTest {
         speed: Double? = null,
     ) = LocationSample(lat = lat, lon = lon, heading = heading, speed = speed, timestamp = timestampMs)
 
+    /**
+     * A fix ~30 m east of the trail, which runs due north from (0,0).
+     *
+     * Off-trail detection now requires cross-track over gate as a *necessary* condition, so these
+     * tests — which exercise the sustain, cooldown and reset bookkeeping rather than the geometry —
+     * must place the user genuinely off the trail. Previously they sat at (0,0), squarely on it,
+     * and fired purely on the bearing angle. That combination is the defect this change removes.
+     */
+    private fun offTrailSample(
+        timestampMs: Long,
+        eastM: Double = 30.0,
+    ) = LocationSample(
+        lat = 0.0005,
+        lon = eastM / 111_194.9,
+        accuracy = 5.0,
+        timestamp = timestampMs,
+    )
+
     // ── Trusted course / slow-walker heading ────────────────────────────────────────
 
     @Test
@@ -88,64 +106,70 @@ class TrailGuidanceCoordinatorTest {
     @Test
     fun offTrail_firesOnlyAfterConsecutiveThreshold() {
         val c = coordinator()
-        val first = c.evaluateOffTrail(active, sample(100_000), guidance(relativeDeg = 90.0))
+        val first = c.evaluateOffTrail(active, offTrailSample(100_000), guidance(relativeDeg = 90.0))
         assertNotNull(first)
         assertFalse(first.fired)
         assertEquals(1, first.consecutiveCount)
-        assertEquals("bail:count_1_of_2", first.disposition)
+        assertTrue(first.disposition.startsWith("hold:"), first.disposition)
 
-        val second = c.evaluateOffTrail(active, sample(101_000), guidance(relativeDeg = 90.0))
+        val second = c.evaluateOffTrail(active, offTrailSample(101_000), guidance(relativeDeg = 90.0))
         assertNotNull(second)
         assertTrue(second.fired)
         assertEquals(2, second.consecutiveCount)
-        assertEquals("FIRING", second.disposition)
+        assertTrue(second.disposition.startsWith("fire:"), second.disposition)
     }
 
     @Test
-    fun offTrail_resetsCountWhenBackOnCourse() {
+    fun offTrail_resetsCountWhenBackOnTheTrail() {
+        // "Back on course" now means back on the *line*, not back to a small bearing delta. The
+        // angle deliberately stays at 90 here to prove it no longer drives the decision.
         val c = coordinator()
-        c.evaluateOffTrail(active, sample(100_000), guidance(relativeDeg = 90.0)) // count 1
-        val back = c.evaluateOffTrail(active, sample(101_000), guidance(relativeDeg = 5.0))
+        c.evaluateOffTrail(active, offTrailSample(100_000), guidance(relativeDeg = 90.0)) // count 1
+        val back = c.evaluateOffTrail(active, offTrailSample(101_000, eastM = 0.0), guidance(relativeDeg = 90.0))
         assertNotNull(back)
         assertEquals(0, back.consecutiveCount)
         assertFalse(back.fired)
-        assertEquals("bail:count_0_of_2", back.disposition)
+        assertTrue(back.disposition.startsWith("bail:on_line"), back.disposition)
     }
 
     @Test
     fun offTrail_respectsCooldownAfterFiring() {
         val c = coordinator()
-        c.evaluateOffTrail(active, sample(100_000), guidance(relativeDeg = 90.0))
-        val fired = c.evaluateOffTrail(active, sample(101_000), guidance(relativeDeg = 90.0))
+        c.evaluateOffTrail(active, offTrailSample(100_000), guidance(relativeDeg = 90.0))
+        val fired = c.evaluateOffTrail(active, offTrailSample(101_000), guidance(relativeDeg = 90.0))
         assertTrue(fired!!.fired)
 
         // Still off-trail 1 s later → inside the 45 s cooldown, must not re-fire.
-        val cooled = c.evaluateOffTrail(active, sample(102_000), guidance(relativeDeg = 90.0))
+        val cooled = c.evaluateOffTrail(active, offTrailSample(102_000), guidance(relativeDeg = 90.0))
         assertNotNull(cooled)
         assertFalse(cooled.fired)
         assertEquals("bail:cooldown_1000ms", cooled.disposition)
 
         // Past the cooldown → fires again.
-        val again = c.evaluateOffTrail(active, sample(200_000), guidance(relativeDeg = 90.0))
+        val again = c.evaluateOffTrail(active, offTrailSample(200_000), guidance(relativeDeg = 90.0))
         assertTrue(again!!.fired)
     }
 
     @Test
     fun offTrail_suppressedDuringGraceWindow() {
         val c = coordinator()
-        c.resetThrottle(sample(100_000)) // arms grace until 130_000
-        assertNull(c.evaluateOffTrail(active, sample(120_000), guidance(relativeDeg = 90.0)))
+        c.resetThrottle(offTrailSample(100_000)) // arms grace until 130_000
+        assertNull(c.evaluateOffTrail(active, offTrailSample(120_000), guidance(relativeDeg = 90.0)))
         // After grace expires it evaluates again.
-        assertNotNull(c.evaluateOffTrail(active, sample(131_000), guidance(relativeDeg = 90.0)))
+        assertNotNull(c.evaluateOffTrail(active, offTrailSample(131_000), guidance(relativeDeg = 90.0)))
     }
 
     @Test
-    fun offTrail_bailsWhenNoRelativeDeg() {
+    fun offTrail_stillCountsWithNoRelativeDeg() {
+        // Inverted premise. A missing bearing used to bail outright, because the angle *was* the
+        // decision. It is now only corroborating evidence, so an over-gate fix still counts — it
+        // simply takes the longer sustain path.
         val c = coordinator()
-        val eval = c.evaluateOffTrail(active, sample(100_000), guidance(relativeDeg = null))
+        val eval = c.evaluateOffTrail(active, offTrailSample(100_000), guidance(relativeDeg = null))
         assertNotNull(eval)
         assertFalse(eval.fired)
-        assertEquals("bail:no_relative_deg", eval.disposition)
+        assertEquals(1, eval.consecutiveCount)
+        assertEquals(TrailGuidanceCoordinator.OFF_TRAIL_CONSECUTIVE_SLOW, eval.requiredCount)
     }
 
     // ── Backtrack detection ─────────────────────────────────────────────────────────
@@ -217,10 +241,10 @@ class TrailGuidanceCoordinatorTest {
     @Test
     fun clear_resetsDetectionState() {
         val c = coordinator()
-        c.evaluateOffTrail(active, sample(100_000), guidance(relativeDeg = 90.0)) // count 1
+        c.evaluateOffTrail(active, offTrailSample(100_000), guidance(relativeDeg = 90.0)) // count 1
         c.clear()
-        // After clear, the count restarts from zero, so the next major correction is count 1 again.
-        val afterClear = c.evaluateOffTrail(active, sample(101_000), guidance(relativeDeg = 90.0))
+        // After clear, the count restarts from zero, so the next qualifying fix is count 1 again.
+        val afterClear = c.evaluateOffTrail(active, offTrailSample(101_000), guidance(relativeDeg = 90.0))
         assertNotNull(afterClear)
         assertEquals(1, afterClear.consecutiveCount)
         assertNull(c.guidance.value)
