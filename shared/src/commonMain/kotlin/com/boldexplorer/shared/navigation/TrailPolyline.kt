@@ -3,7 +3,9 @@ package com.boldexplorer.shared.navigation
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.LocalFrame
 import com.boldexplorer.shared.geo.Vec2
+import com.boldexplorer.shared.geo.bearingDeg
 import com.boldexplorer.shared.geo.crossTrackRightM
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
@@ -170,6 +172,100 @@ class TrailPolyline(
             }
         }
         return best
+    }
+
+    /**
+     * The point on the trail at [alongTrackM] metres from the start, clamped to the trail's extent.
+     *
+     * The inverse of the `alongTrackM` half of [project]: where [project] answers "where am I on
+     * this trail", this answers "what is at this distance along it".
+     */
+    fun positionAt(alongTrackM: Double): LatLng = frame.toLatLng(localAt(alongTrackM))
+
+    /**
+     * Largest segment index whose start is at or before [alongTrackM]. Binary search, hand-rolled
+     * because the common stdlib has no `binarySearch` for [DoubleArray].
+     */
+    private fun segmentIndexFor(alongTrackM: Double): Int {
+        var lo = 0
+        var hi = segmentCount - 1
+        while (lo < hi) {
+            val mid = (lo + hi + 1) / 2
+            if (cumulativeM[mid] <= alongTrackM) lo = mid else hi = mid - 1
+        }
+        return lo
+    }
+
+    /** [positionAt] without leaving the frame — the form the curvature accessors want. */
+    private fun localAt(alongTrackM: Double): Vec2 {
+        if (segmentCount == 0) return Vec2(xs[0], ys[0])
+        val a = alongTrackM.coerceIn(0.0, totalLengthM)
+        val i = segmentIndexFor(a)
+        val segLenM = cumulativeM[i + 1] - cumulativeM[i]
+        val t = if (segLenM <= DEGENERATE_SEGMENT_M) 0.0 else ((a - cumulativeM[i]) / segLenM).coerceIn(0.0, 1.0)
+        return Vec2(xs[i] + t * (xs[i + 1] - xs[i]), ys[i] + t * (ys[i + 1] - ys[i]))
+    }
+
+    /**
+     * True bearing of the chord centred at [alongTrackM] and spanning [baselineM] metres.
+     *
+     * This is the density-invariant replacement for "bearing of the segment I am on". A single
+     * segment bearing at 2 m vertex spacing is nearly random once recording noise is included, which
+     * would make every downstream decision depend on how densely the trail happened to be recorded.
+     * Measuring across a fixed *physical* baseline removes that dependence.
+     *
+     * The chord is truncated at the trail's ends rather than extrapolated.
+     *
+     * @return the bearing, or `null` if the trail has no length to measure across.
+     */
+    fun chordBearingAt(
+        alongTrackM: Double,
+        baselineM: Double,
+    ): Double? {
+        if (totalLengthM <= DEGENERATE_SEGMENT_M) return null
+        val half = baselineM / 2.0
+        val startM = (alongTrackM - half).coerceIn(0.0, totalLengthM)
+        val endM = (alongTrackM + half).coerceIn(0.0, totalLengthM)
+        if (endM - startM <= DEGENERATE_SEGMENT_M) return null
+        val a = localAt(startM)
+        val b = localAt(endM)
+        return bearingDeg(Vec2(b.x - a.x, b.y - a.y))
+    }
+
+    /**
+     * Maximum perpendicular departure of the trail from its own chord, over
+     * `[alongTrackM, alongTrackM + lookaheadM]`.
+     *
+     * Sagitta is the primary curvature measure rather than accumulated turn angle, for two reasons.
+     * Summing `|Δbearing|` per vertex grows without bound as density increases, so it is not
+     * density-invariant at all. And *signed* net turn, while invariant, reads zero across an S-bend
+     * that returns to its original heading — a path that is plainly not straight. Sagitta catches
+     * both, and it falls straight out of the cross-track machinery already present.
+     *
+     * @return departure in metres; zero for a straight stretch.
+     */
+    fun sagittaOver(
+        alongTrackM: Double,
+        lookaheadM: Double,
+    ): Double {
+        val startM = alongTrackM.coerceIn(0.0, totalLengthM)
+        val endM = (alongTrackM + lookaheadM).coerceIn(0.0, totalLengthM)
+        if (endM - startM <= DEGENERATE_SEGMENT_M) return 0.0
+
+        val a = localAt(startM)
+        val b = localAt(endM)
+        // A polyline's greatest departure from a chord always occurs at a vertex, so checking the
+        // vertices strictly inside the window is exact rather than a sampled approximation — and it
+        // is what makes the result density-invariant: adding vertices along a straight stretch adds
+        // no new extremum.
+        var worstM = 0.0
+        for (i in 0 until size) {
+            val c = cumulativeM[i]
+            if (c <= startM || c >= endM) continue
+            val d = abs(crossTrackRightM(Vec2(xs[i], ys[i]), a, b))
+            if (d > worstM) worstM = d
+        }
+        return worstM
     }
 
     private companion object {
