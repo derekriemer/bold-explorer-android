@@ -8,6 +8,8 @@ import com.boldexplorer.shared.geo.haversineDistanceMeters
 import com.boldexplorer.shared.geo.initialBearingDeg
 import com.boldexplorer.shared.geo.segmentFraction
 import com.boldexplorer.shared.model.Waypoint
+import kotlin.math.max
+import kotlin.math.min
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -44,7 +46,13 @@ sealed class TrailFollowerEvent {
         val absoluteBearingDeg: Double, // bearing from current loc to next wp
     ) : TrailFollowerEvent()
 
-    object TrailComplete : TrailFollowerEvent()
+    /**
+     * The trail's endpoint has been reached.
+     *
+     * @property hedged true when GPS accuracy was too poor to assert arrival plainly, so the
+     *   caller should phrase this as "you should be at the end" rather than "trail complete".
+     */
+    data class TrailComplete(val hedged: Boolean) : TrailFollowerEvent()
 }
 
 /** Diagnostic payload emitted via [TrailFollower.onAdvancement] on each waypoint advance. */
@@ -152,6 +160,7 @@ class TrailFollower(
         altitudeM: Double? = null,
         bearingDeg: Float? = null,
         smoothedBearingDeg: Float? = null,
+        accuracyM: Double? = null,
     ): TrailFollowerEvent? {
         val current = _state.value as? TrailFollowerState.Active ?: return null
         val target = current.waypoints[current.currentIndex]
@@ -170,6 +179,19 @@ class TrailFollower(
         // reaching a checkpoint you're already standing at when you start is legitimate.
         positionAtLastAdvance?.let { last ->
             if (haversineDistanceMeters(location, last) < MIN_MOVEMENT_SINCE_ADVANCE_M) return null
+        }
+
+        // 0. Endpoint completion is a policy of its own, not a side effect of advancing off the
+        //    last waypoint. The projection branch is deliberately NOT consulted here: it needs only
+        //    t >= 0.9 along the final leg, so on a 300 m final segment it completed the trail 30 m
+        //    out (the ~65 ft field report). Completion instead uses a radius that tightens with
+        //    good GPS and is capped so poor GPS can never widen it.
+        if (current.currentIndex == current.waypoints.size - 1) {
+            return if (d <= completionRadiusM(accuracyM)) {
+                fireAdvance(current, location, altitudeM, null, null, null, "endpoint", accuracyM = accuracyM)
+            } else {
+                null
+            }
         }
 
         // 1. Radial threshold — the primary, fast-path check.
@@ -229,6 +251,7 @@ class TrailFollower(
         headingDiffDeg: Double? = null,
         mechanism: String = "radial",
         smoothedBearingUsed: Boolean = false,
+        accuracyM: Double? = null,
     ): TrailFollowerEvent {
         val capturedClosest = closestApproachM
         val dToTarget =
@@ -268,11 +291,44 @@ class TrailFollower(
         } else {
             emitCallback()
             _state.value = TrailFollowerState.Complete
-            TrailFollowerEvent.TrailComplete
+            TrailFollowerEvent.TrailComplete(hedged = shouldHedgeCompletion(accuracyM))
         }
     }
 
+    /**
+     * Radius around the trail's end within which completion may fire.
+     *
+     * `min(ceiling, max(floor, factor × accuracy))`. Good GPS **tightens** the radius below the
+     * default; poor GPS clamps at the ceiling and can never widen it. This is the inverse of the
+     * `max(floor, factor × accuracy)` pattern used elsewhere in the codebase, which expands the
+     * acceptance region exactly when the fix is least trustworthy.
+     *
+     * Android reports accuracy as a 68% (1σ) horizontal radius, so a factor of 2 is roughly 95%
+     * containment rather than an arbitrary multiplier. A null accuracy carries no information, so
+     * it falls back to the ceiling — the behaviour before this policy existed.
+     */
+    private fun completionRadiusM(accuracyM: Double?): Double {
+        val acc = accuracyM ?: return COMPLETION_CEILING_M
+        return min(COMPLETION_CEILING_M, max(COMPLETION_FLOOR_M, COMPLETION_SIGMA_FACTOR * acc))
+    }
+
+    /** Whether the fix is too uncertain to assert arrival plainly. */
+    private fun shouldHedgeCompletion(accuracyM: Double?): Boolean =
+        accuracyM != null && accuracyM > COMPLETION_HEDGE_ABOVE_M
+
     companion object {
+        /** Upper bound on the completion radius; poor GPS never widens past this. */
+        const val COMPLETION_CEILING_M = 15.0
+
+        /** Lower bound, so an optimistic accuracy report cannot make the trail uncompletable. */
+        const val COMPLETION_FLOOR_M = 5.0
+
+        /** Android accuracy is a 1σ radius; 2σ is roughly 95% containment. */
+        const val COMPLETION_SIGMA_FACTOR = 2.0
+
+        /** Above this accuracy the arrival announcement hedges rather than asserts. */
+        const val COMPLETION_HEDGE_ABOVE_M = 10.0
+
         /** Incoming projection: ≥90% along the trail leg → auto-advance. */
         private const val INCOMING_ADVANCE_FRACTION = 0.9
 

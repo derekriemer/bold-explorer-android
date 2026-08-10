@@ -1178,6 +1178,9 @@ class GpsViewModel
                                 ?.takeIf { (sample.speed ?: 0.0) >= TrailGuidance.MIN_TRUSTED_SPEED_MPS }
                                 ?.toFloat(),
                         smoothedBearingDeg = smoothedBearingDeg,
+                        // Feeds the endpoint completion radius, which tightens with good GPS and
+                        // is capped so poor GPS never widens it.
+                        accuracyM = sample.accuracy,
                     )
             ) {
                 is TrailFollowerEvent.WaypointReached -> {
@@ -1210,7 +1213,10 @@ class GpsViewModel
                 is TrailFollowerEvent.TrailComplete -> {
                     guidanceCoordinator.clear()
                     announce(
-                        "Trail complete",
+                        // Hedged when accuracy was too poor to assert arrival. Saying "trail
+                        // complete" to someone who is not there is worse than saying nothing
+                        // definite, and the user cannot check a map to resolve it.
+                        if (event.hedged) "You should be at the end of the trail" else "Trail complete",
                         kind = OutputKind.TRAIL_COMPLETED,
                         category = OutputCategory.NAVIGATION,
                         origin = OutputOrigin.AUTOMATIC,
