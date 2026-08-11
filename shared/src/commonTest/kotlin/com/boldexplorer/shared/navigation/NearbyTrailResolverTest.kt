@@ -2,6 +2,7 @@ package com.boldexplorer.shared.navigation
 
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.model.TrailPointRow
+import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -94,4 +95,46 @@ class NearbyTrailResolverTest {
         assertNotNull(near)
         assertEquals(2, near.nearestIndex)
     }
+
+    // ── TrailPosition (S0b) ─────────────────────────────────────────────────────────
+
+    @Test
+    fun resolve_carriesAProjectedTrailPosition() {
+        // The point of S0b: this resolver already walked every segment and threw away which one
+        // won. It now reports the projection instead of only a scalar distance.
+        val points = verticalLine(trailId = 1, lon = 0.0, count = 5)
+        val near = NearbyTrailResolver.resolve(LatLng(0.00015, 0.0), accuracyM = 5.0, points = points).single()
+        val position = assertNotNull(near.position, "projection should be reported")
+        assertTrue(position.alongTrackM > 0.0, "along-track should be inside the trail, got ${position.alongTrackM}")
+        assertTrue(position.alongTrackM < 100.0, "along-track should not exceed the trail, got ${position.alongTrackM}")
+    }
+
+    @Test
+    fun distanceM_agreesWithTheProjectedCrossTrack() {
+        // distanceM must not drift from the projection it is now derived from.
+        val points = verticalLine(trailId = 1, lon = 0.0, count = 5)
+        val near = NearbyTrailResolver.resolve(LatLng(0.00015, 0.00005), accuracyM = 20.0, points = points).single()
+        val position = assertNotNull(near.position)
+        assertEquals(near.distanceM, abs(position.crossTrackM), 0.05, "distance is the magnitude of cross-track")
+    }
+
+    @Test
+    fun crossTrackIsSigned_soSideIsRecoverable() {
+        // The genuinely new capability: an unsigned distance cannot say which side of the trail
+        // the user is on, so "the trail is 12 m to your right" was previously impossible.
+        val points = verticalLine(trailId = 1, lon = 0.0, count = 5)
+        val east = NearbyTrailResolver.resolve(LatLng(0.00015, 0.00005), accuracyM = 20.0, points = points).single()
+        val west = NearbyTrailResolver.resolve(LatLng(0.00015, -0.00005), accuracyM = 20.0, points = points).single()
+        assertTrue(assertNotNull(east.position).crossTrackM > 0.0, "east of a northward trail reads right-positive")
+        assertTrue(assertNotNull(west.position).crossTrackM < 0.0, "west reads left-negative")
+    }
+
+    @Test
+    fun singlePointTrail_stillResolves() {
+        val points = listOf(tp(trailId = 1, position = 0, lat = 0.0, lon = 0.0))
+        val near = NearbyTrailResolver.resolve(LatLng(0.00005, 0.0), accuracyM = 20.0, points = points).single()
+        assertNotNull(near.position, "a single-point trail still has a position")
+        assertEquals(0.0, assertNotNull(near.position).alongTrackM, 1e-9, "along-track is zero")
+    }
+
 }

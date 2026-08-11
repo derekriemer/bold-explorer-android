@@ -1,9 +1,9 @@
 package com.boldexplorer.shared.navigation
 
 import com.boldexplorer.shared.geo.LatLng
-import com.boldexplorer.shared.geo.distanceToSegmentMeters
 import com.boldexplorer.shared.geo.haversineDistanceMeters
 import com.boldexplorer.shared.model.TrailPointRow
+import kotlin.math.abs
 import kotlin.math.max
 
 /**
@@ -19,6 +19,14 @@ data class NearbyTrail(
     val trailId: Long,
     val distanceM: Double,
     val nearestIndex: Int,
+    /**
+     * Where on the trail the fix projects, or null for a trail with no geometry.
+     *
+     * Carries the along-track coordinate and the *signed* cross-track offset, neither of which
+     * [distanceM] or [nearestIndex] can express. This is the representation mid-trail pickup should
+     * migrate to: "you are 340 m along, 6 m left of the line" answers what a vertex index cannot.
+     */
+    val position: TrailPosition? = null,
 )
 
 /**
@@ -70,15 +78,19 @@ object NearbyTrailResolver {
             }
         }
 
-        var nearestSegmentM = nearestVertexM
-        for (i in 0 until ordered.size - 1) {
-            val a = LatLng(ordered[i].lat, ordered[i].lon)
-            val b = LatLng(ordered[i + 1].lat, ordered[i + 1].lon)
-            val d = distanceToSegmentMeters(location, a, b)
-            if (d < nearestSegmentM) nearestSegmentM = d
-        }
+        // Replaces a hand-rolled minimum over consecutive segments. Beyond removing the
+        // duplication, this puts the distance in the same coordinate system as every other
+        // along/cross-track value in the app, and yields the along-track coordinate and the *sign*
+        // of the offset -- neither of which the old scalar could express.
+        val position = TrailPolyline(ordered.map { LatLng(it.lat, it.lon) }).project(location)
+        val nearestSegmentM = position?.let { abs(it.crossTrackM) } ?: nearestVertexM
 
-        return NearbyTrail(trailId = trailId, distanceM = nearestSegmentM, nearestIndex = nearestIndex)
+        return NearbyTrail(
+            trailId = trailId,
+            distanceM = nearestSegmentM,
+            nearestIndex = nearestIndex,
+            position = position,
+        )
     }
 
     /** Minimum distance to a trail's line within which it counts as follow-able, regardless of GPS accuracy. */
