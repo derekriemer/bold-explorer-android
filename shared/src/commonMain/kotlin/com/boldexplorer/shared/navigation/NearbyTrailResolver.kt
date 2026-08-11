@@ -4,7 +4,6 @@ import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.haversineDistanceMeters
 import com.boldexplorer.shared.model.TrailPointRow
 import kotlin.math.abs
-import kotlin.math.max
 
 /**
  * The nearest follow-able trail to a GPS fix, as resolved from a per-fix spatial snapshot.
@@ -47,7 +46,17 @@ object NearbyTrailResolver {
         points: List<TrailPointRow>,
     ): List<NearbyTrail> {
         if (points.isEmpty()) return emptyList()
-        val threshold = max(NEAR_TRAIL_FLOOR_M, NEAR_TRAIL_ACCURACY_FACTOR * (accuracyM ?: 0.0))
+        // No cap was ever applied here — the near-trail gate was, and remains, genuinely
+        // unbounded. NavigationPolicy.UNBOUNDED_CAP_M names it so the remaining unbounded gates
+        // helper, so this behaves identically to the old `max(floor, factor*accuracy)` for every
+        // accuracy value, not merely the ones the test suite happens to exercise.
+        val threshold =
+            NavigationPolicy.widenWithAccuracy(
+                baseM = NavigationPolicy.NEAR_TRAIL_FLOOR_M,
+                factor = NavigationPolicy.NEAR_TRAIL_ACCURACY_FACTOR,
+                accuracyM = accuracyM,
+                capM = NavigationPolicy.UNBOUNDED_CAP_M,
+            )
 
         return points
             .groupBy { it.trailId }
@@ -92,10 +101,4 @@ object NearbyTrailResolver {
             position = position,
         )
     }
-
-    /** Minimum distance to a trail's line within which it counts as follow-able, regardless of GPS accuracy. */
-    const val NEAR_TRAIL_FLOOR_M = 20.0
-
-    /** Multiplier on reported GPS accuracy when it exceeds [NEAR_TRAIL_FLOOR_M], to widen the near-trail gate. */
-    const val NEAR_TRAIL_ACCURACY_FACTOR = 2.0
 }

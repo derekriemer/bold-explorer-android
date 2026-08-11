@@ -9,7 +9,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
-import kotlin.math.max
 
 /**
  * Optional seam for describing follow directions. Given a targeted trail end, return its follow
@@ -130,14 +129,16 @@ class NavModeResolver(
     ): Boolean {
         if (loc == null) return false
         val dist = haversineDistanceMeters(LatLng(loc.lat, loc.lon), LatLng(target.waypoint.lat, target.waypoint.lon))
-        return dist <= max(EXTEND_FLOOR_M, EXTEND_ACCURACY_FACTOR * (acc ?: 0.0))
-    }
-
-    companion object {
-        /** Minimum distance within which a trail end may be extended, regardless of GPS accuracy. */
-        const val EXTEND_FLOOR_M = 15.0
-
-        /** Multiplier on reported GPS accuracy when it exceeds [EXTEND_FLOOR_M], to scale the extend threshold. */
-        const val EXTEND_ACCURACY_FACTOR = 2.0
+        // No cap was ever applied here — the extend gate was, and remains, genuinely unbounded.
+        // NavigationPolicy.UNBOUNDED_CAP_M names it so the remaining unbounded gates stay greppable,
+        // this behaves identically to the old `max(floor, factor*accuracy)` for every accuracy
+        // value, not merely the ones the test suite happens to exercise.
+        return dist <=
+            NavigationPolicy.widenWithAccuracy(
+                baseM = NavigationPolicy.EXTEND_FLOOR_M,
+                factor = NavigationPolicy.EXTEND_ACCURACY_FACTOR,
+                accuracyM = acc,
+                capM = NavigationPolicy.UNBOUNDED_CAP_M,
+            )
     }
 }

@@ -39,7 +39,7 @@ class NearbyTrailResolverTest {
         assertEquals(1, result.size)
         val near = result.single()
         assertEquals(1L, near.trailId)
-        assertTrue(near.distanceM < NearbyTrailResolver.NEAR_TRAIL_FLOOR_M, "distance ${near.distanceM}")
+        assertTrue(near.distanceM < NavigationPolicy.NEAR_TRAIL_FLOOR_M, "distance ${near.distanceM}")
     }
 
     @Test

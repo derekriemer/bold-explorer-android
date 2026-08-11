@@ -41,6 +41,7 @@ import com.boldexplorer.shared.navigation.CollectionExplorerState
 import com.boldexplorer.shared.navigation.CollectionPoint
 import com.boldexplorer.shared.navigation.NavMode
 import com.boldexplorer.shared.navigation.NavModeResolver
+import com.boldexplorer.shared.navigation.NavigationPolicy
 import com.boldexplorer.shared.navigation.NavigationTargetResolver
 import com.boldexplorer.shared.navigation.NearbyTrail
 import com.boldexplorer.shared.navigation.NearbyTrailResolver
@@ -524,7 +525,7 @@ class GpsViewModel
                         emptyList()
                     } else {
                         val acc = loc.accuracy ?: 0.0
-                        val gate = max(NearbyTrailResolver.NEAR_TRAIL_FLOOR_M, NearbyTrailResolver.NEAR_TRAIL_ACCURACY_FACTOR * acc)
+                        val gate = max(NavigationPolicy.NEAR_TRAIL_FLOOR_M, NavigationPolicy.NEAR_TRAIL_ACCURACY_FACTOR * acc)
                         val center = LatLng(loc.lat, loc.lon)
                         val snapshot = navPointsRepo.trailPointsInBbox(id, center, radiusM = gate + NEARBY_TRAIL_BBOX_MARGIN_M)
                         NearbyTrailResolver.resolve(center, loc.accuracy, snapshot)

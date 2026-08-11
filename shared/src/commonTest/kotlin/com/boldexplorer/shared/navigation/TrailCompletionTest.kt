@@ -20,7 +20,7 @@ import kotlin.test.assertTrue
  *     radius = min(CEILING, max(FLOOR, SIGMA_FACTOR × accuracy))
  *
  * Android reports accuracy as a 68% (1σ) horizontal radius, so a factor of 2 is roughly 95%
- * containment rather than an arbitrary multiplier. Above [TrailFollower.COMPLETION_HEDGE_ABOVE_M]
+ * containment rather than an arbitrary multiplier. Above [NavigationPolicy.COMPLETION_HEDGE_ABOVE_M]
  * the announcement hedges instead of asserting.
  */
 class TrailCompletionTest {

@@ -216,7 +216,7 @@ class CollectionExplorerTest {
         val state = explorer.state.value as CollectionExplorerState.Active
         assertEquals(end.id, state.target?.id)
         assertEquals(emptyList(), state.visitedIds)
-        assertTrue((state.nearTrailEndM ?: Double.MAX_VALUE) <= CollectionExplorer.TRAIL_APPROACH_M)
+        assertTrue((state.nearTrailEndM ?: Double.MAX_VALUE) <= NavigationPolicy.TRAIL_APPROACH_M)
     }
 
     @Test

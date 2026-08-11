@@ -8,8 +8,6 @@ import com.boldexplorer.shared.geo.haversineDistanceMeters
 import com.boldexplorer.shared.geo.initialBearingDeg
 import com.boldexplorer.shared.geo.segmentFraction
 import com.boldexplorer.shared.model.Waypoint
-import kotlin.math.max
-import kotlin.math.min
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -178,7 +176,7 @@ class TrailFollower(
         // not gate the very first advance in a session (positionAtLastAdvance is null then) —
         // reaching a checkpoint you're already standing at when you start is legitimate.
         positionAtLastAdvance?.let { last ->
-            if (haversineDistanceMeters(location, last) < MIN_MOVEMENT_SINCE_ADVANCE_M) return null
+            if (haversineDistanceMeters(location, last) < NavigationPolicy.MIN_MOVEMENT_SINCE_ADVANCE_M) return null
         }
 
         // 0. Endpoint completion is a policy of its own, not a side effect of advancing off the
@@ -203,7 +201,7 @@ class TrailFollower(
         //    Guards on proximity (4× threshold) so a user 1 km past the trailhead on an
         //    open-field trail doesn't auto-advance. Also requires cross-track distance within
         //    3× threshold (user must actually be on the trail) and optional heading agreement.
-        if (current.currentIndex > 0 && d <= current.thresholdM * PROJECTION_PROXIMITY_FACTOR) {
+        if (current.currentIndex > 0 && d <= current.thresholdM * NavigationPolicy.PROJECTION_PROXIMITY_FACTOR) {
             val prev = current.waypoints[current.currentIndex - 1]
             val prevLL = LatLng(prev.lat, prev.lon)
             val targetLL = LatLng(target.lat, target.lon)
@@ -214,9 +212,9 @@ class TrailFollower(
             val effectiveBearing = bearingDeg ?: smoothedBearingDeg
             val usedSmoothed = bearingDeg == null && smoothedBearingDeg != null
             val headingDiffDeg = effectiveBearing?.let { angleDifferenceDeg(it.toDouble(), segBearing) }
-            val headingOk = headingDiffDeg == null || headingDiffDeg <= HEADING_TOLERANCE_DEG
-            if (t >= INCOMING_ADVANCE_FRACTION &&
-                crossTrack <= current.thresholdM * CROSS_TRACK_FACTOR &&
+            val headingOk = headingDiffDeg == null || headingDiffDeg <= NavigationPolicy.HEADING_TOLERANCE_DEG
+            if (t >= NavigationPolicy.INCOMING_ADVANCE_FRACTION &&
+                crossTrack <= current.thresholdM * NavigationPolicy.CROSS_TRACK_FACTOR &&
                 headingOk
             ) {
                 return fireAdvance(current, location, altitudeM, t, crossTrack, headingDiffDeg, "projection", usedSmoothed)
@@ -228,13 +226,13 @@ class TrailFollower(
         //    Segment-length bound prevents false advances when the next waypoint is far away.
         val nextI = current.currentIndex + 1
         if (nextI < current.waypoints.size &&
-            closestApproachM <= current.thresholdM * CLOSENESS_FACTOR &&
-            d >= closestApproachM + DIVERGE_M
+            closestApproachM <= current.thresholdM * NavigationPolicy.CLOSENESS_FACTOR &&
+            d >= closestApproachM + NavigationPolicy.DIVERGE_M
         ) {
             val nextWpLL = LatLng(current.waypoints[nextI].lat, current.waypoints[nextI].lon)
             val dNext = haversineDistanceMeters(location, nextWpLL)
             val segmentLength = haversineDistanceMeters(LatLng(target.lat, target.lon), nextWpLL)
-            if (dNext < d && dNext <= segmentLength * DIVERGE_NEXT_PROXIMITY_FACTOR) {
+            if (dNext < d && dNext <= segmentLength * NavigationPolicy.DIVERGE_NEXT_PROXIMITY_FACTOR) {
                 return fireAdvance(current, location, altitudeM, null, null, null, "divergence")
             }
         }
@@ -307,55 +305,15 @@ class TrailFollower(
      * containment rather than an arbitrary multiplier. A null accuracy carries no information, so
      * it falls back to the ceiling — the behaviour before this policy existed.
      */
-    private fun completionRadiusM(accuracyM: Double?): Double {
-        val acc = accuracyM ?: return COMPLETION_CEILING_M
-        return min(COMPLETION_CEILING_M, max(COMPLETION_FLOOR_M, COMPLETION_SIGMA_FACTOR * acc))
-    }
+    private fun completionRadiusM(accuracyM: Double?): Double =
+        NavigationPolicy.tightenWithAccuracy(
+            ceilingM = NavigationPolicy.COMPLETION_CEILING_M,
+            floorM = NavigationPolicy.COMPLETION_FLOOR_M,
+            factor = NavigationPolicy.COMPLETION_SIGMA_FACTOR,
+            accuracyM = accuracyM,
+        )
 
     /** Whether the fix is too uncertain to assert arrival plainly. */
     private fun shouldHedgeCompletion(accuracyM: Double?): Boolean =
-        accuracyM != null && accuracyM > COMPLETION_HEDGE_ABOVE_M
-
-    companion object {
-        /** Upper bound on the completion radius; poor GPS never widens past this. */
-        const val COMPLETION_CEILING_M = 15.0
-
-        /** Lower bound, so an optimistic accuracy report cannot make the trail uncompletable. */
-        const val COMPLETION_FLOOR_M = 5.0
-
-        /** Android accuracy is a 1σ radius; 2σ is roughly 95% containment. */
-        const val COMPLETION_SIGMA_FACTOR = 2.0
-
-        /** Above this accuracy the arrival announcement hedges rather than asserts. */
-        const val COMPLETION_HEDGE_ABOVE_M = 10.0
-
-        /** Incoming projection: ≥90% along the trail leg → auto-advance. */
-        private const val INCOMING_ADVANCE_FRACTION = 0.9
-
-        /** Incoming projection only fires within 4× threshold to avoid false advances on open terrain. */
-        private const val PROJECTION_PROXIMITY_FACTOR = 4.0
-
-        /** Incoming projection: cross-track distance must be within 3× threshold. */
-        private const val CROSS_TRACK_FACTOR = 3.0
-
-        /** Incoming projection: COG must agree with segment direction within this many degrees. */
-        private const val HEADING_TOLERANCE_DEG = 60.0
-
-        /** Divergence: user must have gotten within 2× threshold of the target (a near-miss). */
-        private const val CLOSENESS_FACTOR = 2.0
-
-        /** Divergence: user must have moved ≥5 m further away since closest approach. */
-        private const val DIVERGE_M = 5.0
-
-        /** Divergence: next waypoint must be within this factor of the current segment length. */
-        private const val DIVERGE_NEXT_PROXIMITY_FACTOR = 1.5
-
-        /**
-         * Minimum real movement required since the last advance before another one can fire
-         * (issue #9). Larger than typical GPS jitter for a stationary user (a few metres), smaller
-         * than both the default reach threshold (15 m) and the auto-record track-point spacing
-         * (10 m), so normal sequential advances while actually walking are unaffected.
-         */
-        private const val MIN_MOVEMENT_SINCE_ADVANCE_M = 5.0
-    }
+        accuracyM != null && accuracyM > NavigationPolicy.COMPLETION_HEDGE_ABOVE_M
 }

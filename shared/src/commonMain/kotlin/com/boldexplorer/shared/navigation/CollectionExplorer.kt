@@ -231,7 +231,7 @@ class CollectionExplorer {
         // Trail endpoints: show Follow button when within TRAIL_APPROACH_M.
         // Never auto-reach a trail end — user must explicitly Follow or Clear to move on.
         if (target is CollectionPoint.TrailEnd) {
-            val near = distToTarget <= TRAIL_APPROACH_M
+            val near = distToTarget <= NavigationPolicy.TRAIL_APPROACH_M
             val nearTrailEndM: Double? = if (near) distToTarget else null
             val nearby = proximityCheck(sorted, target.id, s, location)
             _state.value =
@@ -265,7 +265,7 @@ class CollectionExplorer {
         // issue #8. Auto-advance still moves on immediately, since lingering isn't the point of a
         // self-guided tour.
         val nearTrailEndM: Double? = null
-        if (distToTarget <= REACH_THRESHOLD_M && target.id != s.lastReachedId) {
+        if (distToTarget <= NavigationPolicy.REACH_THRESHOLD_M && target.id != s.lastReachedId) {
             val newVisited = (s.visitedIds + target.id).takeLast(VISITED_CAP)
 
             val autoNext =
@@ -309,7 +309,7 @@ class CollectionExplorer {
             p.id != excludeId &&
                 p.id !in s.visitedIds &&
                 p.id !in s.proximityAnnouncedIds &&
-                haversineDistanceMeters(location, LatLng(p.waypoint.lat, p.waypoint.lon)) <= PROXIMITY_M
+                haversineDistanceMeters(location, LatLng(p.waypoint.lat, p.waypoint.lon)) <= NavigationPolicy.PROXIMITY_M
         }
 
     private fun selectAutomaticTarget(
@@ -325,15 +325,11 @@ class CollectionExplorer {
             val distanceM = haversineDistanceMeters(location, pointLocation)
             val bearingDeg = initialBearingDeg(location, pointLocation)
             val headingDeltaDeg = abs(deltaAngle(travelHeadingDeg, bearingDeg))
-            distanceM + headingDeltaDeg * HEADING_DEGREE_PENALTY_M
+            distanceM + headingDeltaDeg * NavigationPolicy.HEADING_DEGREE_PENALTY_M
         }
     }
 
     companion object {
-        const val REACH_THRESHOLD_M = 15.0
-        const val TRAIL_APPROACH_M = 10.0
-        const val PROXIMITY_M = 30.0
         const val VISITED_CAP = 3
-        const val HEADING_DEGREE_PENALTY_M = 1.5
     }
 }

@@ -184,7 +184,7 @@ class NavModeResolverTest {
         runTest(UnconfinedTestDispatcher()) {
             // ~33 m away: beyond the 15 m floor, but within 2×20 m = 40 m accuracy-scaled threshold.
             val sensor = haversineDistanceMeters(LatLng(0.0, 0.0), LatLng(0.0003, 0.0))
-            assertTrue(sensor > NavModeResolver.EXTEND_FLOOR_M && sensor < 40.0, "fixture distance $sensor")
+            assertTrue(sensor > NavigationPolicy.EXTEND_FLOOR_M && sensor < 40.0, "fixture distance $sensor")
             val end = trailEnd(1, isStart = true, lat = 0.0003, lon = 0.0)
             explorerState.value = active(end, nearTrailEndM = null)
             location.value = sample(0.0, 0.0)

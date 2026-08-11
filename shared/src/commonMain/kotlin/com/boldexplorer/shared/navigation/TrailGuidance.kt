@@ -25,15 +25,6 @@ data class TrailGuidanceState(
 )
 
 object TrailGuidance {
-    /**
-     * Physical baseline for the desired-course chord, in metres.
-     *
-     * Long enough to average out recording noise at walking density, short enough that a real bend
-     * still moves the course promptly. Deliberately *not* shared with any matching window — that
-     * one exists to exclude a switchback's other arm, which is the opposite goal.
-     */
-    const val COURSE_BASELINE_M = 20.0
-
     const val MIN_TRUSTED_SPEED_MPS = 1.0
     const val TRUSTED_COURSE_HOLD_MS = 10_000L
 
@@ -116,14 +107,17 @@ object TrailGuidance {
         // straight road produced alternating "slight left" / "slight right" — and swung the
         // directional beacon's pan by the same amount, since it reads this via relativeDeg.
         //
-        // A chord over COURSE_BASELINE_M averages that noise out and is density-invariant, so the
-        // same physical road behaves identically whether recorded every 2 m or every 30 m.
+        // A chord over NavigationPolicy.COURSE_BASELINE_M averages that noise out and is
+        // density-invariant, so the same physical road behaves identically whether recorded every
+        // 2 m or every 30 m.
         if (polyline != null) {
             val alongM = polyline.project(location)?.alongTrackM
             if (alongM != null) {
                 polyline
-                    .chordBearingAt(alongM + COURSE_BASELINE_M / 2.0, baselineM = COURSE_BASELINE_M)
-                    ?.let { return it }
+                    .chordBearingAt(
+                        alongM + NavigationPolicy.COURSE_BASELINE_M / 2.0,
+                        baselineM = NavigationPolicy.COURSE_BASELINE_M,
+                    )?.let { return it }
             }
         }
 

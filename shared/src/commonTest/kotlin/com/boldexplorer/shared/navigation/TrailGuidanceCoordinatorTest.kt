@@ -169,7 +169,7 @@ class TrailGuidanceCoordinatorTest {
         assertNotNull(eval)
         assertFalse(eval.fired)
         assertEquals(1, eval.consecutiveCount)
-        assertEquals(TrailGuidanceCoordinator.OFF_TRAIL_CONSECUTIVE_SLOW, eval.requiredCount)
+        assertEquals(NavigationPolicy.OFF_TRAIL_CONSECUTIVE_SLOW, eval.requiredCount)
     }
 
     // ── Backtrack detection ─────────────────────────────────────────────────────────
