@@ -2,6 +2,12 @@ package com.boldexplorer.location
 
 import com.boldexplorer.shared.location.LocationProvider
 import com.boldexplorer.shared.model.LocationSample
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -23,8 +29,17 @@ class LocationProviderRouter
     @Inject
     constructor(
         val gnss: GnssLocationProviderImpl,
+        private val degradation: LocationDegradationController,
     ) : LocationProvider {
-        override val locationFlow: SharedFlow<LocationSample> = gnss.locationFlow
+        private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+        // Debug-only GPS degradation is applied here, after the accuracy gate, so degraded fixes
+        // still reach navigation instead of being dropped by the gate they are meant to exercise.
+        // Identity in release builds.
+        override val locationFlow: SharedFlow<LocationSample> =
+            gnss.locationFlow
+                .map { degradation.apply(it) }
+                .shareIn(scope, SharingStarted.WhileSubscribed(5_000L), replay = 1)
 
         val useGnss: StateFlow<Boolean> = MutableStateFlow(true).asStateFlow()
 

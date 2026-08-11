@@ -9,6 +9,7 @@ import com.boldexplorer.audio.AudioLogEntry
 import com.boldexplorer.compass.SensorCompassProvider
 import com.boldexplorer.gpx.GpxFileWriter
 import com.boldexplorer.location.AccuracyHapticMonitor
+import com.boldexplorer.location.LocationDegradationController
 import com.boldexplorer.location.LocationProviderRouter
 import com.boldexplorer.location.RawFixEvent
 import com.boldexplorer.shared.audio.AudioCueScheduler
@@ -34,6 +35,7 @@ class DebugViewModel
     constructor(
         @ApplicationContext private val context: Context,
         private val locationRouter: LocationProviderRouter,
+        private val degradation: LocationDegradationController,
         private val compassProvider: SensorCompassProvider,
         private val waypointRepo: WaypointRepository,
         private val audioEngine: AudioEngine,
@@ -152,4 +154,70 @@ class DebugViewModel
                     }
             }
         }
+        // ── GPS degradation (debug-only, #62) ───────────────────────────────────────────
+
+        /**
+         * Presets rather than sliders.
+         *
+         * A continuous slider is awkward to set precisely with a screen reader, and the useful
+         * settings here are a handful of scenarios rather than a range. Each names the condition it
+         * reproduces so the choice is about the situation, not the numbers.
+         */
+        enum class DegradationPreset(
+            val label: String,
+            val biasM: Double,
+            val jitterM: Double,
+            val accuracyM: Double?,
+        ) {
+            MILD_BIAS("Mild drift, 10 m", 10.0, 0.0, null),
+            SEVERE_BIAS("Severe drift, 25 m", 25.0, 0.0, null),
+            POOR_ACCURACY("Poor accuracy only, 30 m", 0.0, 0.0, 30.0),
+            CANYON("Canyon: 20 m drift, 8 m jitter, 25 m accuracy", 20.0, 8.0, 25.0),
+        }
+
+        val degradationConfig = degradation.config
+
+        /**
+         * Arms [preset], drifting toward [biasBearingDeg].
+         *
+         * Bearing matters: to put a fix on the wrong arm of a switchback the drift has to push
+         * across the trail, so aim it perpendicular to the direction of travel.
+         */
+        fun armDegradation(
+            preset: DegradationPreset,
+            biasBearingDeg: Double,
+        ) {
+            degradation.arm(
+                lateralBiasM = preset.biasM,
+                biasBearingDeg = biasBearingDeg,
+                jitterSigmaM = preset.jitterM,
+                accuracyOverrideM = preset.accuracyM,
+            )
+            audioEventLog.append(
+                AudioLogEntry(
+                    timestampMs = System.currentTimeMillis(),
+                    kind = AudioLogEntry.Kind.USER_MARKER,
+                    trigger = "GpsDegradationArmed",
+                    inputs = preset.label,
+                    outputs = "bearing=$biasBearingDeg",
+                    played = "armed",
+                    note = "Fixes from here are deliberately degraded; readings are not real.",
+                ),
+            )
+        }
+
+        fun disarmDegradation() {
+            degradation.disarm()
+            audioEventLog.append(
+                AudioLogEntry(
+                    timestampMs = System.currentTimeMillis(),
+                    kind = AudioLogEntry.Kind.USER_MARKER,
+                    trigger = "GpsDegradationDisarmed",
+                    inputs = "",
+                    outputs = "",
+                    played = "disarmed",
+                ),
+            )
+        }
+
     }

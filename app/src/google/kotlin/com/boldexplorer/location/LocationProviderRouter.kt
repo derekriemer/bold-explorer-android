@@ -43,6 +43,7 @@ class LocationProviderRouter
     constructor(
         val fused: FusedLocationProviderImpl,
         val gnss: GnssLocationProviderImpl,
+        private val degradation: LocationDegradationController,
         @ApplicationContext private val context: Context,
     ) : LocationProvider {
         private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -56,7 +57,12 @@ class LocationProviderRouter
             useGnss
                 .flatMapLatest { gnssActive ->
                     if (gnssActive) gnss.locationFlow else fused.locationFlow
-                }.shareIn(scope, SharingStarted.WhileSubscribed(5_000L), replay = 1)
+                }
+                // Debug-only GPS degradation, applied after the accuracy gate so degraded fixes
+                // still reach navigation instead of being dropped by the gate they exercise.
+                // Identity in release builds.
+                .map { degradation.apply(it) }
+                .shareIn(scope, SharingStarted.WhileSubscribed(5_000L), replay = 1)
 
         /** Raw-fix telemetry (issue #23) from whichever provider is currently active. */
         val lastRawFix: StateFlow<RawFixEvent?> =

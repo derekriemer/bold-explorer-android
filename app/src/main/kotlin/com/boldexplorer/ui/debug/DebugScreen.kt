@@ -28,7 +28,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -147,6 +149,71 @@ fun DebugScreen(
                         checked = useGnss,
                         onCheckedChange = { viewModel.setUseGnss(it) },
                     )
+                }
+
+                Spacer(Modifier.height(8.dp))
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                Text("GPS degradation", style = MaterialTheme.typography.titleSmall)
+
+                // #62: switchback matching cannot be falsified under good GPS, because the nearest
+                // arm is then also the correct arm. These presets manufacture the ambiguity.
+                val degradation by viewModel.degradationConfig.collectAsStateWithLifecycle()
+                val degrading = degradation.isActiveAt(nowMs)
+                val remainingS = ((degradation.expiresAtMs - nowMs) / 1000L).coerceAtLeast(0L)
+
+                Text(
+                    if (degrading) {
+                        "ACTIVE — readings are deliberately wrong. Expires in $remainingS seconds."
+                    } else {
+                        "Off. Fixes are unmodified."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color =
+                        if (degrading) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    modifier =
+                        Modifier.semantics {
+                            liveRegion = LiveRegionMode.Polite
+                            contentDescription =
+                                if (degrading) {
+                                    "GPS degradation active. Readings are deliberately wrong. " +
+                                        "Expires in $remainingS seconds."
+                                } else {
+                                    "GPS degradation off. Fixes are unmodified."
+                                }
+                        },
+                )
+
+                if (degrading) {
+                    Spacer(Modifier.height(4.dp))
+                    Button(
+                        onClick = { viewModel.disarmDegradation() },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    ) {
+                        Text("Stop degrading GPS")
+                    }
+                } else {
+                    // Drift is aimed perpendicular to travel, because pushing a fix *across* the
+                    // trail is what lands it on the wrong arm of a switchback. Aiming it along the
+                    // trail mostly just shifts along-track position, which is not the hazard.
+                    val bearing = (heading?.trueNorth ?: heading?.magnetic ?: 0.0) + 90.0
+                    DebugViewModel.DegradationPreset.entries.forEach { preset ->
+                        Spacer(Modifier.height(4.dp))
+                        TextButton(
+                            onClick = { viewModel.armDegradation(preset, bearing) },
+                            modifier =
+                                Modifier.fillMaxWidth().semantics {
+                                    contentDescription =
+                                        "Degrade GPS: ${preset.label}, drifting right of travel, for 30 minutes"
+                                },
+                        ) {
+                            Text(preset.label)
+                        }
+                    }
                 }
 
                 Spacer(Modifier.height(8.dp))
