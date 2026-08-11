@@ -183,6 +183,87 @@ object NavigationPolicy {
     /** Above this accuracy the arrival announcement hedges rather than asserts. */
     const val COMPLETION_HEDGE_ABOVE_M = 10.0
 
+    // ── Continuous matching: the reacquisition ladder (ProgressTracker) ──────────────────────
+    //
+    // Unlike everything above, these are NOT relocated values — they are new, and they are
+    // deliberately untuned. S4 runs the tracker in shadow mode precisely so they can be set from
+    // field logs rather than from guesswork. Treat the numbers here as starting points with the
+    // right *shape*, not as answers.
+
+    /** Cross-track floor for accepting a candidate as a match, before accuracy widening. */
+    const val MATCH_GATE_BASE_M = 25.0
+
+    /** Accuracy multiplier for the match gate. */
+    const val MATCH_GATE_ACCURACY_FACTOR = 3.0
+
+    /** Hard ceiling on the match gate, so an implausible accuracy cannot make anything match. */
+    const val MATCH_GATE_CAP_M = 60.0
+
+    /** Accuracy multiplier (K) in `budget = maxSpeed × elapsed + K × accuracy`. */
+    const val BUDGET_ACCURACY_FACTOR = 2.0
+
+    /**
+     * Cap (T_CAP) on the elapsed term of the budget, in seconds.
+     *
+     * Without it the window grows without bound and silently becomes a global scan while still
+     * claiming the continuity that makes it safe. The reckoning horizon is the honest way to give
+     * up; this cap is what stops the window pretending otherwise in the meantime.
+     */
+    const val BUDGET_ELAPSED_CAP_S = 20.0
+
+    /**
+     * Floor on the speed used to size the window, in m/s.
+     *
+     * The window must admit a walker who has stopped and drifted, so it cannot collapse to zero
+     * when observed speed does.
+     */
+    const val MIN_MAX_SPEED_MPS = 2.5
+
+    /**
+     * Safety margin applied to observed speed when sizing the window.
+     *
+     * Window size **must** derive from observed speed rather than being a global constant. A
+     * walking-tuned constant strands a cyclist outside the window on every fix — permanent
+     * `Uncertain → Lost → global scan → cooldown` — while a vehicle-tuned one admits candidates
+     * 300 m away for a walker who has moved four metres, destroying the switchback protection that
+     * window size exists to provide. See the high-speed traversal fixture.
+     */
+    const val SPEED_MARGIN_FACTOR = 2.0
+
+    /** Smoothing factor for the observed-speed EMA. Higher reacts faster and is noisier. */
+    const val SPEED_EMA_ALPHA = 0.3
+
+    /**
+     * Cross-track spread within which two candidates count as tied, in metres.
+     *
+     * Only tied candidates are ranked by prediction. A candidate that is plainly nearer wins on
+     * geometry alone — prediction ranks, it does not constrain.
+     */
+    const val CANDIDATE_TIE_M = 5.0
+
+    /** Reckoned distance past which continuity is declared gone, in metres. */
+    const val RECKONING_HORIZON_M = 120.0
+
+    /**
+     * Elapsed time past which continuity is declared gone, in seconds.
+     *
+     * Both bounds are required and they trade places with speed: a stationary user with bad GPS
+     * burns seconds without metres, a fast-moving one burns metres without seconds.
+     */
+    const val RECKONING_HORIZON_S = 90.0
+
+    /** Displacement an `Unconfirmed` candidate must survive before being promoted, in metres. */
+    const val CORROBORATION_M = 25.0
+
+    /**
+     * Minimum gap between global rescans, in seconds.
+     *
+     * The failure mode is frequency, not cost: a user genuinely off the trail fails corroboration
+     * every time, and without this the tracker would scan globally on every fix at 1 Hz forever.
+     * Implemented as a timestamp on the state rather than a counter — see [ProgressTracker].
+     */
+    const val RESCAN_COOLDOWN_S = 30.0
+
     // ── Trail extend ──────────────────────────────────────────────────────────────────────────
 
     /** Minimum distance within which a trail end may be extended, regardless of GPS accuracy. */

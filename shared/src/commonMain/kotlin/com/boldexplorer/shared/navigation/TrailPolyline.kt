@@ -124,54 +124,143 @@ class TrailPolyline(
         var bestDistM = Double.MAX_VALUE
 
         for (i in 0 until segmentCount) {
-            val segStartM = cumulativeM[i]
-            val segLenM = cumulativeM[i + 1] - segStartM
-
-            // Express the window as a range of segment fractions, so a segment straddling the
-            // window boundary yields a position *at* the boundary rather than outside it.
-            var tMin = 0.0
-            var tMax = 1.0
-            if (window != null) {
-                if (segLenM <= DEGENERATE_SEGMENT_M) {
-                    if (segStartM !in window) continue
-                } else {
-                    tMin = max(0.0, (window.start - segStartM) / segLenM)
-                    tMax = min(1.0, (window.endInclusive - segStartM) / segLenM)
-                    if (tMin > tMax) continue // segment lies wholly outside the window
-                }
-            }
-
-            val ax = xs[i]
-            val ay = ys[i]
-            val abx = xs[i + 1] - ax
-            val aby = ys[i + 1] - ay
-            val len2 = abx * abx + aby * aby
-            val tRaw = if (len2 <= DEGENERATE_SEGMENT_M) 0.0 else ((p.x - ax) * abx + (p.y - ay) * aby) / len2
-            val t = tRaw.coerceIn(tMin, tMax)
-
-            val footX = ax + t * abx
-            val footY = ay + t * aby
-            val dx = p.x - footX
-            val dy = p.y - footY
-            val distM = sqrt(dx * dx + dy * dy)
-
+            val here = projectOnSegment(p, i, window) ?: continue
+            val distM = abs(here.crossTrackM)
             // Strict `<` keeps the first winner, so ties resolve toward the lower alongTrackM.
             if (distM < bestDistM) {
                 bestDistM = distM
-                // Magnitude is the distance to the nearest point (which may be an endpoint);
-                // the sign is which side of the segment the fix lies on.
-                val side = crossTrackRightM(p, Vec2(ax, ay), Vec2(xs[i + 1], ys[i + 1]))
-                best =
-                    TrailPosition(
-                        segmentIndex = i,
-                        fraction = t,
-                        alongTrackM = segStartM + t * segLenM,
-                        crossTrackM = if (side < 0.0) -distM else distM,
-                        snapped = frame.toLatLng(Vec2(footX, footY)),
-                    )
+                best = here
             }
         }
         return best
+    }
+
+    /**
+     * Every position on this polyline that is a *local* minimum of distance to [point], ordered
+     * nearest first.
+     *
+     * Where [project] returns only the winner, this returns its rivals too — which is what the
+     * reacquisition ladder needs in order to record a best-rejected candidate, to break ties toward
+     * a predicted position, and to choose an end of a loop by travel direction. A decision made
+     * without seeing the runner-up cannot be explained afterwards from a log.
+     *
+     * One candidate per *stretch* of trail, not per segment. Vertex density is an artefact of how
+     * the trail was recorded — an arm of a switchback may be one segment or fifty — so enumerating
+     * segments would swamp the genuine rival with near-duplicates of the winner and make the result
+     * density-dependent. A local minimum is exactly "a place the user could plausibly be".
+     *
+     * No relevance cutoff is applied: a stretch 100 m away is still somewhere the user could be,
+     * and it simply ranks last. Callers that only care about plausible rivals should gate on
+     * `crossTrackM` themselves rather than have a threshold baked in here.
+     *
+     * @param window as [project] — segments outside it are not considered at all. A window that
+     *   excludes a middle stretch also breaks continuity there, so the stretches either side are
+     *   enumerated independently rather than merged across the gap.
+     */
+    fun candidates(
+        point: LatLng,
+        window: ClosedFloatingPointRange<Double>? = null,
+    ): List<TrailPosition> {
+        // A single-point polyline has exactly one position, so there is nothing to rank.
+        if (segmentCount == 0) return listOfNotNull(project(point, window))
+
+        val p = frame.toLocal(point)
+        val found = mutableListOf<TrailPosition>()
+
+        // Walk the trail in along-track order tracking whether distance is currently falling. A
+        // fall followed by a rise brackets a local minimum; the minimum itself is the last position
+        // seen before the rise began.
+        var falling = true
+        var bestPos: TrailPosition? = null
+        var bestDistM = Double.MAX_VALUE
+        var previousIndex = Int.MIN_VALUE
+
+        fun endStretch() {
+            if (falling) bestPos?.let { found.add(it) }
+            falling = true
+            bestPos = null
+            bestDistM = Double.MAX_VALUE
+        }
+
+        for (i in 0 until segmentCount) {
+            val here = projectOnSegment(p, i, window) ?: continue
+
+            // A window-excluded segment breaks the trail into disconnected stretches; distance
+            // cannot be compared across the gap, so the previous stretch ends here.
+            if (i != previousIndex + 1) endStretch()
+            previousIndex = i
+
+            val distM = abs(here.crossTrackM)
+            if (distM <= bestDistM) {
+                // Still falling, or flat — a plateau across a vertex is one minimum, not two.
+                bestDistM = distM
+                bestPos = here
+                falling = true
+            } else {
+                if (falling) found.add(bestPos!!)
+                // Keep tracking the rise so that a later fall is recognised as a new stretch.
+                falling = false
+                bestDistM = distM
+                bestPos = here
+            }
+        }
+        endStretch()
+
+        return found.sortedBy { abs(it.crossTrackM) }
+    }
+
+    /**
+     * Nearest position to [p] on segment [i], or `null` if [window] excludes that segment.
+     *
+     * Shared by [project] and [candidates] so the two can never disagree about where a segment's
+     * nearest point is or what it is called in along-track coordinates.
+     */
+    private fun projectOnSegment(
+        p: Vec2,
+        i: Int,
+        window: ClosedFloatingPointRange<Double>?,
+    ): TrailPosition? {
+        val segStartM = cumulativeM[i]
+        val segLenM = cumulativeM[i + 1] - segStartM
+
+        // Express the window as a range of segment fractions, so a segment straddling the
+        // window boundary yields a position *at* the boundary rather than outside it.
+        var tMin = 0.0
+        var tMax = 1.0
+        if (window != null) {
+            if (segLenM <= DEGENERATE_SEGMENT_M) {
+                if (segStartM !in window) return null
+            } else {
+                tMin = max(0.0, (window.start - segStartM) / segLenM)
+                tMax = min(1.0, (window.endInclusive - segStartM) / segLenM)
+                if (tMin > tMax) return null // segment lies wholly outside the window
+            }
+        }
+
+        val ax = xs[i]
+        val ay = ys[i]
+        val abx = xs[i + 1] - ax
+        val aby = ys[i + 1] - ay
+        val len2 = abx * abx + aby * aby
+        val tRaw = if (len2 <= DEGENERATE_SEGMENT_M) 0.0 else ((p.x - ax) * abx + (p.y - ay) * aby) / len2
+        val t = tRaw.coerceIn(tMin, tMax)
+
+        val footX = ax + t * abx
+        val footY = ay + t * aby
+        val dx = p.x - footX
+        val dy = p.y - footY
+        val distM = sqrt(dx * dx + dy * dy)
+
+        // Magnitude is the distance to the nearest point (which may be an endpoint); the sign is
+        // which side of the segment the fix lies on.
+        val side = crossTrackRightM(p, Vec2(ax, ay), Vec2(xs[i + 1], ys[i + 1]))
+        return TrailPosition(
+            segmentIndex = i,
+            fraction = t,
+            alongTrackM = segStartM + t * segLenM,
+            crossTrackM = if (side < 0.0) -distM else distM,
+            snapped = frame.toLatLng(Vec2(footX, footY)),
+        )
     }
 
     /**

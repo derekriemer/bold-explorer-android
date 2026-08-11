@@ -1,6 +1,7 @@
 package com.boldexplorer.shared.navigation
 
 import com.boldexplorer.shared.geo.LatLng
+import com.boldexplorer.shared.model.LocationSample
 import kotlin.math.floor
 
 /**
@@ -48,6 +49,62 @@ fun densify(
     }
     out.add(poly.positionAt(poly.totalLengthM)) // the final vertex
     return out
+}
+
+/** Metres per degree of longitude at latitude 40 — the latitude every fixture here is built at. */
+private const val M_PER_DEG_LON_AT_40 = 111_194.9 * 0.766
+
+/**
+ * A hairpin: north [legM] metres, east [gapM], then south [legM] again.
+ *
+ * The two long arms are parallel, [gapM] apart, and traversed in *opposite* directions. This is the
+ * geometry that motivates continuity being primary — a fix midway between the arms is equidistant
+ * from both, so no purely geometric test can say which one the user is on.
+ */
+fun switchbackShape(
+    legM: Double,
+    gapM: Double,
+): List<LatLng> {
+    val north = 40.0 + legM / 111_194.9
+    val east = -105.0 + gapM / M_PER_DEG_LON_AT_40
+    return listOf(
+        LatLng(40.0, -105.0),
+        LatLng(north, -105.0),
+        LatLng(north, east),
+        LatLng(40.0, east),
+    )
+}
+
+/** A point [northM] metres north and [eastM] metres east of the fixtures' common origin. */
+fun offsetFromOrigin(
+    northM: Double,
+    eastM: Double,
+): LatLng = LatLng(40.0 + northM / 111_194.9, -105.0 + eastM / M_PER_DEG_LON_AT_40)
+
+/**
+ * A GPS fix [northM] metres north and [eastM] metres east of the fixtures' common origin.
+ *
+ * On a due-north trail built by [northShape] these read directly as along-track and cross-track
+ * offsets, which keeps tracker tests legible: `sampleAt(northM = 100.0, eastM = 30.0)` is "100 m
+ * along the trail and 30 m off it".
+ */
+fun sampleAt(
+    northM: Double,
+    eastM: Double,
+    timestampMs: Long,
+    accuracyM: Double? = 5.0,
+    speedMps: Double? = 1.4,
+    courseDeg: Double? = 0.0,
+): LocationSample {
+    val p = offsetFromOrigin(northM, eastM)
+    return LocationSample(
+        lat = p.lat,
+        lon = p.lon,
+        accuracy = accuracyM,
+        heading = courseDeg,
+        speed = speedMps,
+        timestamp = timestampMs,
+    )
 }
 
 /** A due-north line from (40, -105) of [lengthM] metres, as a two-point shape. */
