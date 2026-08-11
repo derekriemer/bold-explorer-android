@@ -6,6 +6,8 @@ import androidx.lifecycle.viewModelScope
 import com.boldexplorer.audio.AudioEngine
 import com.boldexplorer.audio.AudioEventLog
 import com.boldexplorer.audio.AudioLogEntry
+import com.boldexplorer.audio.ShadowMatchMonitor
+import com.boldexplorer.audio.ShadowMatchSnapshot
 import com.boldexplorer.compass.SensorCompassProvider
 import com.boldexplorer.gpx.GpxFileWriter
 import com.boldexplorer.location.AccuracyHapticMonitor
@@ -41,6 +43,7 @@ class DebugViewModel
         private val audioEngine: AudioEngine,
         private val scheduler: AudioCueScheduler,
         private val audioEventLog: AudioEventLog,
+        private val shadowMatchMonitor: ShadowMatchMonitor,
         private val hapticMonitor: AccuracyHapticMonitor,
     ) : ViewModel() {
         val location: StateFlow<LocationSample?> =
@@ -64,6 +67,17 @@ class DebugViewModel
 
         /** App-scoped so it keeps buzzing on whichever screen is open, not just this one. */
         val accuracyHapticsEnabled: StateFlow<Boolean> = hapticMonitor.enabled
+
+        /**
+         * Shadow trail matching (ADR 0001 S4): the continuous matcher running beside the live
+         * follower, writing one TRAIL_MATCH record per fix for later replay.
+         */
+        val shadowMatchEnabled: StateFlow<Boolean> = shadowMatchMonitor.enabled
+
+        /** Latest shadow decision, refreshed at most every 5 s so it stays readable with TalkBack. */
+        val shadowMatch: StateFlow<ShadowMatchSnapshot?> = shadowMatchMonitor.snapshot
+
+        fun setShadowMatchEnabled(enabled: Boolean) = shadowMatchMonitor.setEnabled(enabled)
 
         fun setAccuracyHapticsEnabled(enabled: Boolean) = hapticMonitor.setEnabled(enabled)
 
@@ -219,5 +233,4 @@ class DebugViewModel
                 ),
             )
         }
-
     }

@@ -15,7 +15,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -108,33 +107,12 @@ class AudioEventLog
             }
 
         // ── Serialization ─────────────────────────────────────────────────────────
+        //
+        // Lives in AudioLogCodec so it can be unit-tested without a Context. Note that the reader
+        // now restores `extra`, which it previously dropped — the Debug screen used to show less
+        // after a restart than the file actually held.
 
-        private fun formatLine(e: AudioLogEntry): String =
-            JSONObject()
-                .apply {
-                    put("ts", e.timestampMs)
-                    put("kind", e.kind.name)
-                    put("trigger", e.trigger)
-                    put("inputs", e.inputs)
-                    put("outputs", e.outputs)
-                    put("played", e.played)
-                    if (e.note.isNotEmpty()) put("note", e.note)
-                    e.extra.forEach { (k, v) -> if (v != null) put(k, v) }
-                }.toString()
+        private fun formatLine(e: AudioLogEntry): String = AudioLogCodec.format(e)
 
-        private fun parseLine(line: String): AudioLogEntry? {
-            if (line.isBlank()) return null
-            return runCatching {
-                val j = JSONObject(line)
-                AudioLogEntry(
-                    timestampMs = j.getLong("ts"),
-                    kind = AudioLogEntry.Kind.valueOf(j.getString("kind")),
-                    trigger = j.getString("trigger"),
-                    inputs = j.getString("inputs"),
-                    outputs = j.getString("outputs"),
-                    played = j.getString("played"),
-                    note = j.optString("note", ""),
-                )
-            }.getOrNull()
-        }
+        private fun parseLine(line: String): AudioLogEntry? = AudioLogCodec.parse(line)
     }

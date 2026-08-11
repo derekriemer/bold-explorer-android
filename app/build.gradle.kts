@@ -159,6 +159,8 @@ dependencies {
     testImplementation(libs.kotlin.test)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.sqldelight.sqlite.driver)
+    // android.jar stubs org.json and every method throws; the real thing is needed to test the log codec.
+    testImplementation(libs.json)
 
     // Custom detekt rules
     detektPlugins(project(":detekt-rules"))

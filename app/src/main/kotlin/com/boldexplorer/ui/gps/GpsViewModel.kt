@@ -9,6 +9,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.boldexplorer.BuildConfig
 import com.boldexplorer.audio.AudioEventLog
+import com.boldexplorer.audio.ShadowMatchMonitor
+import com.boldexplorer.audio.ShadowTrailMatcher
 import com.boldexplorer.audio.AudioLogEntry
 import com.boldexplorer.audio.LastOutput
 import com.boldexplorer.audio.LiveRegionAnnouncement
@@ -46,6 +48,7 @@ import com.boldexplorer.shared.navigation.NavigationTargetResolver
 import com.boldexplorer.shared.navigation.NearbyTrail
 import com.boldexplorer.shared.navigation.NearbyTrailResolver
 import com.boldexplorer.shared.navigation.TrailFollower
+import com.boldexplorer.shared.navigation.TravelDirection
 import com.boldexplorer.shared.navigation.TrailFollowerEvent
 import com.boldexplorer.shared.navigation.TrailFollowerState
 import com.boldexplorer.shared.navigation.TrailGuidance
@@ -312,6 +315,7 @@ class GpsViewModel
         private val outputRouter: OutputRouter,
         private val settingsRepo: SettingsRepository,
         private val audioEventLog: AudioEventLog,
+        private val shadowMatchMonitor: ShadowMatchMonitor,
         private val scheduler: AudioCueScheduler,
     ) : ViewModel() {
         // ── Settings ──────────────────────────────────────────────────────────────────
@@ -480,6 +484,15 @@ class GpsViewModel
             }
         val trailFollowState: StateFlow<TrailFollowerState> = trailFollower.state
         private var lastAdvancementReason: AdvancementReason? = null
+
+        /**
+         * Continuous matcher running beside [trailFollower] on the same fixes (ADR 0001, S4).
+         *
+         * Consumed by nobody: it only writes [AudioLogEntry.Kind.TRAIL_MATCH] records so its
+         * deliberately-untuned constants can be set from real walks before anything depends on
+         * them. Null whenever no trail is being followed.
+         */
+        private var shadowMatcher: ShadowTrailMatcher? = null
 
         // Guidance state + the off-trail/backtrack/ordinary-guidance detection state machine live in a
         // dedicated coordinator (pure, JVM-tested in :shared). It decides *whether* to alert; this
@@ -752,6 +765,7 @@ class GpsViewModel
                 location.filterNotNull().collect { sample ->
                     val smoothedHeading = guidanceCoordinator.updateTrustedCourse(sample)
                     announceTrailFollowerEvent(sample, smoothedHeading?.deg?.toFloat())
+                    recordShadowMatch(sample)
                     // Drive CollectionExplorer on every fix; it is the primary navigator. When no
                     // collection is loaded its state is Idle and onLocationUpdate is a no-op.
                     val travelHeadingDeg = sample.heading?.takeIf { (sample.speed ?: 0.0) >= MIN_TRAVEL_HEADING_SPEED_MPS }
@@ -894,6 +908,15 @@ class GpsViewModel
                     }
                 _selectedTrailId.value = trailId
                 enterFollowing(trailId)
+                // The shadow matcher takes the trail in RECORDED order and carries the traversal
+                // direction separately — deliberately not `ordered`, which is reversed in place.
+                // Reversing the point list would make alongTrackM session-relative and stop two
+                // walks of the same trail being comparable in the field logs.
+                shadowMatcher =
+                    ShadowTrailMatcher(
+                        points = wps.map { LatLng(it.lat, it.lon) },
+                        direction = if (reversed) TravelDirection.Reverse else TravelDirection.Forward,
+                    )
                 if (loc != null) trailFollower.startNearest(points, loc, bearing) else trailFollower.start(points)
                 refreshTrailGuidanceFromLatestLocation(resetOrdinaryThrottle = true)
                 backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, true)
@@ -970,7 +993,27 @@ class GpsViewModel
             }
         }
 
+        /**
+         * Run the shadow matcher on this fix and record what it decided.
+         *
+         * Gated on the live follower being active so a matcher left over from a finished follow
+         * cannot keep appending. Writes only; nothing here may influence guidance before the field
+         * walk that the ADR gates S5 on.
+         */
+        private fun recordShadowMatch(sample: LocationSample) {
+            val matcher = shadowMatcher ?: return
+            if (trailFollower.state.value !is TrailFollowerState.Active) return
+            // The gate covers the matching as well as the logging: switching it off should stop the
+            // work, not just silence it. TRAIL_MATCH is the only per-fix kind in the log.
+            if (!shadowMatchMonitor.enabled.value) return
+            val entry = matcher.onFix(sample)
+            audioEventLog.append(entry)
+            shadowMatchMonitor.record(matcher.lastMatch ?: return)
+        }
+
         fun stopFollowTrail() {
+            shadowMatcher = null
+            shadowMatchMonitor.clear()
             trailFollower.stop()
             recordingMachine.stop()
             guidanceCoordinator.clear()

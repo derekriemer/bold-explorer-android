@@ -30,8 +30,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -59,6 +59,8 @@ fun DebugScreen(
     val showMarkerDialog by viewModel.showMarkerDialog.collectAsStateWithLifecycle()
     val lastRawFix by viewModel.lastRawFix.collectAsStateWithLifecycle()
     val accuracyHapticsEnabled by viewModel.accuracyHapticsEnabled.collectAsStateWithLifecycle()
+    val shadowMatchEnabled by viewModel.shadowMatchEnabled.collectAsStateWithLifecycle()
+    val shadowMatch by viewModel.shadowMatch.collectAsStateWithLifecycle()
 
     // Ticks so the "Ns ago" fix-age text (below) keeps advancing even when no new fix arrives —
     // that stalling *is* the signal for issue #23, so it must be visible live, not just on the
@@ -230,8 +232,8 @@ fun DebugScreen(
                                 // alone don't convey.
                                 contentDescription =
                                     "Accuracy haptics ${if (accuracyHapticsEnabled) "on" else "off"}: " +
-                                        "every 5 seconds, one buzz if fixes were accepted, three quick " +
-                                        "buzzes if any were discarded"
+                                    "every 5 seconds, one buzz if fixes were accepted, three quick " +
+                                    "buzzes if any were discarded"
                             },
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
@@ -240,6 +242,55 @@ fun DebugScreen(
                         checked = accuracyHapticsEnabled,
                         onCheckedChange = { viewModel.setAccuracyHapticsEnabled(it) },
                     )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // Shadow trail matching (ADR 0001, S4). Temporary: this readout exists to confirm the
+        // matcher is alive during a field walk. The log file, not this screen, is the record.
+        Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("Shadow trail matching", style = MaterialTheme.typography.titleSmall)
+                    Switch(
+                        checked = shadowMatchEnabled,
+                        onCheckedChange = { viewModel.setShadowMatchEnabled(it) },
+                    )
+                }
+                // Stated as visible text rather than a contentDescription so it reaches everyone,
+                // and because the switch's own state is already announced natively.
+                Text(
+                    "Logs one record per GPS fix while following a trail, so a walk can be " +
+                        "replayed later against different constants. Roughly 2 MB per hour.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+
+                Spacer(Modifier.height(8.dp))
+
+                // Refreshed at most every 5 seconds, and deliberately not a live region: at that
+                // cadence an announcement would talk over guidance for the whole walk.
+                val match = shadowMatch
+                if (!shadowMatchEnabled) {
+                    Text("Off.", style = MaterialTheme.typography.bodyMedium)
+                } else if (match == null) {
+                    Text("Waiting for a trail follow to start.", style = MaterialTheme.typography.bodyMedium)
+                } else {
+                    Text("State: ${match.state}", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Along trail: ${match.alongM?.let { "%.0f m".format(it) } ?: "not acquired"}",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        "Off trail: ${match.crossM?.let { "%.1f m".format(it) } ?: "no candidate"}",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text("Travelled: ${"%.0f m".format(match.travelledM)}", style = MaterialTheme.typography.bodyMedium)
+                    Text("Reason: ${match.disposition}", style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
