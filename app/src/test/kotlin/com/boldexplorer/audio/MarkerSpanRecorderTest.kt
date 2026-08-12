@@ -33,8 +33,8 @@ class MarkerSpanRecorderTest {
         assertEquals(245_000L, ends().single().timestampMs)
         // Same span id on both halves, so pairs survive being read out of a file with other entries
         // interleaved between them — which, over four minutes at 1 Hz, they always will be.
-        assertTrue(starts().single().outputs.contains("span=1"))
-        assertTrue(ends().single().outputs.contains("span=1"))
+        assertTrue(starts().single().outputs.contains("span=1000"))
+        assertTrue(ends().single().outputs.contains("span=1000"))
         assertTrue(ends().single().outputs.contains("duration_ms=244000"))
     }
 
@@ -56,7 +56,24 @@ class MarkerSpanRecorderTest {
         assertEquals("first", ends().single().note)
         assertEquals(10_000L, ends().single().timestampMs, "closed at the moment the second opened")
         assertEquals(2, starts().size)
-        assertTrue(starts()[1].outputs.contains("span=2"), "the new span gets its own id")
+        assertTrue(starts()[1].outputs.contains("span=10000"), "the new span gets its own id")
+    }
+
+    @Test
+    fun spanIdsSurviveARestart() {
+        // The bug this replaces: the id was a counter on a @Singleton, so it reset to 1 with the
+        // process. One exported log from 2026-08-12 held two different spans both called span=1,
+        // and a reader pairing by id would have joined one span's start to another's end.
+        val first = MarkerSpanRecorder(FakeAudioEventLog(written::add))
+        first.start("before restart", nowMs = 1_000L)
+        first.end(nowMs = 2_000L)
+        // A fresh instance is exactly what a process restart produces.
+        val second = MarkerSpanRecorder(FakeAudioEventLog(written::add))
+        second.start("after restart", nowMs = 900_000L)
+        second.end(nowMs = 901_000L)
+
+        val ids = starts().map { it.outputs }
+        assertEquals(ids.size, ids.distinct().size, "two spans in one log must not share an id: $ids")
     }
 
     @Test

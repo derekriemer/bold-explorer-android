@@ -45,9 +45,6 @@ class MarkerSpanRecorder
         private val _openSpan = MutableStateFlow<OpenSpan?>(null)
         val openSpan: StateFlow<OpenSpan?> = _openSpan.asStateFlow()
 
-        private var nextSpanId: Int = 1
-        private var currentSpanId: Int = 0
-
         /**
          * Opens a marked section called [label].
          *
@@ -60,7 +57,6 @@ class MarkerSpanRecorder
             nowMs: Long = System.currentTimeMillis(),
         ) {
             if (_openSpan.value != null) end(nowMs)
-            currentSpanId = nextSpanId++
             _openSpan.value = OpenSpan(label = label, startedAtMs = nowMs)
             audioEventLog.append(
                 AudioLogEntry(
@@ -68,7 +64,7 @@ class MarkerSpanRecorder
                     kind = AudioLogEntry.Kind.USER_MARKER,
                     trigger = TRIGGER_START,
                     inputs = label,
-                    outputs = "span=$currentSpanId",
+                    outputs = "span=$nowMs",
                     played = "",
                     note = label,
                 ),
@@ -86,7 +82,7 @@ class MarkerSpanRecorder
                     kind = AudioLogEntry.Kind.USER_MARKER,
                     trigger = TRIGGER_END,
                     inputs = open.label,
-                    outputs = "span=$currentSpanId duration_ms=$durationMs",
+                    outputs = "span=${open.startedAtMs} duration_ms=$durationMs",
                     played = "",
                     note = open.label,
                 ),
@@ -94,17 +90,29 @@ class MarkerSpanRecorder
         }
 
         companion object {
+            /**
+             * Span ids are the start timestamp.
+             *
+             * A counter looked simpler and was wrong: it lives in a `@Singleton`, so it restarts at 1
+             * whenever the process does. The walk of 2026-08-12 exported one log containing two
+             * different spans both labelled `span=1`, because the app was restarted between them —
+             * so a reader pairing by id would join the start of one to the end of another. The start
+             * time is unique without any state to keep, and is the thing a reader wants anyway.
+             */
             const val TRIGGER_START = "SpanStart"
             const val TRIGGER_END = "SpanEnd"
         }
     }
 
 /**
- * What the screen shows and announces for [open].
+ * What a live region should say about [open].
  *
- * Split for the same reason [com.boldexplorer.shared.location.DegradationStatus] is: `detail` may
- * carry an elapsed count and tick, `announcement` may not. This one is a function of the open span
- * alone and has no clock in it at all, so a live region carrying it fires exactly on open and close.
+ * Has no clock in it, which is necessary but *not* sufficient for something announced. The Debug
+ * screen recomposes at 2 Hz, and TalkBack announces on semantics-node update rather than on string
+ * change, so a constant string emitted inline still gets spoken twice a second — which is exactly
+ * how the GPS degradation countdown behaved, and why its live region was removed rather than fixed.
+ * Render this through `DebugScreen`'s private `Announcement()` composable, which takes the text as a
+ * parameter so an unchanged value is skipped and the node is not re-emitted.
  */
 fun spanAnnouncement(open: OpenSpan?): String =
     if (open == null) "No marked section open." else "Marked section open: ${open.label}."
