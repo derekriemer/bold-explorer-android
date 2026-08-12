@@ -1,6 +1,6 @@
 # ADR 0001 — Continuous trail matching: navigation core redesign
 
-- **Status:** Accepted; amended 2026-08-12 (Amendment 1 — vertex projections; S5b — geometry vs annotations)
+- **Status:** Accepted; amended 2026-08-12 (Amendment 1 — vertex projections; S5a — backtrack; S5b — geometry vs annotations)
 - **Date:** 2026-08-09
 - **Issues:** #23, #35, #55, #56, #69
 - **Supersedes:** the per-trackpoint `TrailFollower` state machine
@@ -544,6 +544,49 @@ alert. Shadow-mode duplication is the cost of attributable field results. `desir
 moves to a chord/lookahead bearing — a single segment bearing at 2 m spacing is nearly random and
 makes off-trail alerts density-dependent.
 
+**S5a — `evaluateBacktrack` must read the windowed match, not project for itself.**
+`TrailGuidanceCoordinator.evaluateBacktrack` computes along-track with its own **unwindowed**
+`polyline.project()` and fires when that value regresses by `BACKTRACK_NOISE_FLOOR_M` (2 m) on
+`BACKTRACK_CONSECUTIVE_THRESHOLD` (3) consecutive fixes. That is a second consumer of unwindowed
+projection, distinct from the `currentIndex` hazard noted in S5, and unlike that one it is
+mis-firing **today**.
+
+Field evidence, 2026-08-12, walk 2 at 16:07 under 25 m reported accuracy. The owner was ~120 m along
+a trail that doubles back, leaving him physically 11–18 m from the trail's own **start**:
+
+```
+              live (unwindowed)     shadow (windowed)
+  16:07:46         113.6 m            113.6 m   window 59..169
+  16:07:48           0.0 m  <--       112.3 m   window 59..169
+  16:07:50           0.0 m  <--       114.5 m   window 57..167
+  16:07:52         118.3 m            118.3 m   window 59..169
+  16:07:56           0.0 m  <--       113.3 m   window 78..183
+```
+
+The unwindowed projection snapped to the trail head, read as a 113 m regression, counted to three and
+announced "you may be going the wrong way". The windowed matcher, given the identical fixes, never
+left ~113 m — 0 was not in its window. This is the switchback teleport the window exists to prevent,
+observed on real geometry, with a wrong announcement the owner heard as the consequence. It is the
+clearest field evidence in this document that the redesign is load-bearing rather than tidier.
+
+Note what it is *not*: two other "wrong way" alerts on the same day had different causes — one was a
+genuine backtrack correctly reported, and one was an artifact of the stray waypoint described in S5b,
+where fixes projected onto a phantom 1 km segment. Three alerts, three mechanisms. Do not assume a
+single fix addresses all of them.
+
+**Decision.** `evaluateBacktrack` consumes `TrailMatch.confirmedAlongM` rather than projecting
+independently, and so inherits the window, the gate and the ladder's states. While it is being
+touched, two logging defects that made this incident far harder to diagnose than it should have been:
+
+- `BacktrackEvaluation.prevDistanceToTargetM` always equals `distanceToTargetM`, because
+  `prevDistToTargetM` is reassigned before the evaluation is constructed. Every logged line in both
+  walks shows the two as identical.
+- The logged line (`GpsViewModel.kt:1373-1380`) records `distToTarget` — the input to the rule this
+  detector **deliberately abandoned** — and omits `alongTrackM` / `prevAlongTrackM`, the values the
+  decision is actually made on, even though `BacktrackEvaluation` already carries them. Diagnosing
+  the incident above required re-projecting the raw fixes offline against the trail geometry, which
+  is only possible because S4b logs raw positions.
+
 **S5b — separate trail geometry from trail annotations.** Lands with S5 because it needs
 `TrailPolyline.project`, and is needed by S6, which cannot announce a named waypoint as *passed*
 without knowing where along the trail it sits.
@@ -730,6 +773,16 @@ schema version), `audio/AudioCueScheduler.kt` in `:shared` (S8 cadence only).
   - No consumer reads `predictedAlongM`. Worth a structural test, not just a behavioural one.
 - Field: walk trails on the S4 shadow build, export the JSONL, confirm every match decision carries
   window, budget, chosen, best-rejected, and disposition. Tune constants only against that data.
+  **Done, 2026-08-12** — two walks, 2112 shadow-matched fixes. The gate is satisfied. Outcomes:
+  `MATCH_GATE_CAP_M` lowered 60 → 40 m on swept evidence; Amendment 1 (vertex projections) and S5a
+  (backtrack) both found in the data rather than reasoned about. Replay the logs with
+  `./gradlew :shared:runReplay --args="trail.gpx walk.jsonl [--reverse] [--sweep]"`; run under
+  default tuning it reproduces the live shadow run exactly, fix for fix, which is the check that the
+  corpus is trustworthy before any constant is changed against it.
+- Caution learned the hard way: two apparent findings from the first walk — a false reacquisition
+  candidate that corroboration rejected, and a wrong `NEARBY_POINT` announcement — were both
+  artifacts of one bad waypoint in the trail data (see S5b), not behaviour of the matcher. Check the
+  trail geometry before concluding anything about the algorithm from a field log.
 
 ## Deferred (file as issues)
 
@@ -1004,6 +1057,7 @@ Not yet reflected: whether S4's new constants shift the field-walk gate. **No op
 specified.)*
 
 - **S4c is open** — Amendment 1 is accepted but not implemented. It gates S5.
+- **S5a is open** — `evaluateBacktrack` still projects unwindowed and mis-fires in the field.
 - **S5b is open** — the geometry/annotation split. Blocks S6, and #69 is its attach-time guard.
 - **The vertex accept radius is unset.** Same untuned status as the original S4 constants, with the
   difference that it can now be swept against the 2026-08-12 corpus before it ships.
