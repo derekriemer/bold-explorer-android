@@ -1,6 +1,6 @@
 # ADR 0001 — Continuous trail matching: navigation core redesign
 
-- **Status:** Accepted
+- **Status:** Accepted; amended 2026-08-12 (Amendment 1 — vertex projections)
 - **Date:** 2026-08-09
 - **Issues:** #23, #35, #55, #56
 - **Supersedes:** the per-trackpoint `TrailFollower` state machine
@@ -527,6 +527,11 @@ nest new fields under one key while touching the schema — and note `parseLine`
 (`AudioEventLog.kt:125-138`) silently drops `extra` on read-back, so the Debug screen shows less than
 the file after a restart. Verify the ~3600 lines/hour append rate is acceptable before shipping.
 
+**S4c — vertex projections become a distinct answer.** Found by the field walk, and a prerequisite
+for S5 rather than a follow-up: S5 makes `TrailMatch` the source of truth for guidance, and a
+`Matched` that means "somewhere in a wedge behind an apex" must not become the thing the app steers
+by. See **Amendment 1**.
+
 *— field walk gate —*
 
 **S5 — switch the source of truth.** `Active` gains `match: TrailMatch?` as an **additive field**;
@@ -719,6 +724,111 @@ Revisit only if trail search across thousands of trails needs a real spatial ind
 one piece genuinely worth not writing). Geodesic-grade calculation (Vincenty/Karney) is not a
 motivation here: GPS accuracy is 3–30 m, far above where the flat approximation's error appears.
 
+## Amendment 1 — vertex projections are a distinct answer (2026-08-12)
+
+Accepted 2026-08-12, after the S4 field walk. Amends **Architecture** and adds **S4c** to the
+migration sequence. Nothing in the original decisions is reversed.
+
+### What the walk found
+
+Replaying the walk of 2026-08-12 (1886 fixes, `ProgressTracker` in shadow mode), the tracker reported
+`Matched` across **36 consecutive fixes carrying the byte-identical `alongTrackM` value**
+(`53.64335742617432`, segment 5) while the raw position moved 20–35 m between fixes. `travelledM`
+was frozen at 413 m throughout. Across the walk, 8.8% of all `Matched` fixes shared an exact
+along-track value with another fix.
+
+This is not a defect in the projection maths. It is the correct answer to the question being asked,
+and the question is wrong.
+
+### Why it happens
+
+At a vertex where the trail turns sharply, both adjacent segments lead *away* from the corner. Every
+position in the exterior wedge behind that turn therefore has the vertex itself as its nearest point
+on the polyline. At a switchback the wedge approaches a half-plane. Consequences, all already true
+of `TrailPosition` and all currently invisible to its consumers:
+
+- **`alongTrackM` is degenerate.** An entire region of ground maps to one scalar. It cannot advance
+  while the user walks through that region, and it cannot distinguish "at the apex" from "50 m past
+  it". Progress does not merely lag; it is undefined.
+- **`crossTrackM` changes meaning.** For an interior projection it is perpendicular offset from the
+  path. At a vertex clamp it is *radial distance to the corner* — the `TrailPosition` KDoc already
+  says so.
+
+  Note carefully what is and is not broken by this. For **off-trail detection** the vertex-clamped
+  magnitude is exactly right: "how far am I from the nearest point of the trail" is the question
+  off-trail is asking, and the answer does not care whether that point is a vertex.
+  `TrailGuidanceCoordinator` takes `abs()` of it and is correct as it stands. The confusion arises
+  only where the same number is used to *trust an along-track position* — which is what the match
+  gate does. There, "50 m beyond an apex" and "50 m to the side of a straight stretch" are scored
+  identically, and only one of them tells you where you are.
+- **The sign of `crossTrackM` is an artifact.** "Right of travel" is undefined in the wedge; the sign
+  reports which side of one arbitrarily-chosen adjacent segment the point fell on. Latent rather than
+  live: nothing outside `TrailGuidanceCoordinator` reads `OffTrailEvaluation`, and no announcement
+  derives a side from it today. It becomes a real bug the moment one does.
+- **`candidates()` cannot see the arms.** It returns one position per local minimum of distance. When
+  the apex is the nearest point, the two arms are not distinct candidates, so the direction tie-break
+  never gets the chance to choose between them. The switchback safety mechanism is bypassed, not
+  overruled.
+
+### Decision
+
+**A projection is one of three kinds, and `TrailPosition` must say which.**
+
+1. **Interior** — `0 < fraction < 1`. `alongTrackM` is well-defined; `crossTrackM` is signed
+   perpendicular offset. Everything the ADR says today applies unchanged.
+2. **Vertex-clamped** — clamped at an interior vertex. `alongTrackM` is degenerate and `crossTrackM`
+   is unsigned radial distance.
+3. **Endpoint-clamped** — clamped at the first or last vertex. Also degenerate, but *meaningful*:
+   "before the start" and "past the end" are real states the app already wants to talk about. It must
+   not be lumped in with (2); a trail's ends are not apexes.
+
+Detecting (2) versus (3) is structural, not a threshold: a clamp is an interior-vertex clamp when the
+vertex has a segment on both sides.
+
+**Policy: a vertex-clamped candidate may confirm progress only within GPS accuracy of the vertex.**
+
+Inside that radius, "you are at the apex" is true and useful — the degeneracy is smaller than the
+measurement error, so no better answer exists. Beyond it, the tracker does not know where along the
+trail the user is, and the ladder already has the honest word for that: `Uncertain`. Progress freezes
+(it was frozen anyway — the difference is that the tracker now *says so*), the window widens, and
+reacquisition can do its job.
+
+Scaling the radius by accuracy rather than fixing it is deliberate and follows the existing
+`widenWithAccuracy` pattern: the question is whether the degeneracy is distinguishable from noise,
+which is a question about the fix, not about the trail.
+
+**This is not the gate cap.** `MATCH_GATE_CAP_M` (lowered 60 m → 40 m on the same evidence) decides
+how far off-trail a fix may be and still match; it applies everywhere. This decides that in one
+particular place the distance being measured is not the distance being tested. Tightening the cap
+filtered out the far end of the wedge — vertex-pinned fixes fell 45 → 30 and the longest pinned run
+fell from 192 m to 37 m of walking — but the fixes *near* the apex still receive a confident wrong
+answer. Filtering is not fixing; both changes are needed and neither substitutes for the other.
+
+### Consequences
+
+- `TrailPosition` grows a kind. Its `crossTrackM` KDoc already documents the vertex case in prose;
+  this makes it something a consumer can branch on rather than something a reader must remember.
+- One new constant, of the same untuned character as the rest of S4 — but unlike the original
+  thirteen it can be swept against a recorded walk before it ships, using the replay harness.
+- No change to off-trail detection, which is correct as it stands (see above). S4c must not "fix"
+  it into using a perpendicular-only distance, which would make walking into an apex wedge stop
+  raising off-trail at exactly the moment it should.
+- The sign of a vertex-clamped `crossTrackM` remains meaningless. Anything later added that speaks a
+  side must branch on the projection kind.
+- Expected behaviour change at real switchbacks: rounding an apex stays `Matched` (you are within
+  accuracy of it), while walking *away* from one into the wedge now goes `Uncertain` instead of
+  silently claiming a frozen position. That is the intended trade — hedged and frozen beats confident
+  and wrong, which is the same principle that demoted dead reckoning from progress to prediction.
+
+### Verification
+
+- A switchback fixture where the walker leaves the apex into the wedge: assert the tracker does not
+  report `Matched` with a frozen `alongTrackM` while `travelledM` fails to advance.
+- Endpoint clamps keep their current behaviour — a walk that starts 10 m before the trail head must
+  still acquire.
+- `TrailReplay.vertexPinnedFixes` on the 2026-08-12 corpus should fall substantially from 30. That
+  number is a regression check on real data, not a target to optimise against.
+
 ## Revisions since first draft
 
 Owner edits made outside plan mode, 2026-08-08. Listed so the planning agent can diff intent rather
@@ -828,5 +938,9 @@ Not yet reflected: whether S4's new constants shift the field-walk gate. **No op
 
 ## Open
 
-*(Reverse travel resolved 2026-08-09 — see Decisions taken. No open items remain; the S0 coordinate
-system is now fully specified.)*
+*(Reverse travel resolved 2026-08-09 — see Decisions taken. The S0 coordinate system is fully
+specified.)*
+
+- **S4c is open** — Amendment 1 is accepted but not implemented. It gates S5.
+- **The vertex accept radius is unset.** Same untuned status as the original S4 constants, with the
+  difference that it can now be swept against the 2026-08-12 corpus before it ships.
