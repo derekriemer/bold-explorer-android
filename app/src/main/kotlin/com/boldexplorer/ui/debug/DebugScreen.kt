@@ -43,7 +43,7 @@ import com.boldexplorer.audio.spanAnnouncement
 import com.boldexplorer.audio.spanButtonLabel
 import com.boldexplorer.audio.spanElapsedText
 import com.boldexplorer.location.RawFixEvent
-import com.boldexplorer.shared.location.statusAt
+import com.boldexplorer.shared.location.detailAt
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -140,18 +140,7 @@ fun DebugScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            // The transition, carried on its own node. spanAnnouncement() has no clock in it, so
-            // this fires on open and close and at no other time.
-            Text(
-                "",
-                modifier =
-                    Modifier.size(1.dp).semantics {
-                        liveRegion = LiveRegionMode.Polite
-                        // a11y: the button label changes rather than the focused text, so without
-                        // this an open or close is silent unless the user goes looking.
-                        contentDescription = spanAnnouncement(openSpan)
-                    },
-            )
+            Announcement(spanAnnouncement(openSpan))
         }
 
         Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
@@ -206,35 +195,19 @@ fun DebugScreen(
                 // arm is then also the correct arm. These presets manufacture the ambiguity.
                 val degradation by viewModel.degradationConfig.collectAsStateWithLifecycle()
                 val degrading = degradation.isActiveAt(nowMs)
-                val status = degradation.statusAt(nowMs)
+                val detail = degradation.detailAt(nowMs)
 
-                // Plain text, deliberately. It carries the countdown, so making this a live region
-                // announces the whole sentence once a second for thirty minutes — which is what it
-                // used to do. The countdown is state you read on focus, not an event.
+                // Plain text, and nothing on this screen announces degradation state. See the note
+                // on detailAt(): DebugScreen recomposes at 2 Hz, so a live region here re-announces
+                // at 2 Hz whatever its string says. Reported accuracy already shows when it is armed.
                 Text(
-                    status.detail,
+                    detail,
                     style = MaterialTheme.typography.bodySmall,
                     color =
                         if (degrading) {
                             MaterialTheme.colorScheme.error
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                )
-
-                // The transition, carried separately so it can be announced without the countdown
-                // dragging it along. `status.announcement` is a function of armed-vs-off only, so
-                // this fires twice per cycle: on arm, and on expiry. Expiry is the one that earns
-                // its keep — it is the only transition the user did not initiate, and there is no
-                // visual cue a screen-reader user would catch.
-                Text(
-                    "",
-                    modifier =
-                        Modifier.size(1.dp).semantics {
-                            liveRegion = LiveRegionMode.Polite
-                            // a11y: the visible countdown text above is intentionally silent, so
-                            // this invisible node is the only thing that can speak the transition.
-                            contentDescription = status.announcement
                         },
                 )
 
@@ -480,6 +453,32 @@ fun DebugScreen(
             onDismiss = { viewModel.dismissMarker() },
         )
     }
+}
+
+/**
+ * An invisible node that speaks [text] when — and only when — it changes.
+ *
+ * This has to be its own composable rather than an inline `Modifier.semantics`. `DebugScreen` reads
+ * a 2 Hz clock in its own body, so its whole restart scope recomposes twice a second and any
+ * semantics block written inline re-emits its node at that rate; TalkBack announces on node update,
+ * not on string change, so it speaks again every time. Taking the string as a parameter makes this
+ * skippable, so an unchanged [text] does not re-emit anything.
+ *
+ * The GPS degradation readout learned this the hard way: stabilising its announcement string left it
+ * announcing once a second regardless, and it was removed rather than fixed.
+ */
+@Composable
+private fun Announcement(text: String) {
+    Text(
+        "",
+        modifier =
+            Modifier.size(1.dp).semantics {
+                // a11y: the span button's own label carries the state, and a label change on an
+                // unfocused button is silent; this is the only thing that reports open and close.
+                contentDescription = text
+                liveRegion = LiveRegionMode.Polite
+            },
+    )
 }
 
 /**

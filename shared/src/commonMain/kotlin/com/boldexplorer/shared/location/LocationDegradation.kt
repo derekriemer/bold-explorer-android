@@ -83,40 +83,22 @@ data class DegradationConfig(
 }
 
 /**
- * What the Debug screen shows for a [DegradationConfig], split by how often each half may change.
+ * Describes this config as of [nowMs], for display only.
  *
- * The split is the whole point. A live region announces on every content change, so any string it
- * carries must change only when something happened — never on a clock. Putting the countdown in one
- * made TalkBack re-read the entire status once a second for thirty minutes.
+ * **Deliberately not announced.** This text carries a countdown, so it changes every second; the
+ * Debug screen reads `nowMs` at 2 Hz and recomposes wholesale, so any live region on that screen
+ * re-emits its semantics node at the same rate and TalkBack speaks it again — regardless of whether
+ * the *string* changed. A first attempt at fixing this stabilised the string and did not help, for
+ * that reason. Read on focus; never give this [androidx.compose.ui.semantics.liveRegion].
  *
- * @property detail read on focus. Contains the countdown, so it changes constantly. Must **not** be
- *   given [androidx.compose.ui.semantics.liveRegion].
- * @property announcement safe for a live region: a function of armed-vs-off alone. Ticking cannot
- *   change it, so it fires exactly on the transitions — including expiry, the one the user did not
- *   initiate and would otherwise have no way to notice.
+ * Nothing announces degradation state as a result, which is the owner's call: reported accuracy
+ * jumps to the override value while it is armed, so the GPS readout already shows it.
  */
-data class DegradationStatus(
-    val detail: String,
-    val announcement: String,
-)
-
-/**
- * Describes this config as of [nowMs].
- *
- * Lives here rather than in the composable so the "announcement does not change while the countdown
- * ticks" property is a plain JVM test instead of something only a screen reader can catch.
- */
-fun DegradationConfig.statusAt(nowMs: Long): DegradationStatus =
+fun DegradationConfig.detailAt(nowMs: Long): String =
     if (isActiveAt(nowMs)) {
-        DegradationStatus(
-            detail = "ACTIVE — readings are deliberately wrong. Expires in ${remainingText(nowMs)}.",
-            announcement = "GPS degradation active. Readings are deliberately wrong.",
-        )
+        "ACTIVE — readings are deliberately wrong. Expires in ${remainingText(nowMs)}."
     } else {
-        DegradationStatus(
-            detail = "Off. Fixes are unmodified.",
-            announcement = "GPS degradation off. Fixes are unmodified.",
-        )
+        "Off. Fixes are unmodified."
     }
 
 /**
