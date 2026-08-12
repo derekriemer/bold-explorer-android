@@ -29,4 +29,12 @@ data class TrailPosition(
     val alongTrackM: Double,
     val crossTrackM: Double,
     val snapped: LatLng,
+    val kind: ProjectionKind = ProjectionKind.Interior,
 )
+
+/** Which of the three kinds of answer a projection is. See [TrailPosition.kind]. */
+enum class ProjectionKind {
+    Interior,
+    VertexClamped,
+    EndpointClamped,
+}

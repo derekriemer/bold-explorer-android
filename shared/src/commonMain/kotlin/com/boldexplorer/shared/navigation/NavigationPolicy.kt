@@ -226,6 +226,29 @@ object NavigationPolicy {
      */
     const val MATCH_GATE_CAP_M = 40.0
 
+    /**
+     * How close to a vertex a **vertex-clamped** projection must be before it may confirm progress.
+     *
+     * ADR 0001 Amendment 1 / S4c. Where the trail turns, the exterior wedge behind the corner
+     * projects entirely onto the corner itself: an entire region of ground shares one `alongTrackM`,
+     * and the reported cross-track becomes radial distance to the vertex rather than perpendicular
+     * offset from a path. Inside this radius that answer is still usable, because the ambiguity is
+     * smaller than the GPS error and no better answer exists. Outside it the tracker does not know
+     * where along the trail the walker is, and says so by staying `Uncertain`.
+     *
+     * Scaled by accuracy rather than fixed, because the question is whether the degeneracy is
+     * distinguishable from noise — a property of the fix, not of the trail.
+     *
+     * **Untuned.** Sweep against a recorded walk with the replay harness before trusting these.
+     */
+    const val VERTEX_ACCEPT_BASE_M = 5.0
+
+    /** Accuracy multiplier for [VERTEX_ACCEPT_BASE_M]. */
+    const val VERTEX_ACCEPT_ACCURACY_FACTOR = 2.0
+
+    /** Ceiling on the vertex accept radius; past this a wedge position is never a known position. */
+    const val VERTEX_ACCEPT_CAP_M = 25.0
+
     /** Accuracy multiplier (K) in `budget = maxSpeed × elapsed + K × accuracy`. */
     const val BUDGET_ACCURACY_FACTOR = 2.0
 

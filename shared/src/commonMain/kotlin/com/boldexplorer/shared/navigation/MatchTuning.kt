@@ -28,6 +28,10 @@ package com.boldexplorer.shared.navigation
  * @property matchGateCapM ceiling on the widened gate. **Suspect**: the field walk showed the
  *   matcher reporting `Matched` at 56 m cross-track under degraded accuracy, while the live follower
  *   was simultaneously announcing off-trail at [NavigationPolicy.OFF_TRAIL_FAR_M] = 60 m.
+ * @property vertexAcceptBaseM how close to a vertex a vertex-clamped projection must be to confirm
+ *   progress, before accuracy widening. See [NavigationPolicy.VERTEX_ACCEPT_BASE_M].
+ * @property vertexAcceptAccuracyFactor how much reported accuracy widens that radius.
+ * @property vertexAcceptCapM ceiling on it.
  * @property budgetAccuracyFactor how much reported accuracy widens the search window.
  * @property budgetElapsedCapS ceiling on the elapsed term, so a long gap cannot make the window
  *   unbounded.
@@ -47,6 +51,9 @@ data class MatchTuning(
     val matchGateBaseM: Double = NavigationPolicy.MATCH_GATE_BASE_M,
     val matchGateAccuracyFactor: Double = NavigationPolicy.MATCH_GATE_ACCURACY_FACTOR,
     val matchGateCapM: Double = NavigationPolicy.MATCH_GATE_CAP_M,
+    val vertexAcceptBaseM: Double = NavigationPolicy.VERTEX_ACCEPT_BASE_M,
+    val vertexAcceptAccuracyFactor: Double = NavigationPolicy.VERTEX_ACCEPT_ACCURACY_FACTOR,
+    val vertexAcceptCapM: Double = NavigationPolicy.VERTEX_ACCEPT_CAP_M,
     val budgetAccuracyFactor: Double = NavigationPolicy.BUDGET_ACCURACY_FACTOR,
     val budgetElapsedCapS: Double = NavigationPolicy.BUDGET_ELAPSED_CAP_S,
     val minMaxSpeedMps: Double = NavigationPolicy.MIN_MAX_SPEED_MPS,

@@ -81,6 +81,9 @@ private fun sweep(
             listOf(15.0, 35.0).forEach { add("corroboration ${it.toInt()} m" to base.copy(corroborationM = it)) }
             listOf(45.0, 60.0, 120.0).forEach { add("horizon ${it.toInt()} s" to base.copy(reckoningHorizonS = it)) }
             listOf(60.0, 90.0, 180.0).forEach { add("horizon ${it.toInt()} m" to base.copy(reckoningHorizonM = it)) }
+            // S4c: how close to a vertex a wedge position may still confirm progress.
+            listOf(2.0, 10.0).forEach { add("vertex base ${it.toInt()} m" to base.copy(vertexAcceptBaseM = it)) }
+            listOf(10.0, 15.0, 40.0).forEach { add("vertex cap ${it.toInt()} m" to base.copy(vertexAcceptCapM = it)) }
         }
 
     println(

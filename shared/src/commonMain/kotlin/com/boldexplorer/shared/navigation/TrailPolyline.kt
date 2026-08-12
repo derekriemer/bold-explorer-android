@@ -117,6 +117,7 @@ class TrailPolyline(
                 alongTrackM = 0.0,
                 crossTrackM = sqrt(dx * dx + dy * dy),
                 snapped = frame.toLatLng(Vec2(xs[0], ys[0])),
+                kind = ProjectionKind.EndpointClamped,
             )
         }
 
@@ -245,6 +246,17 @@ class TrailPolyline(
         val tRaw = if (len2 <= DEGENERATE_SEGMENT_M) 0.0 else ((p.x - ax) * abx + (p.y - ay) * aby) / len2
         val t = tRaw.coerceIn(tMin, tMax)
 
+        // Which kind of answer this is. The test is against the *geometric* bounds, not against
+        // tMin/tMax: a projection pulled back by the search window landed on a window boundary, not
+        // on a vertex, and calling that a vertex clamp would make the kind depend on how wide the
+        // caller's window happened to be.
+        val kind =
+            when {
+                tRaw <= 0.0 && t == 0.0 -> kindOfVertex(i)
+                tRaw >= 1.0 && t == 1.0 -> kindOfVertex(i + 1)
+                else -> ProjectionKind.Interior
+            }
+
         val footX = ax + t * abx
         val footY = ay + t * aby
         val dx = p.x - footX
@@ -260,8 +272,26 @@ class TrailPolyline(
             alongTrackM = segStartM + t * segLenM,
             crossTrackM = if (side < 0.0) -distM else distM,
             snapped = frame.toLatLng(Vec2(footX, footY)),
+            kind = kind,
         )
     }
+
+    /**
+     * A clamp at the first or last vertex is [ProjectionKind.EndpointClamped]; anywhere else it is
+     * [ProjectionKind.VertexClamped].
+     *
+     * The distinction is load-bearing rather than cosmetic. Both are degenerate — a region of ground
+     * maps to one along-track value — but "before the start" and "past the end" are real states the
+     * app already relies on, notably when acquiring a trail from slightly before its head. Only an
+     * interior vertex represents the apex wedge, where the along-track answer is not merely coarse
+     * but meaningless.
+     */
+    private fun kindOfVertex(vertexIndex: Int): ProjectionKind =
+        if (vertexIndex == 0 || vertexIndex == size - 1) {
+            ProjectionKind.EndpointClamped
+        } else {
+            ProjectionKind.VertexClamped
+        }
 
     /**
      * The point on the trail at [alongTrackM] metres from the start, clamped to the trail's extent.

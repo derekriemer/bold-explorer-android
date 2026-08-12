@@ -186,7 +186,8 @@ class ProgressTracker(
         val chosen = rank(found, byPrediction = true)
         val rejected = found.firstOrNull { it !== chosen }
 
-        if (chosen != null && abs(chosen.crossTrackM) <= gateM) {
+        val acceptM = acceptRadiusFor(chosen, gateM, accuracyM)
+        if (chosen != null && abs(chosen.crossTrackM) <= acceptM) {
             return confirm(
                 position = chosen,
                 ts = ts,
@@ -212,10 +213,11 @@ class ProgressTracker(
             windowM = windowM,
             budgetM = budgetM,
             disposition =
-                if (chosen == null) {
-                    "uncertain:no_candidate_in_window"
-                } else {
-                    "uncertain:xt_${chosen.crossTrackM.metres()}_over_gate_${gateM.metres()}"
+                when {
+                    chosen == null -> "uncertain:no_candidate_in_window"
+                    chosen.kind == ProjectionKind.VertexClamped ->
+                        "uncertain:wedge_${chosen.crossTrackM.metres()}_over_${acceptM.metres()}"
+                    else -> "uncertain:xt_${chosen.crossTrackM.metres()}_over_gate_${gateM.metres()}"
                 },
         )
     }
@@ -481,6 +483,38 @@ class ProgressTracker(
      * candidates hundreds of metres away for a walker who has moved four metres, destroying the
      * switchback protection the window exists to provide.
      */
+    /**
+     * How close a candidate must be to count as a match.
+     *
+     * Normally the match gate. For a [ProjectionKind.VertexClamped] candidate it is the tighter of
+     * the gate and the vertex accept radius, because there the reported distance is *radial to the
+     * corner* rather than perpendicular offset, and an entire wedge of ground shares the candidate's
+     * `alongTrackM`. Inside the radius that answer is still usable — the ambiguity is smaller than
+     * the fix's own error. Outside it, accepting would commit progress to a position the geometry
+     * cannot actually distinguish, which is what froze along-track for 36 consecutive fixes on the
+     * 2026-08-12 walk. See ADR 0001 Amendment 1.
+     *
+     * [ProjectionKind.EndpointClamped] is deliberately *not* tightened. It is degenerate in the same
+     * way, but "before the start" and "past the end" are real, useful states — acquiring a trail from
+     * just short of its head is ordinary, and tightening here would break it.
+     */
+    private fun acceptRadiusFor(
+        position: TrailPosition?,
+        gateM: Double,
+        accuracyM: Double?,
+    ): Double {
+        if (position == null || position.kind != ProjectionKind.VertexClamped) return gateM
+        return min(
+            gateM,
+            NavigationPolicy.widenWithAccuracy(
+                baseM = tuning.vertexAcceptBaseM,
+                factor = tuning.vertexAcceptAccuracyFactor,
+                accuracyM = accuracyM,
+                capM = tuning.vertexAcceptCapM,
+            ),
+        )
+    }
+
     private fun budgetFor(
         elapsedSec: Double,
         accuracyM: Double?,
