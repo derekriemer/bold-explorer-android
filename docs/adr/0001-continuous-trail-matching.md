@@ -1,8 +1,8 @@
 # ADR 0001 — Continuous trail matching: navigation core redesign
 
-- **Status:** Accepted; amended 2026-08-12 (Amendment 1 — vertex projections)
+- **Status:** Accepted; amended 2026-08-12 (Amendment 1 — vertex projections; S5b — geometry vs annotations)
 - **Date:** 2026-08-09
-- **Issues:** #23, #35, #55, #56
+- **Issues:** #23, #35, #55, #56, #69
 - **Supersedes:** the per-trackpoint `TrailFollower` state machine
 - **Informs:** #59 (trail graph), #60 (fork sonification) — see Forward compatibility
 - **Origin:** planned 2026-08-07, revised by the owner 2026-08-08/09, accepted 2026-08-09
@@ -544,6 +544,45 @@ alert. Shadow-mode duplication is the cost of attributable field results. `desir
 moves to a chord/lookahead bearing — a single segment bearing at 2 m spacing is nearly random and
 makes off-trail alerts density-dependent.
 
+**S5b — separate trail geometry from trail annotations.** Lands with S5 because it needs
+`TrailPolyline.project`, and is needed by S6, which cannot announce a named waypoint as *passed*
+without knowing where along the trail it sits.
+
+The invariant that is currently missing:
+
+> A trail's geometry is its **track points**, in recorded order. Everything else attached to it is an
+> **annotation** with a projected position.
+
+`trail_waypoint.position` presently does two jobs at once — polyline vertex order, and "which
+checkpoint is this". A point attached *after* recording has no legitimate vertex position, so
+appending one fabricates geometry. This is not a validation gap; the data model invites the error.
+
+Observed, not hypothesised: waypoint `dos` on trail 12 was created 78 minutes after that trail's last
+track point and appended at position 139, 1031 m from position 138. The app consequently believed the
+trail was 2523 m long and ended 50 m from its own start; it is really 1492 m and ends 1060 m away.
+Following it to completion would have routed the user down a kilometre-long straight line across
+whatever is actually there. Nothing flagged it, and it silently corrupted offline replay of a field
+walk — a global scan produced a candidate 2135 m along, on the phantom segment, which cost real
+analysis time before the data was suspected. 16 named points across 7 trails sit in this position
+today; the ones recorded *during* a walk are harmless as vertices only by luck, because they happen
+to lie on the path.
+
+**Decision.** An annotation stores **lat/lon as the truth and along-track as a derived value**. The
+dormant `auto_waypoint(trail_id, name, segment_index, offset_m, lat, lon, created_at)` table already
+has exactly this shape and is the home for it — generalised from the bend anchors it was reserved
+for in Deferred. Storing along-track as the truth instead would silently move every annotation
+whenever the trail geometry was edited or re-recorded; keeping the real position means a geometry
+change is a re-projection, and loses nothing.
+
+**Attach-time guard.** A point that projects absurdly far from the trail is refused or flagged, never
+silently placed — the check from **#69**, moved from a post-hoc smoke alarm onto the path that
+creates the problem. Migration of the existing 16 points needs the same rule, and `dos` is precisely
+the case that must *not* be quietly projected: a kilometre off the trail is not an annotation, it is
+a mistake, and the honest outcome is to say so.
+
+Out of scope: automatic repair of existing bad data. Whether a stray point was an error or a
+deliberate extension is not knowable from the data, so it is a question for the human.
+
 **S6 — stop firing `WaypointReached` per trackpoint.** Replace with `NamedWaypointPassed` /
 `TrailComplete` / `MatchLost` / `MatchReacquired`. **Critical:** `resetThrottle` has exactly one
 production caller — `GpsViewModel.kt:1207`, inside the `WaypointReached` handler. It re-arms both
@@ -742,10 +781,30 @@ and the question is wrong.
 
 ### Why it happens
 
-At a vertex where the trail turns sharply, both adjacent segments lead *away* from the corner. Every
-position in the exterior wedge behind that turn therefore has the vertex itself as its nearest point
-on the polyline. At a switchback the wedge approaches a half-plane. Consequences, all already true
-of `TrailPosition` and all currently invisible to its consumers:
+At a vertex where the trail changes direction, both adjacent segments lead *away* from the corner.
+Every position in the exterior wedge — the region on the **outside** of the turn — therefore has the
+vertex itself as its nearest point on the polyline.
+
+Two properties of that wedge decide when this bites, and a second walk on 2026-08-12 measured both.
+They are not what the first draft of this amendment assumed.
+
+- **You only enter the wedge from off-trail.** It lies outside the turn, so walking the trail never
+  puts you in it. A clean pass over two bends of 64° and 82° (GPS accuracy 3.3 m, 99 fixes, all
+  `Matched`) produced **zero** pinned fixes at either bend. A degraded pass over the same ground
+  (25 m reported accuracy) produced six, with a 32 m run. The hazard is not rounding a bend; it is
+  being — or appearing to be — off-trail near one. Positional error is what puts you there, which is
+  why this shows up exactly when the fix is least trustworthy.
+- **The wedge's width on the ground grows with distance from the vertex**, as roughly
+  `distance × turn angle`. At 30 m out, even a 21° bend spans some 11 m — ample for a jittering fix
+  to land in repeatedly. The degraded pass pinned at vertices of 21° and 64°, not only at the sharp
+  one, and the first walk's 36-fix run was at an 82° vertex rather than a true switchback.
+
+So the risk scales with **turn angle × distance**, and switchbacks are the extreme rather than the
+category. Shallow bends pin too, once positional error is large enough — which makes an
+accuracy-scaled accept radius the right shape of answer, and makes this matter on ordinary trails
+rather than only on mountain switchbacks. A genuine 170°+ apex remains unmeasured in the field.
+
+Consequences, all already true of `TrailPosition` and all currently invisible to its consumers:
 
 - **`alongTrackM` is degenerate.** An entire region of ground maps to one scalar. It cannot advance
   while the user walks through that region, and it cannot distinguish "at the apex" from "50 m past
@@ -815,15 +874,18 @@ answer. Filtering is not fixing; both changes are needed and neither substitutes
   raising off-trail at exactly the moment it should.
 - The sign of a vertex-clamped `crossTrackM` remains meaningless. Anything later added that speaks a
   side must branch on the projection kind.
-- Expected behaviour change at real switchbacks: rounding an apex stays `Matched` (you are within
-  accuracy of it), while walking *away* from one into the wedge now goes `Uncertain` instead of
-  silently claiming a frozen position. That is the intended trade — hedged and frozen beats confident
+- Expected behaviour change: walking a trail normally is unaffected, because the wedge is never
+  entered from on-trail — measured, not assumed. What changes is that drifting off-trail near a bend
+  now goes `Uncertain` instead of silently claiming a frozen position. That is the intended trade — hedged and frozen beats confident
   and wrong, which is the same principle that demoted dead reckoning from progress to prediction.
 
 ### Verification
 
-- A switchback fixture where the walker leaves the apex into the wedge: assert the tracker does not
-  report `Matched` with a frozen `alongTrackM` while `travelledM` fails to advance.
+- A bend fixture where the walker leaves the trail into the wedge: assert the tracker does not
+  report `Matched` with a frozen `alongTrackM` while `travelledM` fails to advance. Use a *moderate*
+  bend, not a switchback — the field data pinned at 21° and 64°, and a fixture built only from an
+  extreme apex would pass while the common case regressed.
+- A clean walk around the same bend must be unaffected, since on-trail travel never enters the wedge.
 - Endpoint clamps keep their current behaviour — a walk that starts 10 m before the trail head must
   still acquire.
 - `TrailReplay.vertexPinnedFixes` on the 2026-08-12 corpus should fall substantially from 30. That
@@ -942,5 +1004,6 @@ Not yet reflected: whether S4's new constants shift the field-walk gate. **No op
 specified.)*
 
 - **S4c is open** — Amendment 1 is accepted but not implemented. It gates S5.
+- **S5b is open** — the geometry/annotation split. Blocks S6, and #69 is its attach-time guard.
 - **The vertex accept radius is unset.** Same untuned status as the original S4 constants, with the
   difference that it can now be swept against the 2026-08-12 corpus before it ships.
