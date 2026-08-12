@@ -196,8 +196,35 @@ object NavigationPolicy {
     /** Accuracy multiplier for the match gate. */
     const val MATCH_GATE_ACCURACY_FACTOR = 3.0
 
-    /** Hard ceiling on the match gate, so an implausible accuracy cannot make anything match. */
-    const val MATCH_GATE_CAP_M = 60.0
+    /**
+     * Hard ceiling on the match gate, so an implausible accuracy cannot make anything match.
+     *
+     * **Must stay at or below [OFF_TRAIL_FAR_M].** Above it the tracker reports `Matched` while the
+     * app is simultaneously telling the user they may be off trail, which is not a tuning question
+     * but a contradiction. Pinned by `NavigationPolicyTest`.
+     *
+     * Lowered from 60 m after the 2026-08-12 field walk, where under a 25 m reported accuracy the
+     * gate pinned at its cap and the matcher held `Matched` at 49, 54 and 56 m cross-track while the
+     * live follower announced off-trail. Swept over the recorded walk with the replay harness:
+     *
+     * ```
+     * cap     max cross-track while Matched   vertex-pinned fixes
+     *  60 m               57.1 m                      45
+     *  50 m               49.6 m                      40
+     *  40 m               38.9 m                      30
+     *  30 m               29.0 m                      16
+     * ```
+     *
+     * 40 m rather than 30 m because the cap only binds under degraded accuracy, and a fix genuinely
+     * displaced 20 m with 8 m of jitter *should* still match — 30 m starts rejecting fixes that were
+     * right. Under good GPS the cap does not bind at all: at 3 m accuracy the gate is
+     * 25 + 3 × 3 = 34 m, and the walk's undegraded session replayed identically at every cap from 30
+     * to 60 m. This change therefore costs nothing in normal conditions.
+     *
+     * It reduces vertex pinning as a side effect (45 → 30 fixes) by rejecting the far end of the
+     * apex wedge. That is filtering, not a fix — see the vertex-projection amendment in ADR 0001.
+     */
+    const val MATCH_GATE_CAP_M = 40.0
 
     /** Accuracy multiplier (K) in `budget = maxSpeed × elapsed + K × accuracy`. */
     const val BUDGET_ACCURACY_FACTOR = 2.0

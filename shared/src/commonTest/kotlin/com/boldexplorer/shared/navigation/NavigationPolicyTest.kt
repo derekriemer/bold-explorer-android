@@ -105,4 +105,34 @@ class NavigationPolicyTest {
         // 1 m accuracy * factor 2 = 2 m, clamped up to the 5 m floor.
         assertEquals(5.0, NavigationPolicy.tightenWithAccuracy(ceilingM = 15.0, floorM = 5.0, factor = 2.0, accuracyM = 1.0))
     }
+    @Test
+    fun theMatchGateCapCannotExceedTheOffTrailFarThreshold() {
+        // A contradiction rather than a tuning preference: above OFF_TRAIL_FAR_M the tracker would
+        // report Matched for a fix the app is simultaneously calling off trail. The 2026-08-12 walk
+        // hit exactly that — Matched at 56 m cross-track while OFF_TRAIL_ALERT was firing.
+        assertTrue(
+            NavigationPolicy.MATCH_GATE_CAP_M <= NavigationPolicy.OFF_TRAIL_FAR_M,
+            "match gate cap ${NavigationPolicy.MATCH_GATE_CAP_M} m must not exceed " +
+                "off-trail-far ${NavigationPolicy.OFF_TRAIL_FAR_M} m",
+        )
+    }
+
+    @Test
+    fun theMatchGateCapDoesNotBindUnderGoodGps() {
+        // The cap is a guard against implausible accuracy, not a working threshold. If it clipped
+        // ordinary fixes it would be silently overriding MATCH_GATE_BASE_M for every walk.
+        val goodAccuracyM = 5.0
+        val gate =
+            NavigationPolicy.widenWithAccuracy(
+                baseM = NavigationPolicy.MATCH_GATE_BASE_M,
+                factor = NavigationPolicy.MATCH_GATE_ACCURACY_FACTOR,
+                accuracyM = goodAccuracyM,
+                capM = NavigationPolicy.MATCH_GATE_CAP_M,
+            )
+        assertTrue(
+            gate < NavigationPolicy.MATCH_GATE_CAP_M,
+            "at ${goodAccuracyM} m accuracy the gate should be set by the base, not clipped by the cap; got $gate",
+        )
+    }
+
 }
