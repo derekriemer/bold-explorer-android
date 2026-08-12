@@ -23,6 +23,17 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
+ * The append-only half of [AudioEventLog].
+ *
+ * Exists so writers can be tested without an Android `Context`. [AudioEventLog] owns a file and a
+ * coroutine scope; a caller that only appends should not have to stand either of those up to prove
+ * which entries it writes.
+ */
+interface AudioLogSink {
+    fun append(entry: AudioLogEntry)
+}
+
+/**
  * Persistent, session-scoped log of every audio beacon and announcement.
  *
  * Entries are held newest-first in memory ([entries]) and appended oldest-first
@@ -37,7 +48,7 @@ class AudioEventLog
     @Inject
     constructor(
         @ApplicationContext private val context: Context,
-    ) {
+    ) : AudioLogSink {
         private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         private val fileMutex = Mutex()
         private val logFile: File get() = File(context.filesDir, "audio_log.jsonl")
@@ -56,7 +67,7 @@ class AudioEventLog
             }
         }
 
-        fun append(entry: AudioLogEntry) {
+        override fun append(entry: AudioLogEntry) {
             _entries.value = listOf(entry) + _entries.value
             scope.launch {
                 fileMutex.withLock {

@@ -1,6 +1,9 @@
 package com.boldexplorer.di
 
+import com.boldexplorer.audio.AudioEventLog
+import com.boldexplorer.audio.AudioLogSink
 import com.boldexplorer.shared.audio.AudioCueScheduler
+import dagger.Binds
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -15,4 +18,11 @@ object AudioModule {
     @Provides
     @Singleton
     fun provideAudioCueScheduler(): AudioCueScheduler = AudioCueScheduler()
+}
+
+@Module
+@InstallIn(SingletonComponent::class)
+abstract class AudioBindingsModule {
+    @Binds
+    abstract fun bindAudioLogSink(impl: AudioEventLog): AudioLogSink
 }

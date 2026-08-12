@@ -39,6 +39,9 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.boldexplorer.audio.AudioLogEntry
+import com.boldexplorer.audio.spanAnnouncement
+import com.boldexplorer.audio.spanButtonLabel
+import com.boldexplorer.audio.spanElapsedText
 import com.boldexplorer.location.RawFixEvent
 import com.boldexplorer.shared.location.statusAt
 import kotlinx.coroutines.delay
@@ -59,6 +62,8 @@ fun DebugScreen(
     val logEntries by viewModel.logEntries.collectAsStateWithLifecycle()
     val logStatus by viewModel.logStatus.collectAsStateWithLifecycle()
     val showMarkerDialog by viewModel.showMarkerDialog.collectAsStateWithLifecycle()
+    val showSpanDialog by viewModel.showSpanDialog.collectAsStateWithLifecycle()
+    val openSpan by viewModel.openSpan.collectAsStateWithLifecycle()
     val lastRawFix by viewModel.lastRawFix.collectAsStateWithLifecycle()
     val accuracyHapticsEnabled by viewModel.accuracyHapticsEnabled.collectAsStateWithLifecycle()
     val shadowMatchEnabled by viewModel.shadowMatchEnabled.collectAsStateWithLifecycle()
@@ -109,6 +114,44 @@ fun DebugScreen(
             ) {
                 Text("IMPORTANT!")
             }
+        }
+
+        // Marked sections: the interval counterpart to IMPORTANT!. On the 2026-08-12 walk the
+        // intervals ("stop start"/"stop end") carried more than the point markers did, and were
+        // bracketed by hand.
+        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+            Button(
+                onClick = { viewModel.onSpanButtonPressed() },
+                modifier = Modifier.fillMaxWidth(),
+                colors =
+                    if (openSpan != null) {
+                        ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary)
+                    } else {
+                        ButtonDefaults.buttonColors()
+                    },
+            ) {
+                Text(spanButtonLabel(openSpan))
+            }
+            openSpan?.let { span ->
+                // Elapsed time ticks, so it is plain text read on focus — never a live region.
+                Text(
+                    "Open for ${spanElapsedText(nowMs - span.startedAtMs)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            // The transition, carried on its own node. spanAnnouncement() has no clock in it, so
+            // this fires on open and close and at no other time.
+            Text(
+                "",
+                modifier =
+                    Modifier.size(1.dp).semantics {
+                        liveRegion = LiveRegionMode.Polite
+                        // a11y: the button label changes rather than the focused text, so without
+                        // this an open or close is silent unless the user goes looking.
+                        contentDescription = spanAnnouncement(openSpan)
+                    },
+            )
         }
 
         Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
@@ -422,6 +465,13 @@ fun DebugScreen(
         Spacer(Modifier.height(80.dp))
     }
 
+    if (showSpanDialog) {
+        SpanLabelDialog(
+            onConfirm = { label -> viewModel.confirmSpan(label) },
+            onDismiss = { viewModel.dismissSpan() },
+        )
+    }
+
     // IMPORTANT! marker dialog — shows last 5 log entries + note field
     if (showMarkerDialog) {
         MarkerNoteDialog(
@@ -430,6 +480,36 @@ fun DebugScreen(
             onDismiss = { viewModel.dismissMarker() },
         )
     }
+}
+
+/**
+ * Names a marked section before opening it.
+ *
+ * Shorter than [MarkerNoteDialog] on purpose: this is pressed at the *start* of something, when the
+ * interesting events have not happened yet, so there is no recent-events list worth showing. The
+ * label wants to be a couple of words, because it is read back on the button as "End: <label>".
+ */
+@Composable
+private fun SpanLabelDialog(
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var label by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Start marked section") },
+        text = {
+            OutlinedTextField(
+                value = label,
+                onValueChange = { label = it },
+                label = { Text("Name it (e.g. stopped, bad gps)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = { TextButton(onClick = { onConfirm(label) }) { Text("Start") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable

@@ -11,6 +11,7 @@ import com.boldexplorer.audio.ShadowMatchSnapshot
 import com.boldexplorer.compass.SensorCompassProvider
 import com.boldexplorer.gpx.GpxFileWriter
 import com.boldexplorer.location.AccuracyHapticMonitor
+import com.boldexplorer.audio.MarkerSpanRecorder
 import com.boldexplorer.location.LocationDegradationController
 import com.boldexplorer.location.LocationProviderRouter
 import com.boldexplorer.location.RawFixEvent
@@ -38,6 +39,7 @@ class DebugViewModel
         @ApplicationContext private val context: Context,
         private val locationRouter: LocationProviderRouter,
         private val degradation: LocationDegradationController,
+        private val markerSpans: MarkerSpanRecorder,
         private val compassProvider: SensorCompassProvider,
         private val waypointRepo: WaypointRepository,
         private val audioEngine: AudioEngine,
@@ -120,6 +122,41 @@ class DebugViewModel
 
         fun dismissMarker() {
             _pendingMarkerTimestampMs.value = null
+        }
+
+        // ── Marked sections (spans) ────────────────────────────────────────────────────
+        //
+        // The interval counterpart to IMPORTANT!. State lives in MarkerSpanRecorder rather than
+        // here because a span outlives this ViewModel — see its KDoc.
+
+        val openSpan = markerSpans.openSpan
+
+        /** Non-null while the "start a marked section" dialog is open. */
+        private val _pendingSpanTimestampMs = MutableStateFlow<Long?>(null)
+        val showSpanDialog: StateFlow<Boolean> =
+            _pendingSpanTimestampMs
+                .map { it != null }
+                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), false)
+
+        /** Opens the naming dialog, or closes the current span if one is open. */
+        fun onSpanButtonPressed() {
+            if (markerSpans.openSpan.value != null) {
+                markerSpans.end()
+            } else {
+                _pendingSpanTimestampMs.value = System.currentTimeMillis()
+            }
+        }
+
+        fun confirmSpan(label: String) {
+            val ts = _pendingSpanTimestampMs.value ?: return
+            _pendingSpanTimestampMs.value = null
+            // Timestamped at the button press, not at dialog dismissal: the point of a bracket is
+            // that its edges are the times, and typing a label takes as long as it takes.
+            markerSpans.start(label.ifBlank { "section" }, nowMs = ts)
+        }
+
+        fun dismissSpan() {
+            _pendingSpanTimestampMs.value = null
         }
 
         fun newLog() {
