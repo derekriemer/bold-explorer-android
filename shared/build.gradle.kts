@@ -28,6 +28,11 @@ kotlin {
             implementation(libs.kotlin.test)
             implementation(libs.kotlinx.coroutines.test)
         }
+        // JVM-only: the offline replay harness (see navigation/replay). Not shipped in the app or
+        // the iOS framework — it exists to sweep the S4 constants against a recorded walk.
+        jvmMain.dependencies {
+            implementation(libs.json)
+        }
     }
 }
 
@@ -39,4 +44,18 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+}
+
+// Offline replay of a recorded walk against candidate matcher constants. See
+// shared/src/jvmMain/kotlin/com/boldexplorer/shared/navigation/replay/ReplayCli.kt.
+//
+//   ./gradlew :shared:runReplay --args="<trail.gpx> <audio_log.jsonl> [--reverse] [--sweep]"
+tasks.register<JavaExec>("runReplay") {
+    group = "verification"
+    description = "Replays a logged walk through ProgressTracker under candidate MatchTuning values."
+    classpath =
+        kotlin.jvm().compilations.getByName("main").let { compilation ->
+            compilation.output.allOutputs + compilation.runtimeDependencyFiles
+        }
+    mainClass.set("com.boldexplorer.shared.navigation.replay.ReplayCliKt")
 }

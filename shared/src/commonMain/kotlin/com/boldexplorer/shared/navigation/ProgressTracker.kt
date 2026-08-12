@@ -71,10 +71,14 @@ import kotlin.math.roundToInt
  *
  * @param polyline the followed trail, in recorded order. Immutable for the session.
  * @param travelDirection which way the user declared they are walking. Fixed for the session.
+ * @param tuning the numeric thresholds. Defaults to the shipping values; a parameter so a recorded
+ *   walk can be replayed against candidate values offline rather than by walking it again. See
+ *   [MatchTuning].
  */
 class ProgressTracker(
     private val polyline: TrailPolyline,
     private val travelDirection: TravelDirection = TravelDirection.Forward,
+    private val tuning: MatchTuning = MatchTuning.DEFAULT,
 ) {
     /** The most recent match, or `null` before the first fix. */
     var match: TrailMatch? = null
@@ -121,10 +125,10 @@ class ProgressTracker(
         val accuracyM = sample.accuracy
         val gateM =
             NavigationPolicy.widenWithAccuracy(
-                baseM = NavigationPolicy.MATCH_GATE_BASE_M,
-                factor = NavigationPolicy.MATCH_GATE_ACCURACY_FACTOR,
+                baseM = tuning.matchGateBaseM,
+                factor = tuning.matchGateAccuracyFactor,
                 accuracyM = accuracyM,
-                capM = NavigationPolicy.MATCH_GATE_CAP_M,
+                capM = tuning.matchGateCapM,
             )
 
         // No prior exists at follow-start, so the first match is necessarily a global scan.
@@ -141,8 +145,8 @@ class ProgressTracker(
         // speed: a stationary user with bad GPS burns seconds without metres, a fast-moving one
         // burns metres without seconds.
         if (state == MatchState.Matched || state == MatchState.Uncertain) {
-            val overDistance = reckonedM > NavigationPolicy.RECKONING_HORIZON_M
-            val overTime = uncertainSec > NavigationPolicy.RECKONING_HORIZON_S
+            val overDistance = reckonedM > tuning.reckoningHorizonM
+            val overTime = uncertainSec > tuning.reckoningHorizonS
             if (overDistance || overTime) {
                 state = MatchState.Lost
                 unmatchedCount++
@@ -230,7 +234,7 @@ class ProgressTracker(
         uncertainSec: Double,
     ): TrailMatch {
         val since = lastGlobalScanMs
-        if (since != null && (ts - since) / 1000.0 < NavigationPolicy.RESCAN_COOLDOWN_S) {
+        if (since != null && (ts - since) / 1000.0 < tuning.rescanCooldownS) {
             return emit(
                 chosen = null,
                 bestRejected = null,
@@ -318,7 +322,7 @@ class ProgressTracker(
         unconfirmedAlongM = chosen.alongTrackM
         unconfirmedSinceMs = ts
 
-        if (corroboratedM >= NavigationPolicy.CORROBORATION_M) {
+        if (corroboratedM >= tuning.corroborationM) {
             return confirm(
                 position = chosen,
                 ts = ts,
@@ -454,7 +458,7 @@ class ProgressTracker(
         if (!byPrediction) return best
         val predicted = predictedAlongM ?: return best
         return found
-            .filter { abs(it.crossTrackM) - abs(best.crossTrackM) <= NavigationPolicy.CANDIDATE_TIE_M }
+            .filter { abs(it.crossTrackM) - abs(best.crossTrackM) <= tuning.candidateTieM }
             .minByOrNull { abs(it.alongTrackM - predicted) } ?: best
     }
 
@@ -462,7 +466,7 @@ class ProgressTracker(
     private fun tieBreakByDirection(found: List<TrailPosition>): TrailPosition? {
         val best = found.firstOrNull() ?: return null
         val tied =
-            found.filter { abs(it.crossTrackM) - abs(best.crossTrackM) <= NavigationPolicy.CANDIDATE_TIE_M }
+            found.filter { abs(it.crossTrackM) - abs(best.crossTrackM) <= tuning.candidateTieM }
         return when (travelDirection) {
             TravelDirection.Forward -> tied.minByOrNull { it.alongTrackM }
             TravelDirection.Reverse -> tied.maxByOrNull { it.alongTrackM }
@@ -482,16 +486,16 @@ class ProgressTracker(
         accuracyM: Double?,
     ): Double {
         val maxSpeedMps =
-            max(NavigationPolicy.MIN_MAX_SPEED_MPS, (speedEmaMps ?: 0.0) * NavigationPolicy.SPEED_MARGIN_FACTOR)
-        val elapsed = min(elapsedSec, NavigationPolicy.BUDGET_ELAPSED_CAP_S)
-        return maxSpeedMps * elapsed + NavigationPolicy.BUDGET_ACCURACY_FACTOR * (accuracyM ?: 0.0)
+            max(tuning.minMaxSpeedMps, (speedEmaMps ?: 0.0) * tuning.speedMarginFactor)
+        val elapsed = min(elapsedSec, tuning.budgetElapsedCapS)
+        return maxSpeedMps * elapsed + tuning.budgetAccuracyFactor * (accuracyM ?: 0.0)
     }
 
     private fun updateSpeed(speedMps: Double?) {
         val observed = speedMps?.takeIf { it.isFinite() && it >= 0.0 } ?: return
         val previous = speedEmaMps
         speedEmaMps =
-            if (previous == null) observed else previous + NavigationPolicy.SPEED_EMA_ALPHA * (observed - previous)
+            if (previous == null) observed else previous + tuning.speedEmaAlpha * (observed - previous)
     }
 
     private fun emit(
