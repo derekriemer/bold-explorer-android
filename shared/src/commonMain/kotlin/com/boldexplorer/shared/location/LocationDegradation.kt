@@ -81,3 +81,53 @@ data class DegradationConfig(
         )
     }
 }
+
+/**
+ * What the Debug screen shows for a [DegradationConfig], split by how often each half may change.
+ *
+ * The split is the whole point. A live region announces on every content change, so any string it
+ * carries must change only when something happened — never on a clock. Putting the countdown in one
+ * made TalkBack re-read the entire status once a second for thirty minutes.
+ *
+ * @property detail read on focus. Contains the countdown, so it changes constantly. Must **not** be
+ *   given [androidx.compose.ui.semantics.liveRegion].
+ * @property announcement safe for a live region: a function of armed-vs-off alone. Ticking cannot
+ *   change it, so it fires exactly on the transitions — including expiry, the one the user did not
+ *   initiate and would otherwise have no way to notice.
+ */
+data class DegradationStatus(
+    val detail: String,
+    val announcement: String,
+)
+
+/**
+ * Describes this config as of [nowMs].
+ *
+ * Lives here rather than in the composable so the "announcement does not change while the countdown
+ * ticks" property is a plain JVM test instead of something only a screen reader can catch.
+ */
+fun DegradationConfig.statusAt(nowMs: Long): DegradationStatus =
+    if (isActiveAt(nowMs)) {
+        DegradationStatus(
+            detail = "ACTIVE — readings are deliberately wrong. Expires in ${remainingText(nowMs)}.",
+            announcement = "GPS degradation active. Readings are deliberately wrong.",
+        )
+    } else {
+        DegradationStatus(
+            detail = "Off. Fixes are unmodified.",
+            announcement = "GPS degradation off. Fixes are unmodified.",
+        )
+    }
+
+/**
+ * Coarse remaining time: whole minutes until the last one, then seconds.
+ *
+ * Spoken aloud, "1737 seconds" is worse than useless — it is long to say and no one converts it.
+ * Rounding up means it never reads "0 minutes" while still running.
+ */
+private fun DegradationConfig.remainingText(nowMs: Long): String {
+    val remainingS = ((expiresAtMs - nowMs) / 1000L).coerceAtLeast(0L)
+    if (remainingS < 60L) return "$remainingS seconds"
+    val minutes = (remainingS + 59L) / 60L
+    return if (minutes == 1L) "1 minute" else "$minutes minutes"
+}

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -39,6 +40,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.boldexplorer.audio.AudioLogEntry
 import com.boldexplorer.location.RawFixEvent
+import com.boldexplorer.shared.location.statusAt
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -161,14 +163,13 @@ fun DebugScreen(
                 // arm is then also the correct arm. These presets manufacture the ambiguity.
                 val degradation by viewModel.degradationConfig.collectAsStateWithLifecycle()
                 val degrading = degradation.isActiveAt(nowMs)
-                val remainingS = ((degradation.expiresAtMs - nowMs) / 1000L).coerceAtLeast(0L)
+                val status = degradation.statusAt(nowMs)
 
+                // Plain text, deliberately. It carries the countdown, so making this a live region
+                // announces the whole sentence once a second for thirty minutes — which is what it
+                // used to do. The countdown is state you read on focus, not an event.
                 Text(
-                    if (degrading) {
-                        "ACTIVE — readings are deliberately wrong. Expires in $remainingS seconds."
-                    } else {
-                        "Off. Fixes are unmodified."
-                    },
+                    status.detail,
                     style = MaterialTheme.typography.bodySmall,
                     color =
                         if (degrading) {
@@ -176,16 +177,21 @@ fun DebugScreen(
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
                         },
+                )
+
+                // The transition, carried separately so it can be announced without the countdown
+                // dragging it along. `status.announcement` is a function of armed-vs-off only, so
+                // this fires twice per cycle: on arm, and on expiry. Expiry is the one that earns
+                // its keep — it is the only transition the user did not initiate, and there is no
+                // visual cue a screen-reader user would catch.
+                Text(
+                    "",
                     modifier =
-                        Modifier.semantics {
+                        Modifier.size(1.dp).semantics {
                             liveRegion = LiveRegionMode.Polite
-                            contentDescription =
-                                if (degrading) {
-                                    "GPS degradation active. Readings are deliberately wrong. " +
-                                        "Expires in $remainingS seconds."
-                                } else {
-                                    "GPS degradation off. Fixes are unmodified."
-                                }
+                            // a11y: the visible countdown text above is intentionally silent, so
+                            // this invisible node is the only thing that can speak the transition.
+                            contentDescription = status.announcement
                         },
                 )
 
@@ -209,6 +215,9 @@ fun DebugScreen(
                             onClick = { viewModel.armDegradation(preset, bearing) },
                             modifier =
                                 Modifier.fillMaxWidth().semantics {
+                                    // a11y: the visible label names the scenario but not what
+                                    // arming it does — the drift direction and the 30-minute
+                                    // expiry are the parts you need before pressing, not after.
                                     contentDescription =
                                         "Degrade GPS: ${preset.label}, drifting right of travel, for 30 minutes"
                                 },
