@@ -273,15 +273,17 @@ fun DebugScreen(
 
         Spacer(Modifier.height(8.dp))
 
-        // Shadow trail matching (ADR 0001, S4). Temporary: this readout exists to confirm the
-        // matcher is alive during a field walk. The log file, not this screen, is the record.
+        // Trail-match logging (ADR 0001, S4). Temporary: this readout exists to confirm the matcher
+        // is alive during a field walk. The log file, not this screen, is the record. The switch
+        // governs the log only — since S5a the matcher itself always runs while following, because
+        // wrong-way detection reads it.
         Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    Text("Shadow trail matching", style = MaterialTheme.typography.titleSmall)
+                    Text("Trail match logging", style = MaterialTheme.typography.titleSmall)
                     Switch(
                         checked = shadowMatchEnabled,
                         onCheckedChange = { viewModel.setShadowMatchEnabled(it) },
@@ -301,7 +303,7 @@ fun DebugScreen(
                 // cadence an announcement would talk over guidance for the whole walk.
                 val match = shadowMatch
                 if (!shadowMatchEnabled) {
-                    Text("Off.", style = MaterialTheme.typography.bodyMedium)
+                    Text("Logging off. Matching still runs.", style = MaterialTheme.typography.bodyMedium)
                 } else if (match == null) {
                     Text("Waiting for a trail follow to start.", style = MaterialTheme.typography.bodyMedium)
                 } else {

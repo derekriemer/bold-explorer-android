@@ -71,8 +71,8 @@ class DebugViewModel
         val accuracyHapticsEnabled: StateFlow<Boolean> = hapticMonitor.enabled
 
         /**
-         * Shadow trail matching (ADR 0001 S4): the continuous matcher running beside the live
-         * follower, writing one TRAIL_MATCH record per fix for later replay.
+         * Trail-match logging (ADR 0001 S4): one TRAIL_MATCH record per fix, for later replay. The
+         * matcher beside the live follower runs regardless — since S5a wrong-way detection reads it.
          */
         val shadowMatchEnabled: StateFlow<Boolean> = shadowMatchMonitor.enabled
 

@@ -10,11 +10,11 @@ import androidx.lifecycle.viewModelScope
 import com.boldexplorer.BuildConfig
 import com.boldexplorer.audio.AudioEventLog
 import com.boldexplorer.audio.ShadowMatchMonitor
-import com.boldexplorer.audio.ShadowTrailMatcher
 import com.boldexplorer.audio.AudioLogEntry
 import com.boldexplorer.audio.LastOutput
 import com.boldexplorer.audio.LiveRegionAnnouncement
 import com.boldexplorer.audio.OutputRouter
+import com.boldexplorer.audio.TrailMatcher
 import com.boldexplorer.compass.SensorCompassProvider
 import com.boldexplorer.location.BeaconAudioInputs
 import com.boldexplorer.location.GpsBackgroundMode
@@ -488,11 +488,12 @@ class GpsViewModel
         /**
          * Continuous matcher running beside [trailFollower] on the same fixes (ADR 0001, S4).
          *
-         * Consumed by nobody: it only writes [AudioLogEntry.Kind.TRAIL_MATCH] records so its
-         * deliberately-untuned constants can be set from real walks before anything depends on
-         * them. Null whenever no trail is being followed.
+         * Wrong-way detection is its one consumer (S5a); everything else still comes from
+         * [trailFollower] until S5. It also writes [AudioLogEntry.Kind.TRAIL_MATCH] records, which
+         * is what the Debug switch gates — not the matching itself. Null whenever no trail is being
+         * followed.
          */
-        private var shadowMatcher: ShadowTrailMatcher? = null
+        private var trailMatcher: TrailMatcher? = null
 
         // Guidance state + the off-trail/backtrack/ordinary-guidance detection state machine live in a
         // dedicated coordinator (pure, JVM-tested in :shared). It decides *whether* to alert; this
@@ -764,8 +765,10 @@ class GpsViewModel
             viewModelScope.launch {
                 location.filterNotNull().collect { sample ->
                     val smoothedHeading = guidanceCoordinator.updateTrustedCourse(sample)
+                    // Before the follower, deliberately: wrong-way detection now decides on this
+                    // fix's match (S5a), so the match has to exist by the time the detectors run.
+                    matchTrail(sample)
                     announceTrailFollowerEvent(sample, smoothedHeading?.deg?.toFloat())
-                    recordShadowMatch(sample)
                     // Drive CollectionExplorer on every fix; it is the primary navigator. When no
                     // collection is loaded its state is Idle and onLocationUpdate is a no-op.
                     val travelHeadingDeg = sample.heading?.takeIf { (sample.speed ?: 0.0) >= MIN_TRAVEL_HEADING_SPEED_MPS }
@@ -908,12 +911,12 @@ class GpsViewModel
                     }
                 _selectedTrailId.value = trailId
                 enterFollowing(trailId)
-                // The shadow matcher takes the trail in RECORDED order and carries the traversal
+                // The matcher takes the trail in RECORDED order and carries the traversal
                 // direction separately — deliberately not `ordered`, which is reversed in place.
                 // Reversing the point list would make alongTrackM session-relative and stop two
                 // walks of the same trail being comparable in the field logs.
-                shadowMatcher =
-                    ShadowTrailMatcher(
+                trailMatcher =
+                    TrailMatcher(
                         points = wps.map { LatLng(it.lat, it.lon) },
                         direction = if (reversed) TravelDirection.Reverse else TravelDirection.Forward,
                     )
@@ -994,25 +997,25 @@ class GpsViewModel
         }
 
         /**
-         * Run the shadow matcher on this fix and record what it decided.
+         * Match this fix against the followed trail, and record what the matcher decided.
          *
          * Gated on the live follower being active so a matcher left over from a finished follow
-         * cannot keep appending. Writes only; nothing here may influence guidance before the field
-         * walk that the ADR gates S5 on.
+         * cannot keep running. The Debug switch gates the **logging** only: since S5a wrong-way
+         * detection reads the match, so switching off a per-fix log line must not quietly switch off
+         * an alert. TRAIL_MATCH is still the only per-fix kind in the log, and the ~2 MB/hour that
+         * switch exists for is all in the writing.
          */
-        private fun recordShadowMatch(sample: LocationSample) {
-            val matcher = shadowMatcher ?: return
+        private fun matchTrail(sample: LocationSample) {
+            val matcher = trailMatcher ?: return
             if (trailFollower.state.value !is TrailFollowerState.Active) return
-            // The gate covers the matching as well as the logging: switching it off should stop the
-            // work, not just silence it. TRAIL_MATCH is the only per-fix kind in the log.
-            if (!shadowMatchMonitor.enabled.value) return
             val entry = matcher.onFix(sample)
+            if (!shadowMatchMonitor.enabled.value) return
             audioEventLog.append(entry)
             shadowMatchMonitor.record(matcher.lastMatch ?: return)
         }
 
         fun stopFollowTrail() {
-            shadowMatcher = null
+            trailMatcher = null
             shadowMatchMonitor.clear()
             trailFollower.stop()
             recordingMachine.stop()
@@ -1358,22 +1361,37 @@ class GpsViewModel
             viewModelScope.launch { scheduler.emitWrongVector() }
         }
 
-        // BUG-9: alert when consecutive GPS fixes show distance to target steadily increasing (backtracking).
+        // BUG-9: alert when consecutive fixes show the user's position on the trail moving backwards.
         private fun announceBacktrack(
             followState: TrailFollowerState,
             sample: LocationSample,
             guidance: TrailGuidanceState?,
         ) {
-            val eval = guidanceCoordinator.evaluateBacktrack(followState, sample, guidance) ?: return
+            val matcher = trailMatcher
+            val eval =
+                guidanceCoordinator.evaluateBacktrack(
+                    followState,
+                    sample,
+                    guidance,
+                    matcher?.lastMatch,
+                    matcher?.direction ?: TravelDirection.Forward,
+                ) ?: return
             viewModelScope.launch {
                 audioEventLog.append(
                     AudioLogEntry(
                         timestampMs = sample.timestamp,
                         kind = AudioLogEntry.Kind.DETECTION_STATE,
                         trigger = "BacktrackCheck",
+                        // alongTrack first, because it is what the rule is decided on. distToTarget
+                        // stays for replay comparison against the rule this detector abandoned, but
+                        // logging only that made the 16:07 switchback incident diagnosable solely by
+                        // re-projecting the raw fixes offline.
                         inputs =
-                            "distToTarget=${eval.distanceToTargetM?.let { "%.1fm".format(it) } ?: "null"}" +
-                                ", prevDist=${eval.prevDistanceToTargetM?.let { "%.1fm".format(it) } ?: "null"}" +
+                            "alongTrack=${eval.alongTrackM.metresOrNull()}" +
+                                ", prevAlongTrack=${eval.prevAlongTrackM.metresOrNull()}" +
+                                ", matchState=${eval.matchState?.name ?: "null"}" +
+                                ", distToTarget=${eval.distanceToTargetM.metresOrNull()}" +
+                                ", prevDist=${eval.prevDistanceToTargetM.metresOrNull()}" +
                                 ", smoothed=${guidanceCoordinator.courseIsSmoothed()}",
                         outputs = "consecutiveBacktrack=${eval.consecutiveCount}, sinceLastAlertMs=${eval.sinceLastAlertMs}",
                         played = eval.disposition,
@@ -1804,3 +1822,6 @@ class GpsViewModel
             private const val NEARBY_TRAIL_BBOX_MARGIN_M = 30.0
         }
     }
+
+/** A metre value for the audio event log, with absence spelled out rather than omitted. */
+private fun Double?.metresOrNull(): String = this?.let { "%.1fm".format(it) } ?: "null"

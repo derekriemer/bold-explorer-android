@@ -18,7 +18,11 @@ data class ShadowMatchSnapshot(
 )
 
 /**
- * On/off switch and debug readout for the shadow matcher.
+ * On/off switch for per-fix trail-match **logging**, and the debug readout beside it.
+ *
+ * It gated the matching too until S5a, when wrong-way detection became a consumer of the match. A
+ * switch that silently disables a navigation alert is not a logging switch, so [TrailMatcher] now
+ * runs whenever a follow is active and this governs only what gets written.
  *
  * ## Why there is a switch at all
  *
@@ -45,7 +49,7 @@ class ShadowMatchMonitor
     constructor() {
         private val _enabled = MutableStateFlow(true)
 
-        /** Whether the shadow matcher runs at all. Gates the matching as well as the logging. */
+        /** Whether per-fix `TRAIL_MATCH` records are written. The matcher itself always runs. */
         val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
 
         private val _snapshot = MutableStateFlow<ShadowMatchSnapshot?>(null)
