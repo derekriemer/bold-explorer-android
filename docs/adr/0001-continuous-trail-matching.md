@@ -1,6 +1,7 @@
 # ADR 0001 — Continuous trail matching: navigation core redesign
 
-- **Status:** Accepted; amended 2026-08-12 (Amendment 1 — vertex projections; S5a — backtrack; S5b — geometry vs annotations)
+- **Status:** Accepted; amended 2026-08-12 (Amendment 1 — vertex projections; S5a — backtrack; S5b —
+  geometry vs annotations) and 2026-08-14 (Amendment 2 — accuracy-aware backtrack noise floor)
 - **Date:** 2026-08-09
 - **Issues:** #23, #35, #55, #56, #69
 - **Supersedes:** the per-trackpoint `TrailFollower` state machine
@@ -587,6 +588,22 @@ touched, two logging defects that made this incident far harder to diagnose than
   the incident above required re-projecting the raw fixes offline against the trail geometry, which
   is only possible because S4b logs raw positions.
 
+**Implemented 2026-08-14.** Three things the decision above did not say, found while doing it:
+
+- **Regression has a sign.** `alongTrackM` is always in recorded order, so under `Reverse` correct
+  progress counts *down*. Reading a rise as regression would have announced wrong way for an entire
+  reverse follow — a regression this step would have *introduced*, since the old unwindowed
+  projection ran against the follower's already-reversed waypoint list and so happened to agree.
+- **Only a fresh, contiguous `Matched` confirmation is evidence.** A value frozen under
+  `Uncertain`/`Lost` is not movement, and the fix where geometry returns after an absence — the one
+  carrying `predictionErrorM` — re-baselines instead of comparing, because a rejoin elsewhere is not
+  a reversal.
+- **The matcher stops being optional.** It ran *after* the follower on each fix, and the Debug switch
+  gated the matching as well as the logging. Both had to change: the match must exist before the
+  detectors run, and a switch that silently disables a navigation alert is not a logging switch.
+
+See **Amendment 2** for the noise floor, which the corpus forced on the way.
+
 **S5b — separate trail geometry from trail annotations.** Lands with S5 because it needs
 `TrailPolyline.project`, and is needed by S6, which cannot announce a named waypoint as *passed*
 without knowing where along the trail it sits.
@@ -944,6 +961,62 @@ answer. Filtering is not fixing; both changes are needed and neither substitutes
 - `TrailReplay.vertexPinnedFixes` on the 2026-08-12 corpus should fall substantially from 30. That
   number is a regression check on real data, not a target to optimise against.
 
+## Amendment 2 — the backtrack noise floor scales with accuracy (2026-08-14)
+
+Accepted 2026-08-14, while implementing **S5a**. Amends S5a only; nothing else is reversed.
+
+### What replaying the corpus found
+
+S5a was written from the 16:07:46–56 sequence, where an unwindowed projection snapped to the trail
+head. Re-running the corpus against the *implemented* S5a rule confirms that sequence is fixed — and
+shows a second false positive eleven seconds earlier that windowing does not touch:
+
+```
+  16:07:32   along=103.4 m   acc=25 m   spd=0.9 m/s   n=1
+  16:07:33   along=115.9 m   acc=25 m   spd=0.9 m/s   n=2
+  16:07:35   along=122.6 m   acc=25 m   spd=0.8 m/s   n=3  → "you may be going the wrong way"
+```
+
+Every one of those is `Matched` on a windowed scan. The user was standing still. At 25 m reported
+accuracy the *confirmed* along-track wanders 4–12 m between fixes, and three consecutive wanders in
+the same direction is an ordinary outcome of noise, not evidence of travel.
+
+`BACKTRACK_NOISE_FLOOR_M` was the only threshold left in this rule that did not scale with
+conditions — a flat 2 m, which is a walking pace at 1 Hz and well inside the noise of a poor fix.
+That is the same "constant that does not scale to the situation" failure this ADR exists to remove,
+surviving in the one place the redesign had not yet touched.
+
+### Decision
+
+The floor widens with reported accuracy at **half rate**, capped at 15 m
+(`widenWithAccuracy(2.0, 0.5, accuracy, 15.0)`) — the shape already used by the match gate, the
+off-trail gate and the vertex accept radius. Half rather than whole: two fixes at accuracy *a* can
+disagree by more than *a* between them, so a factor of 1 is generous enough to swallow a slow
+genuine reversal. The cap is there for the same reason as everywhere else: an implausible accuracy
+report must not be able to switch wrong-way detection off.
+
+The floor actually used is written into the `BacktrackCheck` log line, so a field log states the
+threshold a decision was made against instead of requiring the constant to be reconstructed from a
+remembered accuracy.
+
+### Verification
+
+Swept over all 2110 corpus fixes, with the 45 s alert cooldown applied:
+
+| session | before | after |
+| --- | --- | --- |
+| walk1 s1 trail 7 reverse | — | — |
+| walk1 s2 trail 12 forward | 01:08:22, 01:10:18 | unchanged |
+| walk1 s3 trail 12 reverse | 01:32:12 | unchanged |
+| walk2 s1 trail 12 forward | — | — |
+| walk2 s2 trail 12 reverse | **16:07:35** | — |
+
+The three surviving alerts are all sustained regression at walking pace under 2.5–3.4 m accuracy —
+ten or more seconds of consistent backwards movement, which is what the announcement is for. Note
+what cannot be checked: the corpus lost the announcement records with the original exports, so
+whether those three were *heard* in the field, and whether they were right, is not recoverable.
+Field verification of the new behaviour is therefore a walk, not a replay.
+
 ## Revisions since first draft
 
 Owner edits made outside plan mode, 2026-08-08. Listed so the planning agent can diff intent rather
@@ -1056,8 +1129,17 @@ Not yet reflected: whether S4's new constants shift the field-walk gate. **No op
 *(Reverse travel resolved 2026-08-09 — see Decisions taken. The S0 coordinate system is fully
 specified.)*
 
-- **S4c is open** — Amendment 1 is accepted but not implemented. It gates S5.
-- **S5a is open** — `evaluateBacktrack` still projects unwindowed and mis-fires in the field.
+- **S5a is done** (2026-08-14). `evaluateBacktrack` consumes `TrailMatch.confirmedAlongM`, signed by
+  declared direction; the matcher runs ahead of the follower on every fix and is no longer gated by
+  the Debug logging switch; both logging defects are fixed. See **Amendment 2** for the accuracy-aware
+  noise floor the corpus forced on the way. **Not yet field-verified** — the corpus can show which
+  fixes would fire, not what the user hears.
+- **S5 itself is open** — `Active` does not yet carry `match`, and guidance, telemetry and completion
+  still come from `currentIndex`. S5a re-homed one consumer, not the source of truth.
 - **S5b is open** — the geometry/annotation split. Blocks S6, and #69 is its attach-time guard.
+- **`ProgressTracker.acquire()` still uses the plain match gate** (raised by S4c, undecided). A follow
+  started while standing in an apex wedge can commit to a degenerate first position. Applying the
+  vertex accept radius there would mean silence at follow-start, which is its own harm for a blind
+  user. Owner's call.
 - **The vertex accept radius is unset.** Same untuned status as the original S4 constants, with the
   difference that it can now be swept against the 2026-08-12 corpus before it ships.
