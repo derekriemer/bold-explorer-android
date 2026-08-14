@@ -151,7 +151,35 @@ object NavigationPolicy {
     // ── Backtrack detection ───────────────────────────────────────────────────────────────────
 
     const val BACKTRACK_CONSECUTIVE_THRESHOLD = 3
+
+    /**
+     * Along-track regression that counts as movement rather than noise, at good accuracy.
+     *
+     * Widened by [BACKTRACK_NOISE_ACCURACY_FACTOR] because the noise this floor exists to reject is
+     * the position noise the fix itself reports. Replaying the 2026-08-12 corpus: at 25 m reported
+     * accuracy the *windowed* confirmed position wandered 4–12 m per fix while the owner stood
+     * still, which cleared a flat 2 m three times running and would have announced "wrong way" to
+     * someone who had not moved.
+     */
     const val BACKTRACK_NOISE_FLOOR_M = 2.0
+
+    /**
+     * How much reported accuracy widens the noise floor.
+     *
+     * Half, not the whole: two fixes at accuracy *a* can disagree by more than *a* between them, so
+     * a factor of 1 would be generous enough to swallow a slow genuine reversal. Swept over 2110
+     * corpus fixes, 0.5 removes the 16:07:35 false positive and changes no other outcome.
+     */
+    const val BACKTRACK_NOISE_ACCURACY_FACTOR = 0.5
+
+    /**
+     * Ceiling on the widened floor.
+     *
+     * An implausible accuracy report must not be able to switch wrong-way detection off — the same
+     * bound, for the same reason, as [OFF_TRAIL_GATE_CAP_M] and [MATCH_GATE_CAP_M].
+     */
+    const val BACKTRACK_NOISE_FLOOR_CAP_M = 15.0
+
     const val BACKTRACK_ALERT_INTERVAL_MS = 45_000L
     const val BACKTRACK_GRACE_MS = 20_000L
 

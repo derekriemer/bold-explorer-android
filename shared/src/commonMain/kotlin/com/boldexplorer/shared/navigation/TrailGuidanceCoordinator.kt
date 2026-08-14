@@ -355,7 +355,11 @@ class TrailGuidanceCoordinator(
         // reversal. Both re-baseline instead of comparing.
         val contiguous = match?.state == MatchState.Matched && match.predictionErrorM == null
         val progressM = if (contiguous && prev != null && alongM != null) (alongM - prev) * direction.sign else null
-        val regressed = progressM != null && progressM < -NavigationPolicy.BACKTRACK_NOISE_FLOOR_M
+        // The floor widens with reported accuracy, because what it exists to reject is the position
+        // noise the fix itself is declaring. A flat 2 m is a walking pace at 1 Hz, and a 25 m fix
+        // moves further than that standing still.
+        val noiseFloorM = backtrackNoiseFloorM(sample.accuracy)
+        val regressed = progressM != null && progressM < -noiseFloorM
 
         when {
             alongM == null -> {
@@ -414,8 +418,18 @@ class TrailGuidanceCoordinator(
             disposition = disposition,
             fired = fired,
             matchState = match?.state,
+            noiseFloorM = noiseFloorM,
         )
     }
+
+    /** Accuracy-aware backtrack noise floor, widening with uncertainty but hard-capped. */
+    private fun backtrackNoiseFloorM(accuracyM: Double?): Double =
+        NavigationPolicy.widenWithAccuracy(
+            baseM = NavigationPolicy.BACKTRACK_NOISE_FLOOR_M,
+            factor = NavigationPolicy.BACKTRACK_NOISE_ACCURACY_FACTOR,
+            accuracyM = accuracyM,
+            capM = NavigationPolicy.BACKTRACK_NOISE_FLOOR_CAP_M,
+        )
 }
 
 /** +1 when `alongTrackM` should grow with correct progress, −1 when it should shrink. */
@@ -462,4 +476,6 @@ data class BacktrackEvaluation(
     val fired: Boolean,
     /** The ladder state that gated this decision, or `null` when there was no match at all. */
     val matchState: MatchState? = null,
+    /** The accuracy-aware regression this fix had to exceed to count. */
+    val noiseFloorM: Double = NavigationPolicy.BACKTRACK_NOISE_FLOOR_M,
 )

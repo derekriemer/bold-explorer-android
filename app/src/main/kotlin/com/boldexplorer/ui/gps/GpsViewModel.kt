@@ -1390,6 +1390,7 @@ class GpsViewModel
                             "alongTrack=${eval.alongTrackM.metresOrNull()}" +
                                 ", prevAlongTrack=${eval.prevAlongTrackM.metresOrNull()}" +
                                 ", matchState=${eval.matchState?.name ?: "null"}" +
+                                ", noiseFloor=${eval.noiseFloorM.metresOrNull()}" +
                                 ", distToTarget=${eval.distanceToTargetM.metresOrNull()}" +
                                 ", prevDist=${eval.prevDistanceToTargetM.metresOrNull()}" +
                                 ", smoothed=${guidanceCoordinator.courseIsSmoothed()}",

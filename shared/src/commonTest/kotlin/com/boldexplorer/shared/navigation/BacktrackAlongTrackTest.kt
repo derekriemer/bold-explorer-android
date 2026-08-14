@@ -265,6 +265,80 @@ class BacktrackAlongTrackTest {
         )
     }
 
+    // ── The noise floor has to scale with the noise ───────────────────────────────
+
+    @Test
+    fun jitterAtPoorAccuracyDoesNotClaimWrongWay() {
+        // 2026-08-12, walk 2 at 16:07:32–35, replayed. The user was standing still (0.8 m/s or
+        // less) under 25 m reported accuracy, and the *windowed* confirmed position still wandered
+        // 4–12 m per fix. Three of those in a row cleared a flat 2 m floor and would have announced
+        // wrong way to someone who had not moved.
+        val c = coordinator()
+        val active = activeFor(densify(northShape(400.0), spacingM = 5.0))
+        c.resetThrottle(sampleAt(northM = 100.0, eastM = 0.0, timestampMs = 0L))
+
+        val evals =
+            listOf(120.0, 115.7, 103.2, 96.5).mapIndexedNotNull { i, alongM ->
+                c.evaluateBacktrack(
+                    active,
+                    sampleAt(
+                        northM = 100.0,
+                        eastM = 0.0,
+                        timestampMs = 100_000L + i * 2_000L,
+                        accuracyM = 25.0,
+                        speedMps = 0.1,
+                    ),
+                    guidanceWithDistance(100.0),
+                    matchAt(alongM, MatchState.Matched),
+                    TravelDirection.Forward,
+                )
+            }
+
+        assertNeverFires(evals, "GPS noise at 25 m accuracy is not evidence of walking backwards")
+        assertTrue(evals.all { it.consecutiveCount == 0 }, "jitter inside the floor must not count")
+    }
+
+    @Test
+    fun atGoodAccuracyASmallRegressionStillCounts() {
+        // The floor must not simply be raised: with a clean fix, a few metres back is real.
+        val c = coordinator()
+        val active = activeFor(densify(northShape(400.0), spacingM = 5.0))
+        c.resetThrottle(sampleAt(northM = 100.0, eastM = 0.0, timestampMs = 0L))
+
+        val evals =
+            listOf(120.0, 116.0, 112.0, 108.0).mapIndexedNotNull { i, alongM ->
+                c.evaluateBacktrack(
+                    active,
+                    sampleAt(northM = 100.0, eastM = 0.0, timestampMs = 100_000L + i * 2_000L, accuracyM = 4.0),
+                    guidanceWithDistance(100.0),
+                    matchAt(alongM, MatchState.Matched),
+                    TravelDirection.Forward,
+                )
+            }
+
+        assertTrue(evals.any { it.fired }, "4 m per fix at 4 m accuracy is a genuine reversal")
+    }
+
+    @Test
+    fun theFloorUsedIsReportedForTheLog() {
+        val c = coordinator()
+        val active = activeFor(densify(northShape(400.0), spacingM = 5.0))
+        c.resetThrottle(sampleAt(northM = 100.0, eastM = 0.0, timestampMs = 0L))
+
+        val eval =
+            assertNotNull(
+                c.evaluateBacktrack(
+                    active,
+                    sampleAt(northM = 100.0, eastM = 0.0, timestampMs = 100_000L, accuracyM = 25.0),
+                    guidanceWithDistance(100.0),
+                    matchAt(120.0, MatchState.Matched),
+                    TravelDirection.Forward,
+                ),
+            )
+
+        assertEquals(12.5, eval.noiseFloorM, "half of 25 m accuracy, above the 2 m base")
+    }
+
     @Test
     fun withNoMatchThereIsNothingToDecideOn() {
         val c = coordinator()
