@@ -1,5 +1,6 @@
 package com.boldexplorer.shared.navigation
 
+import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.model.LocationSample
 import kotlinx.coroutines.test.TestScope
 import kotlin.test.Test
@@ -40,7 +41,41 @@ class TrailGuidanceCoordinatorTest {
         lon: Double = 0.0,
         heading: Double? = null,
         speed: Double? = null,
-    ) = LocationSample(lat = lat, lon = lon, heading = heading, speed = speed, timestamp = timestampMs)
+        accuracy: Double? = null,
+    ) = LocationSample(
+        lat = lat,
+        lon = lon,
+        accuracy = accuracy,
+        heading = heading,
+        speed = speed,
+        timestamp = timestampMs,
+    )
+
+    /**
+     * The backtrack detector reads the matcher's confirmed position rather than projecting for
+     * itself, so these tests drive a real [ProgressTracker] over the same geometry the follower has.
+     * One tracker per coordinator: both carry per-session state.
+     */
+    private class BacktrackHarness(
+        val coordinator: TrailGuidanceCoordinator,
+        waypoints: List<TrailPoint>,
+    ) {
+        private val tracker = ProgressTracker(TrailPolyline(waypoints.map { LatLng(it.lat, it.lon) }))
+
+        fun evaluate(
+            followState: TrailFollowerState,
+            sample: LocationSample,
+            guidance: TrailGuidanceState?,
+        ) = coordinator.evaluateBacktrack(
+            followState,
+            sample,
+            guidance,
+            tracker.onFix(sample),
+            TravelDirection.Forward,
+        )
+    }
+
+    private fun backtrackHarness(c: TrailGuidanceCoordinator = coordinator()) = BacktrackHarness(c, active.waypoints)
 
     /**
      * A fix ~30 m east of the trail, which runs due north from (0,0).
@@ -98,7 +133,7 @@ class TrailGuidanceCoordinatorTest {
         val g = guidance(relativeDeg = 90.0)
         assertNull(c.evaluateOrdinaryGuidance(TrailFollowerState.Idle, s, g))
         assertNull(c.evaluateOffTrail(TrailFollowerState.Idle, s, g))
-        assertNull(c.evaluateBacktrack(TrailFollowerState.Idle, s, g))
+        assertNull(backtrackHarness(c).evaluate(TrailFollowerState.Idle, s, g))
     }
 
     // ── Off-trail detection ─────────────────────────────────────────────────────────
@@ -180,12 +215,19 @@ class TrailGuidanceCoordinatorTest {
         // the trail. Previously this test held position and merely grew distanceToTargetM, which is
         // the false-positive pattern the change removes: distance grows whenever the user passes a
         // turn or the target is stale, neither of which is going the wrong way.
-        val c = coordinator()
-        // Trail runs north from (0,0); walking south is genuine regression, ~22 m per fix.
-        assertEquals(0, c.evaluateBacktrack(active, sample(100_000, lat = 0.0008), guidance(90.0))!!.consecutiveCount)
-        assertEquals(1, c.evaluateBacktrack(active, sample(101_000, lat = 0.0006), guidance(90.0))!!.consecutiveCount)
-        assertEquals(2, c.evaluateBacktrack(active, sample(102_000, lat = 0.0004), guidance(90.0))!!.consecutiveCount)
-        val fired = c.evaluateBacktrack(active, sample(103_000, lat = 0.0002), guidance(90.0))
+        val h = backtrackHarness()
+
+        // Trail runs north from (0,0); walking south is genuine regression, ~9 m per fix. The step
+        // has to stay inside the matcher's window — 22 m in one second is a car, and the matcher is
+        // right to refuse to track it.
+        fun back(
+            i: Int,
+            latDeg: Double,
+        ) = h.evaluate(active, sample(100_000L + i * 1_000L, lat = latDeg, accuracy = 5.0), guidance(90.0))
+        assertEquals(0, back(0, 0.00080)!!.consecutiveCount)
+        assertEquals(1, back(1, 0.00072)!!.consecutiveCount)
+        assertEquals(2, back(2, 0.00064)!!.consecutiveCount)
+        val fired = back(3, 0.00056)
         assertNotNull(fired)
         assertTrue(fired.fired)
         assertEquals("FIRING", fired.disposition)
@@ -193,10 +235,10 @@ class TrailGuidanceCoordinatorTest {
 
     @Test
     fun backtrack_noiseFloorDoesNotCount() {
-        val c = coordinator()
-        c.evaluateBacktrack(active, sample(100_000), guidance(90.0, distanceToTargetM = 100.0))
-        // +1 m is within the 2 m noise floor → not counted as backtracking.
-        val noisy = c.evaluateBacktrack(active, sample(101_000), guidance(90.0, distanceToTargetM = 101.0))
+        val h = backtrackHarness()
+        h.evaluate(active, sample(100_000, lat = 0.0004), guidance(90.0, distanceToTargetM = 100.0))
+        // ~1 m back is within the 2 m noise floor → not counted as backtracking.
+        val noisy = h.evaluate(active, sample(101_000, lat = 0.00039), guidance(90.0, distanceToTargetM = 101.0))
         assertNotNull(noisy)
         assertEquals(0, noisy.consecutiveCount)
         assertFalse(noisy.fired)
@@ -205,9 +247,10 @@ class TrailGuidanceCoordinatorTest {
     @Test
     fun backtrack_suppressedDuringGraceWindow() {
         val c = coordinator()
+        val h = backtrackHarness(c)
         c.resetThrottle(sample(100_000)) // arms grace until 120_000
-        assertNull(c.evaluateBacktrack(active, sample(110_000), guidance(90.0, distanceToTargetM = 100.0)))
-        assertNotNull(c.evaluateBacktrack(active, sample(121_000), guidance(90.0, distanceToTargetM = 100.0)))
+        assertNull(h.evaluate(active, sample(110_000), guidance(90.0, distanceToTargetM = 100.0)))
+        assertNotNull(h.evaluate(active, sample(121_000), guidance(90.0, distanceToTargetM = 100.0)))
     }
 
     // ── Ordinary guidance throttle ────────────────────────────────────────────────────

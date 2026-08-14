@@ -312,42 +312,81 @@ class TrailGuidanceCoordinator(
      * Update backtrack detection state and decide whether to alert. Returns null while inactive or
      * inside the grace window; otherwise a [BacktrackEvaluation] whose [BacktrackEvaluation.fired]
      * tells the caller to speak "You may be going the wrong way", with diagnostics for the log.
+     *
+     * ## Why this reads [match] instead of projecting (ADR 0001, S5a)
+     *
+     * The decision is along-track regression, not distance to the current target: distance grows
+     * whenever the user walks past *any* turn, or whenever the target is stale and behind them, so
+     * keying on it announced "wrong way" to people going the right way — about five times faster
+     * than off-trail could report the real problem.
+     *
+     * But *which* along-track matters just as much. This used to run its own **unwindowed**
+     * `polyline.project()`, which on a trail that doubles back snaps to whichever arm the fix
+     * happens to be nearest. In the field that read as 113 m of regression in three fixes and
+     * announced wrong way to a user walking correctly. Consuming [TrailMatch.confirmedAlongM]
+     * inherits the window, the gate and the ladder's states, so the same fixes stay put.
+     *
+     * @param match the windowed matcher's result for **this** fix, or `null` before it has one.
+     * @param direction the declared traversal direction. `alongTrackM` is always in recorded order,
+     *   so under [TravelDirection.Reverse] correct progress counts *down* and regression is a rise.
+     *   Without this the detector would announce wrong way for an entire reverse follow.
      */
     fun evaluateBacktrack(
         followState: TrailFollowerState,
         sample: LocationSample,
         guidance: TrailGuidanceState?,
+        match: TrailMatch?,
+        direction: TravelDirection,
     ): BacktrackEvaluation? {
-        val active = followState as? TrailFollowerState.Active ?: return null
+        if (followState !is TrailFollowerState.Active) return null
         if (sample.timestamp < backtrackGraceUntilMs) return null
 
-        // Decided on along-track regression, not on distance to the current target. Distance grows
-        // whenever the user walks past *any* turn, or whenever the target is stale and behind them,
-        // so keying on it announced "wrong way" to people going the right way — and did so about
-        // five times faster than off-trail could report the real problem.
         val distM = guidance?.distanceToTargetM
-        val alongM = polylineFor(active)?.project(LatLng(sample.lat, sample.lon))?.alongTrackM
+        val prevDistM = prevDistToTargetM
+        val alongM = match?.confirmedAlongM
         val prev = prevAlongTrackM
         val sinceLastAlertMs = sample.timestamp - backtrackAlertFiredAt
 
         prevDistToTargetM = distM
-        if (alongM == null) {
-            consecutiveBacktrackCount = 0
-            prevAlongTrackM = null
-        } else {
-            if (prev != null && alongM < prev - NavigationPolicy.BACKTRACK_NOISE_FLOOR_M) {
+
+        // Only a fresh, contiguous confirmation is evidence. A frozen value under Uncertain/Lost is
+        // not movement, and the fix where geometry returns after an absence — the one carrying
+        // predictionErrorM — can legitimately land far behind, because a rejoin elsewhere is not a
+        // reversal. Both re-baseline instead of comparing.
+        val contiguous = match?.state == MatchState.Matched && match.predictionErrorM == null
+        val progressM = if (contiguous && prev != null && alongM != null) (alongM - prev) * direction.sign else null
+        val regressed = progressM != null && progressM < -NavigationPolicy.BACKTRACK_NOISE_FLOOR_M
+
+        when {
+            alongM == null -> {
+                consecutiveBacktrackCount = 0
+            }
+
+            // Holds the count rather than clearing it: a gap in corroboration is not evidence
+            // either way. Re-baselining prev is what stops the gap itself reading as movement.
+            !contiguous -> {
+                Unit
+            }
+
+            regressed -> {
                 consecutiveBacktrackCount++
-            } else {
+            }
+
+            else -> {
                 consecutiveBacktrackCount = 0
                 backtrackAlertFiredAt = 0L
             }
-            prevAlongTrackM = alongM
         }
+        prevAlongTrackM = alongM
 
         val disposition =
             when {
                 alongM == null -> {
-                    "bail:no_geometry"
+                    "bail:no_match"
+                }
+
+                !contiguous -> {
+                    "hold:${if (match?.state == MatchState.Matched) "reacquired" else "match_${match?.state?.name?.lowercase()}"}"
                 }
 
                 consecutiveBacktrackCount < NavigationPolicy.BACKTRACK_CONSECUTIVE_THRESHOLD -> {
@@ -369,14 +408,19 @@ class TrailGuidanceCoordinator(
             alongTrackM = alongM,
             prevAlongTrackM = prev,
             distanceToTargetM = distM,
-            prevDistanceToTargetM = prevDistToTargetM,
+            prevDistanceToTargetM = prevDistM,
             consecutiveCount = consecutiveBacktrackCount,
             sinceLastAlertMs = sinceLastAlertMs,
             disposition = disposition,
             fired = fired,
+            matchState = match?.state,
         )
     }
 }
+
+/** +1 when `alongTrackM` should grow with correct progress, −1 when it should shrink. */
+private val TravelDirection.sign: Double
+    get() = if (this == TravelDirection.Reverse) -1.0 else 1.0
 
 /** A routine trail-guidance cue is due; the caller formats + speaks it. */
 data class OrdinaryGuidanceDecision(
@@ -416,4 +460,6 @@ data class BacktrackEvaluation(
     val sinceLastAlertMs: Long,
     val disposition: String,
     val fired: Boolean,
+    /** The ladder state that gated this decision, or `null` when there was no match at all. */
+    val matchState: MatchState? = null,
 )

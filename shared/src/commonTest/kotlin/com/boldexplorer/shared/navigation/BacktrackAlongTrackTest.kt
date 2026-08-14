@@ -1,56 +1,43 @@
 package com.boldexplorer.shared.navigation
 
+import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.model.LocationSample
 import kotlinx.coroutines.test.TestScope
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * "You may be going the wrong way" keyed on along-track regression rather than distance-to-target.
+ * "You may be going the wrong way" keyed on along-track regression **reported by the windowed
+ * matcher**, rather than on distance-to-target or on an independent projection.
  *
- * The field report that motivated this: walking straight down a trail where the recording turns
- * 90° right, the app announced *wrong way* at the corner. The user had not reversed — they had
- * missed a turn, which is an off-trail condition wearing the wrong label.
+ * Two field reports shaped this file, and they are different bugs:
  *
- * The old rule watched `distanceToTargetM` grow by 2 m across 3 fixes. Walking past any turn, or
- * simply having a stale target behind you, satisfies that in about three seconds — so wrong-way
- * consistently pre-empted off-trail, which needs cross-track past a 20 m gate and takes far longer.
+ * 1. Walking straight down a trail where the recording turns 90° right, the app announced *wrong
+ *    way* at the corner. The user had not reversed — they had missed a turn, which is an off-trail
+ *    condition wearing the wrong label. That is why the rule watches along-track rather than
+ *    `distanceToTargetM`, which grows whenever the user passes any turn or carries a stale target.
  *
- * Along-track regression means what the announcement claims: the user's projected position on the
- * trail is moving backwards. Missing a turn plateaus along-track (the nearest point stays at the
- * corner) without reversing it, so it is correctly left to off-trail.
+ * 2. (ADR 0001, S5a — 2026-08-12, walk 2 at 16:07.) On a trail that doubles back, the user was
+ *    ~120 m along and therefore physically 11–18 m from the trail's own *start*. This detector's
+ *    own **unwindowed** `polyline.project()` snapped to the trail head, read 113 m of regression,
+ *    counted to three and announced wrong way. The windowed matcher, given the identical fixes,
+ *    never left ~113 m — 0 was not in its window. The detector no longer projects for itself; it
+ *    consumes [TrailMatch.confirmedAlongM] and so inherits the window, the gate and the ladder.
  */
 class BacktrackAlongTrackTest {
     private fun coordinator() = TrailGuidanceCoordinator(TestScope())
 
-    private fun latFor(m: Double) = m / 111_194.9
-
-    private fun lonFor(m: Double) = m / 111_194.9
-
-    /** North 100 m from (0,0), then a hard right turn and 100 m east. */
-    private val cornerTrail =
-        TrailFollowerState.Active(
-            waypoints =
-                listOf(
-                    TrailPoint(1, "Start", 0.0, 0.0),
-                    TrailPoint(2, "Corner", latFor(100.0), 0.0),
-                    TrailPoint(3, "End", latFor(100.0), lonFor(100.0)),
-                ),
-            currentIndex = 2,
-            thresholdM = 15.0,
-        )
-
-    private fun at(
-        timestampMs: Long,
-        northM: Double,
-        eastM: Double = 0.0,
-    ) = LocationSample(
-        lat = latFor(northM),
-        lon = lonFor(eastM),
-        accuracy = 5.0,
-        timestamp = timestampMs,
+    /** The follower's view of [points]; only its `Active`-ness is read by backtrack now. */
+    private fun activeFor(
+        points: List<LatLng>,
+        currentIndex: Int = 1,
+    ) = TrailFollowerState.Active(
+        waypoints = points.mapIndexed { i, p -> TrailPoint(i.toLong(), "p$i", p.lat, p.lon) },
+        currentIndex = currentIndex,
+        thresholdM = 15.0,
     )
 
     /** Guidance whose distance-to-target grows — what the old rule keyed on. */
@@ -65,96 +52,285 @@ class BacktrackAlongTrackTest {
             courseIsFresh = true,
         )
 
-    @Test
-    fun walkingStraightPastAHardRightTurn_doesNotClaimWrongWay() {
-        // The field scenario. The user continues north while the trail turns east. Their projected
-        // position pins at the corner and stops advancing — it never goes backwards — so this is
-        // off-trail's business, not wrong-way's.
+    /**
+     * Walks [fixes] through a real [ProgressTracker] and the detector together, as the ViewModel
+     * does: one fix, one match, one evaluation.
+     */
+    private fun walk(
+        points: List<LatLng>,
+        fixes: List<LocationSample>,
+        direction: TravelDirection = TravelDirection.Forward,
+        distanceM: (Int) -> Double = { 100.0 + it * 10.0 },
+    ): List<BacktrackEvaluation> {
         val c = coordinator()
-        c.resetThrottle(at(0, northM = 0.0))
-        var distance = 100.0
-        for ((i, north) in listOf(105.0, 115.0, 125.0, 135.0, 145.0).withIndex()) {
-            distance += 10.0 // distance to the eastern target grows on every fix
-            val eval =
-                c.evaluateBacktrack(
-                    cornerTrail,
-                    at(100_000L + i * 1_000L, northM = north),
-                    guidanceWithDistance(distance),
-                )
-            if (eval != null) {
-                assertFalse(
-                    eval.fired,
-                    "fix $i claimed wrong way while walking past a turn: ${eval.disposition}",
-                )
-            }
+        val tracker = ProgressTracker(TrailPolyline(points), direction)
+        val active = activeFor(points)
+        c.resetThrottle(fixes.first().copy(timestamp = 0L))
+        return fixes.mapIndexedNotNull { i, fix ->
+            c.evaluateBacktrack(active, fix, guidanceWithDistance(distanceM(i)), tracker.onFix(fix), direction)
         }
     }
 
+    private fun assertNeverFires(
+        evals: List<BacktrackEvaluation>,
+        why: String,
+    ) {
+        val fired = evals.filter { it.fired }
+        assertTrue(fired.isEmpty(), "$why — fired with ${fired.map { it.disposition }}")
+    }
+
+    // ── The S5a field case ────────────────────────────────────────────────────────
+
+    /**
+     * A switchback with 12 m between its arms, walked down the return arm. Every fix is nearer to
+     * the *outbound* arm — and so to a far smaller along-track value — than to the arm the user is
+     * really on. An unwindowed projection reads that as ~250 m of regression in three fixes.
+     */
     @Test
-    fun genuinelyWalkingBackAlongTheTrail_firesWrongWay() {
-        // The case the announcement is actually for: retreating along the trail the user came up.
-        val c = coordinator()
-        c.resetThrottle(at(0, northM = 80.0))
-        var fired = false
-        for ((i, north) in listOf(70.0, 60.0, 50.0, 40.0).withIndex()) {
-            val eval =
-                c.evaluateBacktrack(
-                    cornerTrail,
-                    at(100_000L + i * 1_000L, northM = north),
-                    guidanceWithDistance(100.0 + i * 10.0),
-                )
-            if (eval?.fired == true) fired = true
-        }
-        assertTrue(fired, "walking back down the trail must eventually announce wrong way")
+    fun switchbackTeleportDoesNotClaimWrongWay() {
+        val points = densify(switchbackShape(legM = 150.0, gapM = 12.0), spacingM = 5.0)
+        val returnArmEastM = 12.0
+        // Acquire on the return arm, then walk south down it. The east offsets drift across the
+        // gap, exactly as 25 m-accuracy fixes did in the field.
+        val fixes =
+            listOf(60.0 to 12.0, 50.0 to 9.0, 40.0 to 3.0, 30.0 to 2.0, 20.0 to 3.0)
+                .mapIndexed { i, (northM, eastM) ->
+                    sampleAt(northM = northM, eastM = eastM, timestampMs = 100_000L + i * 2_000L, accuracyM = 12.0)
+                }
+        assertTrue(returnArmEastM > 0.0)
+
+        val evals = walk(points, fixes)
+
+        assertNeverFires(evals, "walking down the return arm of a switchback is not going backwards")
+        val last = assertNotNull(evals.lastOrNull(), "the detector must still evaluate")
+        assertTrue(
+            last.alongTrackM!! > 250.0,
+            "the match must stay on the return arm, not snap to the trail head: ${last.alongTrackM}",
+        )
+    }
+
+    // ── The original corner case ──────────────────────────────────────────────────
+
+    @Test
+    fun walkingStraightPastAHardRightTurn_doesNotClaimWrongWay() {
+        // The user continues north while the trail turns east. Their projected position pins at the
+        // corner and stops advancing — it never goes backwards — so this is off-trail's business.
+        val points = densify(cornerShape(legM = 100.0), spacingM = 5.0)
+        val fixes =
+            listOf(85.0, 95.0, 105.0, 115.0, 125.0).mapIndexed { i, northM ->
+                sampleAt(northM = northM, eastM = 0.0, timestampMs = 100_000L + i * 1_000L)
+            }
+
+        assertNeverFires(walk(points, fixes), "walking past a turn is a missed turn, not a reversal")
     }
 
     @Test
     fun staleTargetDoesNotProduceAFalseWrongWay() {
-        // The stale-target false positive, the same root cause as the old off-trail defect: the
-        // user advances correctly along the trail while distance to a target behind them grows.
-        val c = coordinator()
-        c.resetThrottle(at(0, northM = 10.0))
-        var distance = 50.0
-        for ((i, north) in listOf(20.0, 30.0, 40.0, 50.0, 60.0).withIndex()) {
-            distance += 10.0
-            val eval =
-                c.evaluateBacktrack(
-                    cornerTrail,
-                    at(100_000L + i * 1_000L, northM = north),
-                    guidanceWithDistance(distance),
-                )
-            if (eval != null) {
-                assertFalse(
-                    eval.fired,
-                    "fix $i claimed wrong way while advancing correctly: ${eval.disposition}",
-                )
+        // The stale-target false positive: the user advances correctly while distance to a target
+        // behind them grows.
+        val points = densify(northShape(400.0), spacingM = 5.0)
+        val fixes =
+            listOf(20.0, 30.0, 40.0, 50.0, 60.0).mapIndexed { i, northM ->
+                sampleAt(northM = northM, eastM = 0.0, timestampMs = 100_000L + i * 1_000L)
             }
-        }
+
+        assertNeverFires(walk(points, fixes), "advancing correctly must never read as wrong way")
     }
 
     @Test
     fun smallJitterDoesNotCountAsRegression() {
         // GPS noise moves the projection back and forth by a metre or two; only movement past the
         // noise floor counts.
-        val c = coordinator()
-        c.resetThrottle(at(0, northM = 50.0))
-        var fired = false
-        for ((i, north) in listOf(49.5, 50.2, 49.4, 50.1, 49.6).withIndex()) {
-            val eval =
-                c.evaluateBacktrack(cornerTrail, at(100_000L + i * 1_000L, northM = north), guidanceWithDistance(100.0))
-            if (eval?.fired == true) fired = true
-        }
-        assertFalse(fired, "sub-metre jitter must not read as walking backwards")
+        val points = densify(northShape(400.0), spacingM = 5.0)
+        val fixes =
+            listOf(49.5, 50.2, 49.4, 50.1, 49.6).mapIndexed { i, northM ->
+                sampleAt(northM = northM, eastM = 0.0, timestampMs = 100_000L + i * 1_000L)
+            }
+
+        assertNeverFires(walk(points, fixes), "sub-metre jitter must not read as walking backwards")
     }
 
     @Test
-    fun alongTrackIsReportedForTheLog() {
+    fun genuinelyWalkingBackAlongTheTrail_firesWrongWay() {
+        // The case the announcement is actually for: retreating along the trail the user came up.
+        val points = densify(northShape(400.0), spacingM = 5.0)
+        val fixes =
+            listOf(80.0, 70.0, 60.0, 50.0).mapIndexed { i, northM ->
+                sampleAt(northM = northM, eastM = 0.0, timestampMs = 100_000L + i * 1_000L)
+            }
+
+        val evals = walk(points, fixes)
+
+        assertTrue(evals.any { it.fired }, "walking back down the trail must eventually announce wrong way")
+    }
+
+    // ── Direction is a session parameter, so regression has a sign ─────────────────
+
+    @Test
+    fun reverseTraversalCountingDownDoesNotClaimWrongWay() {
+        // `alongTrackM` is always in recorded order, so a correct reverse walk counts *down*.
+        // Reading that as regression would announce wrong way for an entire reverse follow.
+        val points = densify(northShape(400.0), spacingM = 5.0)
+        val fixes =
+            listOf(300.0, 290.0, 280.0, 270.0, 260.0).mapIndexed { i, northM ->
+                sampleAt(northM = northM, eastM = 0.0, timestampMs = 100_000L + i * 1_000L, courseDeg = 180.0)
+            }
+
+        assertNeverFires(
+            walk(points, fixes, direction = TravelDirection.Reverse),
+            "counting down is correct progress under Reverse",
+        )
+    }
+
+    @Test
+    fun reverseTraversalCountingUpFiresWrongWay() {
+        val points = densify(northShape(400.0), spacingM = 5.0)
+        val fixes =
+            listOf(260.0, 270.0, 280.0, 290.0).mapIndexed { i, northM ->
+                sampleAt(northM = northM, eastM = 0.0, timestampMs = 100_000L + i * 1_000L, courseDeg = 0.0)
+            }
+
+        val evals = walk(points, fixes, direction = TravelDirection.Reverse)
+
+        assertTrue(evals.any { it.fired }, "walking back up the trail on a reverse follow is going the wrong way")
+    }
+
+    // ── The detector inherits the ladder's states ─────────────────────────────────
+
+    @Test
+    fun aFrozenMatchIsNotEvidenceOfAnything() {
+        // While the tracker is Uncertain, `confirmedAlongM` is frozen by design. Neither its
+        // stillness nor its eventual resumption may be read as movement.
         val c = coordinator()
-        c.resetThrottle(at(0, northM = 80.0))
-        c.evaluateBacktrack(cornerTrail, at(100_000, northM = 70.0), guidanceWithDistance(100.0))
-        val eval = assertNotNull(c.evaluateBacktrack(cornerTrail, at(101_000, northM = 60.0), guidanceWithDistance(110.0)))
+        val active = activeFor(densify(northShape(400.0), spacingM = 5.0))
+        val sample = sampleAt(northM = 100.0, eastM = 0.0, timestampMs = 100_000L)
+        c.resetThrottle(sample.copy(timestamp = 0L))
+
+        val evals =
+            listOf(
+                matchAt(120.0, MatchState.Matched),
+                matchAt(120.0, MatchState.Uncertain),
+                matchAt(120.0, MatchState.Uncertain),
+                matchAt(120.0, MatchState.Lost),
+            ).mapIndexedNotNull { i, match ->
+                c.evaluateBacktrack(
+                    active,
+                    sample.copy(timestamp = 100_000L + i * 1_000L),
+                    guidanceWithDistance(100.0),
+                    match,
+                    TravelDirection.Forward,
+                )
+            }
+
+        assertNeverFires(evals, "a frozen match is not movement")
+        assertTrue(
+            evals.drop(1).all { it.disposition.startsWith("hold:match_") },
+            "a non-Matched ladder state must say so in the log: ${evals.map { it.disposition }}",
+        )
+    }
+
+    @Test
+    fun aReacquisitionJumpIsNotABacktrack() {
+        // Geometry returning after an absence can legitimately land far behind the last confirmed
+        // position — a rejoin elsewhere, not a reversal. The fix that reacquires re-baselines
+        // instead of being compared against a value from before the gap.
+        val c = coordinator()
+        val active = activeFor(densify(northShape(400.0), spacingM = 5.0))
+        val sample = sampleAt(northM = 100.0, eastM = 0.0, timestampMs = 100_000L)
+        c.resetThrottle(sample.copy(timestamp = 0L))
+
+        val evals =
+            listOf(
+                matchAt(300.0, MatchState.Matched),
+                matchAt(300.0, MatchState.Lost),
+                // Reacquired 250 m behind, all at once. `predictionErrorM` is set exactly on the
+                // fix where geometry returns.
+                matchAt(50.0, MatchState.Matched, predictionErrorM = 250.0),
+                matchAt(52.0, MatchState.Matched),
+            ).mapIndexedNotNull { i, match ->
+                c.evaluateBacktrack(
+                    active,
+                    sample.copy(timestamp = 100_000L + i * 1_000L),
+                    guidanceWithDistance(100.0),
+                    match,
+                    TravelDirection.Forward,
+                )
+            }
+
+        assertNeverFires(evals, "a rejoin elsewhere is not a reversal")
+        assertEquals(
+            "hold:reacquired",
+            evals[2].disposition,
+            "the reacquiring fix must re-baseline rather than compare",
+        )
+    }
+
+    @Test
+    fun withNoMatchThereIsNothingToDecideOn() {
+        val c = coordinator()
+        val active = activeFor(densify(northShape(400.0), spacingM = 5.0))
+        val sample = sampleAt(northM = 100.0, eastM = 0.0, timestampMs = 100_000L)
+        c.resetThrottle(sample.copy(timestamp = 0L))
+
+        val eval = assertNotNull(c.evaluateBacktrack(active, sample, guidanceWithDistance(100.0), null, TravelDirection.Forward))
+
+        assertFalse(eval.fired)
+        assertEquals("bail:no_match", eval.disposition)
+    }
+
+    // ── The log has to carry the values the decision was made on ──────────────────
+
+    @Test
+    fun alongTrackIsReportedForTheLog() {
+        val points = densify(northShape(400.0), spacingM = 5.0)
+        val fixes =
+            listOf(80.0, 70.0).mapIndexed { i, northM ->
+                sampleAt(northM = northM, eastM = 0.0, timestampMs = 100_000L + i * 1_000L)
+            }
+
+        val eval = walk(points, fixes).last()
+
         assertNotNull(eval.alongTrackM, "along-track must be logged")
         assertNotNull(eval.prevAlongTrackM, "previous along-track must be logged")
         assertNotNull(eval.distanceToTargetM, "distance is still logged, for replay comparison")
+        assertEquals(MatchState.Matched, eval.matchState, "the ladder state that gated the decision")
+    }
+
+    @Test
+    fun previousDistanceToTargetIsThePreviousFixesValue() {
+        // It used to be assigned before the evaluation was built, so every logged line showed the
+        // two as identical and the log could not show a trend at all.
+        val points = densify(northShape(400.0), spacingM = 5.0)
+        val fixes =
+            listOf(80.0, 70.0).mapIndexed { i, northM ->
+                sampleAt(northM = northM, eastM = 0.0, timestampMs = 100_000L + i * 1_000L)
+            }
+
+        val eval = walk(points, fixes, distanceM = { 100.0 + it * 10.0 }).last()
+
+        assertEquals(110.0, eval.distanceToTargetM)
+        assertEquals(100.0, eval.prevDistanceToTargetM, "the previous fix's distance, not this one's")
     }
 }
+
+/** A [TrailMatch] carrying only the fields the backtrack detector reads. */
+private fun matchAt(
+    alongM: Double?,
+    state: MatchState,
+    predictionErrorM: Double? = null,
+) = TrailMatch(
+    state = state,
+    confirmedAlongM = alongM,
+    predictedAlongM = alongM,
+    position = null,
+    chosen = null,
+    bestRejected = null,
+    unmatchedCount = 0,
+    uncertainSec = 0.0,
+    travelledM = 0.0,
+    scanKind = ScanKind.Windowed,
+    windowM = null,
+    budgetM = 0.0,
+    predictionErrorM = predictionErrorM,
+    disposition = "test",
+)
