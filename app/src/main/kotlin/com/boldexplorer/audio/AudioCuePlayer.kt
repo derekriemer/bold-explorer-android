@@ -252,14 +252,7 @@ class AudioCuePlayer
                                 trigger = "Waypoint reached",
                                 inputs = "waypointName=\"${event.waypointName}\"",
                                 outputs = "",
-                                // Two different reasons not to speak, and only one is silence:
-                                // in the foreground the screen reader is carrying the UI instead.
-                                played =
-                                    when {
-                                        spoke -> "Spoke: 'Next waypoint: ${event.waypointName}'"
-                                        silenced -> "Suppressed (silence mode): 'Next waypoint: ${event.waypointName}'"
-                                        else -> "Not spoken, app in foreground: 'Next waypoint: ${event.waypointName}'"
-                                    },
+                                played = dispositionOf(spoke, silenced).playedLabel("Next waypoint: ${event.waypointName}"),
                             ),
                         )
                     }
@@ -278,12 +271,7 @@ class AudioCuePlayer
                                 trigger = "Trail complete",
                                 inputs = "",
                                 outputs = "",
-                                played =
-                                    when {
-                                        spoke -> "Spoke: 'Trail complete'"
-                                        silenced -> "Suppressed (silence mode): 'Trail complete'"
-                                        else -> "Not spoken, app in foreground: 'Trail complete'"
-                                    },
+                                played = dispositionOf(spoke, silenced).playedLabel("Trail complete"),
                             ),
                         )
                     }
@@ -327,4 +315,21 @@ class AudioCuePlayer
             focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
             focusRequest = null
         }
+    }
+
+/**
+ * Which channel carried a cue that [AudioCuePlayer] speaks directly.
+ *
+ * These paths have no live region of their own, so a foregrounded app means nothing announced it —
+ * [OutputDisposition.NOT_SPOKEN_FOREGROUND] rather than [OutputDisposition.LIVE_REGION_ONLY]. The
+ * distinction is the whole reason this maps to the shared enum instead of writing its own labels.
+ */
+private fun dispositionOf(
+    spoke: Boolean,
+    silenced: Boolean,
+): OutputDisposition =
+    when {
+        spoke -> OutputDisposition.QUEUED_FOR_TTS
+        silenced -> OutputDisposition.SILENCED
+        else -> OutputDisposition.NOT_SPOKEN_FOREGROUND
     }

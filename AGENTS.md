@@ -300,7 +300,9 @@ The `played` field records the *audio outcome*, not intent:
 - `"Spoke: '<text>'"` — TTS was actually spoken aloud (app was **backgrounded**)
 - `"Live region: '<text>'"` — TTS was skipped because the app was **foregrounded**; the UI live region announced it via TalkBack instead. This is **normal and expected** — do not treat it as a missing announcement. A whole session reads this way whenever the screen was on.
 - `"Suppressed: '<text>'"` — **archived logs only** (before 2026-08-15). Identical meaning to `Live region:` above. The wording was changed because it reads as silence: an entire walk logged this way was written up in ADR 0001 as the user having heard nothing, and it took the owner to correct it. Treat the two spellings as the same thing when reading old logs.
-- `"Not spoken, app in foreground: '<text>'"` — the `AudioCuePlayer` waypoint-approach and trail-complete paths, which have no live region of their own
+- `"Not spoken, app in foreground: '<text>'"` — the `AudioCuePlayer` waypoint-approach and trail-complete paths, which have no live region of their own, so nothing announced it
+
+All four spellings come from one mapping, `OutputDisposition.playedLabel` in `OutputRouter.kt` — if you reword one, you have reworded it everywhere, which is the point.
 - `"Wrong-vector earcon"` / `"Accuracy earcon"` / similar — a non-TTS audio tone played
 - `"bail:<reason>"` — the detector ran but decided not to act (e.g. `bail:no_relative_deg`, `bail:count_1_of_2`)
 - `""` (empty) — no audio output for this event (informational log only)

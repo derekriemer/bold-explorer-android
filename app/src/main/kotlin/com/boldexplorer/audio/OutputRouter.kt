@@ -33,9 +33,34 @@ enum class OutputDisposition {
      */
     LIVE_REGION_ONLY,
 
+    /**
+     * The app's own TTS stayed quiet because the screen was up, and no live region carried it
+     * either — the cue paths in [AudioCuePlayer], which have no live region of their own.
+     *
+     * Distinct from [LIVE_REGION_ONLY]: there, something did announce it.
+     */
+    NOT_SPOKEN_FOREGROUND,
+
     // Neither channel fired — absolute silence mode (#14) suppressed this event entirely.
     SILENCED,
 }
+
+/**
+ * How this outcome reads in the audio event log.
+ *
+ * One mapping, because there used to be two. `AudioCuePlayer` classified the same three outcomes
+ * with its own `when` chain and its own wording, so the log spelled one state two ways — and this
+ * vocabulary is not decoration: a `played` string that read as silence when the user had in fact
+ * heard the announcement sent ADR 0001 to a wrong conclusion about a real walk. A single mapping
+ * means the next rewording cannot land in one place and miss the other.
+ */
+fun OutputDisposition.playedLabel(text: String): String =
+    when (this) {
+        OutputDisposition.QUEUED_FOR_TTS -> "Spoke: '$text'"
+        OutputDisposition.LIVE_REGION_ONLY -> "Live region: '$text'"
+        OutputDisposition.NOT_SPOKEN_FOREGROUND -> "Not spoken, app in foreground: '$text'"
+        OutputDisposition.SILENCED -> "Suppressed (silence mode): '$text'"
+    }
 
 /** Live-region text plus a monotonic sequence, so two consecutive identical announcements (e.g.
  * repeated "12 o'clock, 20 meters") still produce a state change TalkBack will re-announce — a
@@ -112,17 +137,7 @@ class OutputRouter
                         trigger = event.kind.name,
                         inputs = "text=\"$text\"",
                         outputs = "",
-                        // Name the channel rather than the absence of one. This line used to read
-                        // "Suppressed: '<text>'" for the live-region case, which reads as silence
-                        // to anyone analysing a field log — and did: a whole walk logs as
-                        // "Suppressed" simply because the screen was on, and that was written up as
-                        // the user having heard nothing. Only SILENCED is silence.
-                        played =
-                            when (disposition) {
-                                OutputDisposition.QUEUED_FOR_TTS -> "Spoke: '$text'"
-                                OutputDisposition.LIVE_REGION_ONLY -> "Live region: '$text'"
-                                OutputDisposition.SILENCED -> "Suppressed (silence mode): '$text'"
-                            },
+                        played = disposition.playedLabel(text),
                         // "ttsDelivered" preserved as an explicit queryable field for existing log
                         // tooling — same name the pre-#11 announce() helper used.
                         extra = event.context + mapOf("ttsDelivered" to (disposition == OutputDisposition.QUEUED_FOR_TTS)),
