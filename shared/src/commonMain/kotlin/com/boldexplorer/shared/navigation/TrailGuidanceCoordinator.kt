@@ -275,12 +275,12 @@ class TrailGuidanceCoordinator(
         val gateM = offTrailGateM(sample.accuracy)
         val overGate = absCrossTrackM != null && absCrossTrackM > gateM
 
-        if (overGate) {
-            consecutiveOffTrailCount++
-        } else {
-            consecutiveOffTrailCount = 0
-            offTrailAlertFiredAt = 0L
-        }
+        // The count resets, the cooldown does not. They answer different questions: the count asks
+        // "is this sustained", the cooldown asks "did we just say this". Clearing the cooldown here
+        // let a single interrupting fix re-arm the alert — and this branch is taken not only when
+        // the user is back on the line but whenever cross-track is unavailable at all, which under
+        // degraded GPS is often. Found in review, 2026-08-15.
+        if (overGate) consecutiveOffTrailCount++ else consecutiveOffTrailCount = 0
 
         // Corroboration shortens the sustain window; it never gates whether a fix counts. Angle is
         // evidence here, not a veto — demoting it is the whole point, since a stale target is what
@@ -426,9 +426,9 @@ class TrailGuidanceCoordinator(
                 consecutiveBacktrackCount++
             }
 
+            // As with off-trail: the count resets, the cooldown does not.
             else -> {
                 consecutiveBacktrackCount = 0
-                backtrackAlertFiredAt = 0L
             }
         }
         prevAlongTrackM = alongM

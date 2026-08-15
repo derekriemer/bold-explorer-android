@@ -148,6 +148,35 @@ class OffTrailFromMatchTest {
     }
 
     @Test
+    fun aGapInTheEvidenceDoesNotReArmTheAlert() {
+        // The counter and the cooldown answer different questions. Resetting the count when a fix
+        // stops qualifying is right; clearing the *cooldown* with it means one interrupting fix
+        // re-arms the alert, and under degraded GPS the ladder flaps often enough to do that
+        // repeatedly — fire, one gap, two over-gate fixes, fire again, about every three seconds.
+        val c = coordinator()
+        c.startFollow(polyline, TravelDirection.Forward)
+
+        val fired =
+            (0..4)
+                .mapNotNull { i ->
+                    c.evaluateOffTrail(active, sample(100_000L + i * 1_000L), guidance(), matchWith(MatchState.Matched, 30.0))
+                }.filter { it.fired }
+        assertTrue(fired.isNotEmpty(), "precondition: the alert fires")
+
+        // One fix with no candidate at all — the ladder flapped — then straight back over gate.
+        c.evaluateOffTrail(active, sample(106_000L), guidance(), matchWith(MatchState.Lost, null))
+        val after =
+            (0..4).mapNotNull { i ->
+                c.evaluateOffTrail(active, sample(107_000L + i * 1_000L), guidance(), matchWith(MatchState.Matched, 30.0))
+            }
+
+        assertTrue(
+            after.none { it.fired },
+            "re-alerted inside the cooldown after one interrupting fix: ${after.map { it.disposition }}",
+        )
+    }
+
+    @Test
     fun crossTrackSideFlipsWithDeclaredDirection() {
         // The sign is "right of travel", and travel reverses. A user to the right of the recorded
         // direction is to the *left* of a reverse walk; the logged sign has to say so, since it is
