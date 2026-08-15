@@ -1280,5 +1280,21 @@ specified.)*
     walk.
   - Same family: a follow started already past the match gate never acquires at all, so off-trail
     stays quiet. Worth testing on the same walk.
+- **Endpoint completion can be missed entirely by overshooting** (found in code review, 2026-08-15;
+  the radius half was already predicted under Verification, the overshoot half was not). S2 made the
+  final-leg branch return after a radial check alone, deliberately skipping the projection branch
+  that had been completing 300 m legs 30 m early. Two consequences compound:
+  - `completionRadiusM` is `min(15, max(5, 2 × accuracy))`, so at a good 2–3 m fix it is **5–6 m**,
+    down from a flat 15 m. A routine systematic offset between record-time and follow-time fixes is
+    of that order, so no fix need ever land inside it.
+  - With the projection branch skipped there is no "walked past the end" catch on the final leg, and
+    divergence never applied there either.
+
+  Together: the user strolls past the trail end, `TrailComplete` never fires, the follow never ends,
+  and guidance keeps steering at a waypoint behind them. `TrailCompletionTest` covers approach-and-
+  stop but has no overshoot case. **This is the strongest argument for finishing S5** — the fix is
+  the one already written down under Verification, completion on `alongTrackM` passing
+  `totalLengthM` rather than on radius alone, which needs the match as the source of truth. Fixing
+  it inside the radial rule instead would be a third tuning of a check that is being deleted.
 - **The vertex accept radius is unset.** Same untuned status as the original S4 constants, with the
   difference that it can now be swept against the 2026-08-12 corpus before it ships.
