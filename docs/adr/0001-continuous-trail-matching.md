@@ -1,7 +1,8 @@
 # ADR 0001 — Continuous trail matching: navigation core redesign
 
 - **Status:** Accepted; amended 2026-08-12 (Amendment 1 — vertex projections; S5a — backtrack; S5b —
-  geometry vs annotations) and 2026-08-14 (Amendment 2 — accuracy-aware backtrack noise floor)
+  geometry vs annotations), 2026-08-14 (Amendment 2 — accuracy-aware backtrack noise floor) and
+  2026-08-15 (Amendment 3 — off-trail under uncertainty)
 - **Date:** 2026-08-09
 - **Issues:** #23, #35, #55, #56, #69
 - **Supersedes:** the per-trackpoint `TrailFollower` state machine
@@ -544,6 +545,46 @@ by. See **Amendment 1**.
 alert. Shadow-mode duplication is the cost of attributable field results. `desiredTrailCourseDeg`
 moves to a chord/lookahead bearing — a single segment bearing at 2 m spacing is nearly random and
 makes off-trail alerts density-dependent.
+
+**Guidance half implemented 2026-08-15.** The chord bearing had already landed — but it centred
+itself on an **unwindowed** `polyline.project()`, so it was a third consumer of the defect S5a
+names, in the one place where being wrong steers the user directly. Measured by replaying the corpus
+against the shipped rule:
+
+```
+  walk1_session3_trail12_reverse    5.6% of Matched fixes, spoken direction ≥45° wrong
+  walk2_session2_trail12_reverse   17.1% of Matched fixes, worst cases 162°
+```
+
+`desiredTrailCourseDeg` and `evaluateOffTrail` now both read the match and never re-derive position.
+Three things this forced that the decision above did not anticipate:
+
+- **The coordinator needs the trail in recorded order**, adopted once per session by `startFollow`
+  and shared with the matcher. It had been building its own polyline from the follower's waypoint
+  list, which is *reversed in place* for a reverse follow — a second, session-relative along-track
+  coordinate, and exactly what "always in recorded order" exists to prevent.
+- **Direction is not only a tie-break.** The chord is measured over the trail *ahead of the user*,
+  which is toward increasing along-track only under `Forward`; cross-track's "right of travel" flips
+  for the same reason. Both are now derived from the declared direction rather than from whichever
+  way the point list happened to run.
+- **Off-trail under `Uncertain`.** See the amendment below.
+
+Not done, and still the substance of S5: distance, checkpoint counting and completion all still come
+from `currentIndex`.
+
+**Amendment 3 — off-trail is not suppressed by uncertainty alone (2026-08-15).** The Decisions
+section says "distinct uncertain earcon; off-trail alerts and completion suppressed". Implementing
+the suppression *without* the earcon, which does not exist, would replace an alert with silence at
+the moment it matters most — and `Uncertain` most often means "the best candidate is past the match
+gate", which is the off-trail condition itself rather than ignorance of it. Off-trail therefore
+reads `chosen.crossTrackM` under `Matched` **and** `Uncertain`, and bails only under `Lost` /
+`Unconfirmed`, where the sole candidate came from a global scan and may be a different part of the
+trail entirely. Owner-confirmed. When the uncertain earcon lands, revisit: the original pairing is
+still the better end state.
+
+**Known gap, found while doing this and deliberately left open:** a follow started while the user is
+already past the match gate never acquires, so the tracker sits in `Lost` and off-trail stays quiet.
+Same family as the `acquire()` question below, and it wants the same field walk.
 
 **S5a — `evaluateBacktrack` must read the windowed match, not project for itself.**
 `TrailGuidanceCoordinator.evaluateBacktrack` computes along-track with its own **unwindowed**
@@ -1134,12 +1175,30 @@ specified.)*
   the Debug logging switch; both logging defects are fixed. See **Amendment 2** for the accuracy-aware
   noise floor the corpus forced on the way. **Not yet field-verified** — the corpus can show which
   fixes would fire, not what the user hears.
-- **S5 itself is open** — `Active` does not yet carry `match`, and guidance, telemetry and completion
-  still come from `currentIndex`. S5a re-homed one consumer, not the source of truth.
+- **S5 is half done** (2026-08-15). Every consumer of an unwindowed projection is gone: wrong-way
+  (S5a), the desired course, and off-trail cross-track. Distance, checkpoint counting and completion
+  still come from `currentIndex`, which is the rest of S5. **Not field-verified.**
+  - Deviation, deliberate: the match is passed as a parameter rather than added to
+    `TrailFollowerState.Active`. `TrailFollower` does not produce a match and should not carry one,
+    and a parameter cannot go stale.
+  - Density equivalence now covers guidance decisions, not only geometry — the executable form of
+    #35, and the half of it that only became assertable at S5.
 - **S5b is open** — the geometry/annotation split. Blocks S6, and #69 is its attach-time guard.
 - **`ProgressTracker.acquire()` still uses the plain match gate** (raised by S4c, undecided). A follow
   started while standing in an apex wedge can commit to a degenerate first position. Applying the
   vertex accept radius there would mean silence at follow-start, which is its own harm for a blind
-  user. Owner's call.
+  user. Owner's call, and **safe to defer**, on this reasoning:
+  - All five acquisitions in the corpus are unambiguous — cross-track 0–8 m with the runner-up
+    34–45 m away. The wedge case is real but unobserved, so it needs a deliberate walk (start a
+    follow standing inside a bend apex), not more replay.
+  - A degenerate acquisition self-heals: the next fix falls outside the window, the tracker goes
+    `Uncertain` → `Lost`, rescans, and reacquires correctly. The cost is seconds of `Uncertain`.
+  - S5a made that recovery quieter rather than louder: the reacquiring fix re-baselines, so the
+    correction cannot read as a backtrack.
+  - It becomes load-bearing when distance and completion move off `currentIndex` — the rest of S5 —
+    because a wrong first position would then be *spoken*. Decide before that, not before the field
+    walk.
+  - Same family: a follow started already past the match gate never acquires at all, so off-trail
+    stays quiet. Worth testing on the same walk.
 - **The vertex accept radius is unset.** Same untuned status as the original S4 constants, with the
   difference that it can now be swept against the 2026-08-12 corpus before it ships.
