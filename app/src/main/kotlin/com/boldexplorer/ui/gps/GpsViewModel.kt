@@ -1365,7 +1365,6 @@ class GpsViewModel
                         trigger = "OffTrailCheck",
                         inputs =
                             "relativeDeg=${eval.relativeDeg?.let { "%.1f°".format(it) } ?: "null"}" +
-                                ", followerActive=${eval.followerActive}" +
                                 ", smoothed=${guidanceCoordinator.courseIsSmoothed()}",
                         outputs = "consecutiveOffTrail=${eval.consecutiveCount}, sinceLastAlertMs=${eval.sinceLastAlertMs}",
                         played = eval.disposition,

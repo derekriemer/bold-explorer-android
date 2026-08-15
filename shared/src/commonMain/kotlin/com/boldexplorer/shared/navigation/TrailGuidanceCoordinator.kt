@@ -298,21 +298,29 @@ class TrailGuidanceCoordinator(
         val sinceLastAlertMs = sample.timestamp - offTrailAlertFiredAt
         val xt = absCrossTrackM?.roundToInt()
         val trend = if (diverging) "diverging" else "converging"
+        // The decision, then its description — not the description parsed back into a decision.
+        // `fired` used to be `disposition.startsWith("fire:")`, which made a user-facing alert
+        // depend on the spelling of a log string: renaming one would have silently disabled or
+        // enabled it, with nothing failing at the edit site. Given how much of this file's log
+        // vocabulary has changed recently, that was a live hazard rather than a theoretical one.
+        val fired =
+            absCrossTrackM != null &&
+                overGate &&
+                consecutiveOffTrailCount >= required &&
+                sinceLastAlertMs >= NavigationPolicy.OFF_TRAIL_ALERT_INTERVAL_MS
         val disposition =
             when {
                 absCrossTrackM == null -> "bail:no_window"
                 !overGate -> "bail:on_line_xt_${xt}m_gate_${gateM.roundToInt()}m"
                 consecutiveOffTrailCount < required ->
                     "hold:xt_${xt}m_${trend}_${consecutiveOffTrailCount}of$required"
-                sinceLastAlertMs < NavigationPolicy.OFF_TRAIL_ALERT_INTERVAL_MS -> "bail:cooldown_${sinceLastAlertMs}ms"
+                !fired -> "bail:cooldown_${sinceLastAlertMs}ms"
                 else -> "fire:xt_${xt}m_$trend"
             }
-        val fired = disposition.startsWith("fire:")
         if (fired) offTrailAlertFiredAt = sample.timestamp
 
         return OffTrailEvaluation(
             relativeDeg = relative,
-            followerActive = true,
             consecutiveCount = consecutiveOffTrailCount,
             sinceLastAlertMs = sinceLastAlertMs,
             disposition = disposition,
@@ -412,51 +420,48 @@ class TrailGuidanceCoordinator(
         val noiseFloorM = backtrackNoiseFloorM(sample.accuracy)
         val regressed = progressM != null && progressM < -noiseFloorM
 
-        when {
-            alongM == null -> {
-                consecutiveBacktrackCount = 0
-            }
-
-            // Holds the count rather than clearing it: a gap in corroboration is not evidence
-            // either way. Re-baselining prev is what stops the gap itself reading as movement.
-            !contiguous -> {
-                Unit
-            }
-
-            regressed -> {
-                consecutiveBacktrackCount++
-            }
-
-            // As with off-trail: the count resets, the cooldown does not.
-            else -> {
-                consecutiveBacktrackCount = 0
-            }
-        }
-        prevAlongTrackM = alongM
-
-        val disposition =
+        // One pass: update the count and say why, instead of two `when` ladders over the same
+        // predicates that had to be kept in the same order by hand. The old shape needed a
+        // do-nothing branch purely to stay aligned with its twin.
+        val hold =
             when {
                 alongM == null -> {
+                    consecutiveBacktrackCount = 0
                     "bail:no_match"
                 }
 
+                // Holds the count rather than clearing it: a gap in corroboration is not evidence
+                // either way. Re-baselining prev is what stops the gap itself reading as movement.
                 !contiguous -> {
-                    "hold:${if (match?.state == MatchState.Matched) "reacquired" else "match_${match?.state?.name?.lowercase()}"}"
+                    if (match?.state == MatchState.Matched) {
+                        "hold:reacquired"
+                    } else {
+                        "hold:match_${match?.state?.name?.lowercase()}"
+                    }
                 }
 
-                consecutiveBacktrackCount < NavigationPolicy.BACKTRACK_CONSECUTIVE_THRESHOLD -> {
-                    "bail:count_${consecutiveBacktrackCount}_of_${NavigationPolicy.BACKTRACK_CONSECUTIVE_THRESHOLD}"
+                regressed -> {
+                    consecutiveBacktrackCount++
+                    null
                 }
 
-                sinceLastAlertMs < NavigationPolicy.BACKTRACK_ALERT_INTERVAL_MS -> {
-                    "bail:cooldown_${sinceLastAlertMs}ms"
-                }
-
+                // As with off-trail: the count resets, the cooldown does not.
                 else -> {
-                    "FIRING"
+                    consecutiveBacktrackCount = 0
+                    null
                 }
             }
-        val fired = disposition == "FIRING"
+        prevAlongTrackM = alongM
+
+        val sustained = consecutiveBacktrackCount >= NavigationPolicy.BACKTRACK_CONSECUTIVE_THRESHOLD
+        val fired = hold == null && sustained && sinceLastAlertMs >= NavigationPolicy.BACKTRACK_ALERT_INTERVAL_MS
+        val disposition =
+            when {
+                hold != null -> hold
+                !sustained -> "bail:count_${consecutiveBacktrackCount}_of_${NavigationPolicy.BACKTRACK_CONSECUTIVE_THRESHOLD}"
+                !fired -> "bail:cooldown_${sinceLastAlertMs}ms"
+                else -> "FIRING"
+            }
         if (fired) backtrackAlertFiredAt = sample.timestamp
 
         return BacktrackEvaluation(
@@ -494,7 +499,6 @@ data class OrdinaryGuidanceDecision(
 /** Off-trail detection outcome for one GPS fix; effect-free, ready for log + optional alert. */
 data class OffTrailEvaluation(
     val relativeDeg: Double?,
-    val followerActive: Boolean,
     val consecutiveCount: Int,
     val sinceLastAlertMs: Long,
     val disposition: String,
