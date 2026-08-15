@@ -19,6 +19,16 @@ enum class TravelDirection {
 }
 
 /**
+ * +1 when `alongTrackM` grows with correct progress, −1 when it shrinks.
+ *
+ * The one fact everything reverse-related depends on. It was written out three times — in
+ * `ProgressTracker`, in the guidance coordinator and inline in `TrailGuidance` — which is three
+ * chances for the convention to drift and no single place to document or test it.
+ */
+val TravelDirection.sign: Double
+    get() = if (this == TravelDirection.Reverse) -1.0 else 1.0
+
+/**
  * How much the tracker currently trusts its own position, and therefore how hard it is searching.
  *
  * These are **internal** states. The public navigation surface does not expose them yet — that

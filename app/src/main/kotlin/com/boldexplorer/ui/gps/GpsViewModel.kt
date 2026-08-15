@@ -1390,14 +1390,12 @@ class GpsViewModel
             sample: LocationSample,
             guidance: TrailGuidanceState?,
         ) {
-            val matcher = trailMatcher
             val eval =
                 guidanceCoordinator.evaluateBacktrack(
                     followState,
                     sample,
                     guidance,
-                    matcher?.lastMatch,
-                    matcher?.direction ?: TravelDirection.Forward,
+                    trailMatcher?.lastMatch,
                 ) ?: return
             viewModelScope.launch {
                 audioEventLog.append(

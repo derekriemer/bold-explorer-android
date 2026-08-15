@@ -377,16 +377,17 @@ class TrailGuidanceCoordinator(
      * inherits the window, the gate and the ladder's states, so the same fixes stay put.
      *
      * @param match the windowed matcher's result for **this** fix, or `null` before it has one.
-     * @param direction the declared traversal direction. `alongTrackM` is always in recorded order,
-     *   so under [TravelDirection.Reverse] correct progress counts *down* and regression is a rise.
-     *   Without this the detector would announce wrong way for an entire reverse follow.
+
+     * Direction comes from the session ([startFollow]), not from the caller. It was a parameter,
+     * which meant the same fact had two sources: a caller that had adopted a reverse trail but
+     * passed `Forward` would get sign-inverted wrong-way detection — "you may be going the wrong
+     * way", continuously, to someone walking correctly.
      */
     fun evaluateBacktrack(
         followState: TrailFollowerState,
         sample: LocationSample,
         guidance: TrailGuidanceState?,
         match: TrailMatch?,
-        direction: TravelDirection,
     ): BacktrackEvaluation? {
         if (followState !is TrailFollowerState.Active) return null
         if (sample.timestamp < backtrackGraceUntilMs) return null
@@ -404,7 +405,7 @@ class TrailGuidanceCoordinator(
         // predictionErrorM — can legitimately land far behind, because a rejoin elsewhere is not a
         // reversal. Both re-baseline instead of comparing.
         val contiguous = match?.state == MatchState.Matched && match.predictionErrorM == null
-        val progressM = if (contiguous && prev != null && alongM != null) (alongM - prev) * direction.sign else null
+        val progressM = if (contiguous && prev != null && alongM != null) (alongM - prev) * followDirection.sign else null
         // The floor widens with reported accuracy, because what it exists to reject is the position
         // noise the fix itself is declaring. A flat 2 m is a walking pace at 1 Hz, and a 25 m fix
         // moves further than that standing still.
@@ -481,10 +482,6 @@ class TrailGuidanceCoordinator(
             capM = NavigationPolicy.BACKTRACK_NOISE_FLOOR_CAP_M,
         )
 }
-
-/** +1 when `alongTrackM` should grow with correct progress, −1 when it should shrink. */
-private val TravelDirection.sign: Double
-    get() = if (this == TravelDirection.Reverse) -1.0 else 1.0
 
 /** A routine trail-guidance cue is due; the caller formats + speaks it. */
 data class OrdinaryGuidanceDecision(

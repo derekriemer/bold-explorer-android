@@ -125,7 +125,7 @@ object TrailGuidance {
             // Reverse the baseline is taken behind the recorded direction and the resulting bearing
             // is reversed to face travel.
             val half = NavigationPolicy.COURSE_BASELINE_M / 2.0
-            val centreM = if (direction == TravelDirection.Reverse) alongTrackM - half else alongTrackM + half
+            val centreM = alongTrackM + half * direction.sign
             polyline
                 .chordBearingAt(centreM, baselineM = NavigationPolicy.COURSE_BASELINE_M)
                 ?.let { return if (direction == TravelDirection.Reverse) (it + 180.0) % 360.0 else it }

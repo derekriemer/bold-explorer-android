@@ -153,7 +153,7 @@ object ScenarioRunner {
                 coordinator.updateTrustedCourse(sample)
                 val guidance = coordinator.computeGuidance(active, sample, match)
                 val offTrail = coordinator.evaluateOffTrail(active, sample, guidance, match)
-                val backtrack = coordinator.evaluateBacktrack(active, sample, guidance, match, scenario.direction)
+                val backtrack = coordinator.evaluateBacktrack(active, sample, guidance, match)
                 ScenarioStep(
                     fix = fix,
                     matchState = match.state,

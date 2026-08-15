@@ -63,11 +63,13 @@ class BacktrackAlongTrackTest {
         distanceM: (Int) -> Double = { 100.0 + it * 10.0 },
     ): List<BacktrackEvaluation> {
         val c = coordinator()
-        val tracker = ProgressTracker(TrailPolyline(points), direction)
+        val polyline = TrailPolyline(points)
+        val tracker = ProgressTracker(polyline, direction)
         val active = activeFor(points)
+        c.startFollow(polyline, direction)
         c.resetThrottle(fixes.first().copy(timestamp = 0L))
         return fixes.mapIndexedNotNull { i, fix ->
-            c.evaluateBacktrack(active, fix, guidanceWithDistance(distanceM(i)), tracker.onFix(fix), direction)
+            c.evaluateBacktrack(active, fix, guidanceWithDistance(distanceM(i)), tracker.onFix(fix))
         }
     }
 
@@ -202,7 +204,9 @@ class BacktrackAlongTrackTest {
         // While the tracker is Uncertain, `confirmedAlongM` is frozen by design. Neither its
         // stillness nor its eventual resumption may be read as movement.
         val c = coordinator()
-        val active = activeFor(densify(northShape(400.0), spacingM = 5.0))
+        val points = densify(northShape(400.0), spacingM = 5.0)
+        val active = activeFor(points)
+        c.startFollow(TrailPolyline(points), TravelDirection.Forward)
         val sample = sampleAt(northM = 100.0, eastM = 0.0, timestampMs = 100_000L)
         c.resetThrottle(sample.copy(timestamp = 0L))
 
@@ -218,7 +222,6 @@ class BacktrackAlongTrackTest {
                     sample.copy(timestamp = 100_000L + i * 1_000L),
                     guidanceWithDistance(100.0),
                     match,
-                    TravelDirection.Forward,
                 )
             }
 
@@ -235,7 +238,9 @@ class BacktrackAlongTrackTest {
         // position — a rejoin elsewhere, not a reversal. The fix that reacquires re-baselines
         // instead of being compared against a value from before the gap.
         val c = coordinator()
-        val active = activeFor(densify(northShape(400.0), spacingM = 5.0))
+        val points = densify(northShape(400.0), spacingM = 5.0)
+        val active = activeFor(points)
+        c.startFollow(TrailPolyline(points), TravelDirection.Forward)
         val sample = sampleAt(northM = 100.0, eastM = 0.0, timestampMs = 100_000L)
         c.resetThrottle(sample.copy(timestamp = 0L))
 
@@ -253,7 +258,6 @@ class BacktrackAlongTrackTest {
                     sample.copy(timestamp = 100_000L + i * 1_000L),
                     guidanceWithDistance(100.0),
                     match,
-                    TravelDirection.Forward,
                 )
             }
 
@@ -274,7 +278,9 @@ class BacktrackAlongTrackTest {
         // 4–12 m per fix. Three of those in a row cleared a flat 2 m floor and would have announced
         // wrong way to someone who had not moved.
         val c = coordinator()
-        val active = activeFor(densify(northShape(400.0), spacingM = 5.0))
+        val points = densify(northShape(400.0), spacingM = 5.0)
+        val active = activeFor(points)
+        c.startFollow(TrailPolyline(points), TravelDirection.Forward)
         c.resetThrottle(sampleAt(northM = 100.0, eastM = 0.0, timestampMs = 0L))
 
         val evals =
@@ -290,7 +296,6 @@ class BacktrackAlongTrackTest {
                     ),
                     guidanceWithDistance(100.0),
                     matchAt(alongM, MatchState.Matched),
-                    TravelDirection.Forward,
                 )
             }
 
@@ -302,7 +307,9 @@ class BacktrackAlongTrackTest {
     fun atGoodAccuracyASmallRegressionStillCounts() {
         // The floor must not simply be raised: with a clean fix, a few metres back is real.
         val c = coordinator()
-        val active = activeFor(densify(northShape(400.0), spacingM = 5.0))
+        val points = densify(northShape(400.0), spacingM = 5.0)
+        val active = activeFor(points)
+        c.startFollow(TrailPolyline(points), TravelDirection.Forward)
         c.resetThrottle(sampleAt(northM = 100.0, eastM = 0.0, timestampMs = 0L))
 
         val evals =
@@ -312,7 +319,6 @@ class BacktrackAlongTrackTest {
                     sampleAt(northM = 100.0, eastM = 0.0, timestampMs = 100_000L + i * 2_000L, accuracyM = 4.0),
                     guidanceWithDistance(100.0),
                     matchAt(alongM, MatchState.Matched),
-                    TravelDirection.Forward,
                 )
             }
 
@@ -322,7 +328,9 @@ class BacktrackAlongTrackTest {
     @Test
     fun theFloorUsedIsReportedForTheLog() {
         val c = coordinator()
-        val active = activeFor(densify(northShape(400.0), spacingM = 5.0))
+        val points = densify(northShape(400.0), spacingM = 5.0)
+        val active = activeFor(points)
+        c.startFollow(TrailPolyline(points), TravelDirection.Forward)
         c.resetThrottle(sampleAt(northM = 100.0, eastM = 0.0, timestampMs = 0L))
 
         val eval =
@@ -332,7 +340,6 @@ class BacktrackAlongTrackTest {
                     sampleAt(northM = 100.0, eastM = 0.0, timestampMs = 100_000L, accuracyM = 25.0),
                     guidanceWithDistance(100.0),
                     matchAt(120.0, MatchState.Matched),
-                    TravelDirection.Forward,
                 ),
             )
 
@@ -342,11 +349,13 @@ class BacktrackAlongTrackTest {
     @Test
     fun withNoMatchThereIsNothingToDecideOn() {
         val c = coordinator()
-        val active = activeFor(densify(northShape(400.0), spacingM = 5.0))
+        val points = densify(northShape(400.0), spacingM = 5.0)
+        val active = activeFor(points)
+        c.startFollow(TrailPolyline(points), TravelDirection.Forward)
         val sample = sampleAt(northM = 100.0, eastM = 0.0, timestampMs = 100_000L)
         c.resetThrottle(sample.copy(timestamp = 0L))
 
-        val eval = assertNotNull(c.evaluateBacktrack(active, sample, guidanceWithDistance(100.0), null, TravelDirection.Forward))
+        val eval = assertNotNull(c.evaluateBacktrack(active, sample, guidanceWithDistance(100.0), null))
 
         assertFalse(eval.fired)
         assertEquals("bail:no_match", eval.disposition)

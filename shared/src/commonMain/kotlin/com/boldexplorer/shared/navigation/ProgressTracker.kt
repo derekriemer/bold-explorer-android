@@ -118,7 +118,7 @@ class ProgressTracker(
     private var corroboratedM: Double = 0.0
 
     private val directionSign: Double
-        get() = if (travelDirection == TravelDirection.Reverse) -1.0 else 1.0
+        get() = travelDirection.sign
 
     /**
      * Matches one GPS fix against the trail and advances the ladder.

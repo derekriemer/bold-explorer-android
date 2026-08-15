@@ -183,7 +183,7 @@ class DensityEquivalenceTest {
                 offTrail = coordinator.evaluateOffTrail(active, fix, guidance, match)?.disposition,
                 backtrack =
                     coordinator
-                        .evaluateBacktrack(active, fix, guidance, match, TravelDirection.Forward)
+                        .evaluateBacktrack(active, fix, guidance, match)
                         ?.disposition,
             )
         }

@@ -88,7 +88,7 @@ class TrailGuidanceCoordinatorTest {
             followState: TrailFollowerState,
             sample: LocationSample,
             guidance: TrailGuidanceState?,
-        ) = coordinator.evaluateBacktrack(followState, sample, guidance, match(sample), TravelDirection.Forward)
+        ) = coordinator.evaluateBacktrack(followState, sample, guidance, match(sample))
 
         fun evaluateOffTrail(
             followState: TrailFollowerState,
