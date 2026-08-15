@@ -2,6 +2,8 @@ package com.boldexplorer.shared.navigation
 
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.deltaAngle
+import com.boldexplorer.shared.model.LocationSample
+import kotlinx.coroutines.test.TestScope
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -128,6 +130,121 @@ class DensityEquivalenceTest {
             assertEquals(sagittas.first(), s, 2.0, "sagittas across densities: $sagittas")
         }
         assertTrue(sagittas.first() > 20.0, "the corner must actually register, got ${sagittas.first()}")
+    }
+
+    /**
+     * One physical walk: up the 200 m north leg, round the corner, out along the east leg, holding
+     * a metre off the line. Deliberately the same *positions* regardless of how the trail beneath
+     * them was recorded.
+     *
+     * 10 s between fixes at ~20 m each. The step has to stay inside the matcher's window, and the
+     * window is sized from elapsed time and declared speed — a 20 m stride at 1 Hz is a vehicle,
+     * and the matcher is right to refuse to track it.
+     */
+    private fun walkFixes(): List<LocationSample> {
+        val northLeg = (1..9).map { it * 20.0 to 1.0 }
+        val corner = listOf(200.0 to 0.0)
+        val eastLeg = (1..9).map { 200.0 to it * 20.0 }
+        return (northLeg + corner + eastLeg).mapIndexed { i, (northM, eastM) ->
+            sampleAt(
+                northM = northM,
+                eastM = eastM,
+                timestampMs = 100_000L + i * 10_000L,
+                accuracyM = 5.0,
+                speedMps = 2.0,
+                courseDeg = null,
+            )
+        }
+    }
+
+    /** Runs [walkFixes] through the whole stack against [spacingM]-sampled geometry. */
+    private fun decisionsAt(spacingM: Double): List<Decision> {
+        val points = densify(cornerShape(200.0), spacingM)
+        val polyline = TrailPolyline(points)
+        val tracker = ProgressTracker(polyline)
+        val coordinator = TrailGuidanceCoordinator(TestScope())
+        coordinator.startFollow(polyline, TravelDirection.Forward)
+        // The last vertex is the same physical point at every density — densify preserves it — so
+        // distance-to-target is comparable too, not just the continuous quantities.
+        val active =
+            TrailFollowerState.Active(
+                waypoints = points.mapIndexed { i, p -> TrailPoint(i.toLong(), "p$i", p.lat, p.lon) },
+                currentIndex = points.size - 1,
+                thresholdM = 15.0,
+            )
+
+        return walkFixes().map { fix ->
+            val match = tracker.onFix(fix)
+            coordinator.updateTrustedCourse(fix)
+            val guidance = coordinator.computeGuidance(active, fix, match)
+            Decision(
+                courseDeg = guidance?.desiredCourseDeg,
+                distanceToTargetM = guidance?.distanceToTargetM,
+                offTrail = coordinator.evaluateOffTrail(active, fix, guidance, match)?.disposition,
+                backtrack =
+                    coordinator
+                        .evaluateBacktrack(active, fix, guidance, match, TravelDirection.Forward)
+                        ?.disposition,
+            )
+        }
+    }
+
+    private data class Decision(
+        val courseDeg: Double?,
+        val distanceToTargetM: Double?,
+        val offTrail: String?,
+        val backtrack: String?,
+    )
+
+    @Test
+    fun guidanceDecisions_areIndependentOfSampling() {
+        // The half of the #35 requirement that only became assertable at S5, when guidance and the
+        // detectors stopped deriving position for themselves. Dispositions are compared exactly:
+        // they carry the rounded metres a decision was made on, so an equal string means the same
+        // decision reached the same way, not merely the same outcome.
+        val byDensity = densities.map { it to decisionsAt(it) }
+        val (referenceDensity, reference) = byDensity.first()
+
+        for ((spacing, decisions) in byDensity.drop(1)) {
+            assertEquals(
+                reference.size,
+                decisions.size,
+                "fix count at ${spacing}m vs ${referenceDensity}m",
+            )
+            for ((i, d) in decisions.withIndex()) {
+                val r = reference[i]
+                assertEquals(r.offTrail, d.offTrail, "off-trail disposition at fix $i, density $spacing m")
+                assertEquals(r.backtrack, d.backtrack, "backtrack disposition at fix $i, density $spacing m")
+                assertEquals(
+                    assertNotNull(r.distanceToTargetM),
+                    assertNotNull(d.distanceToTargetM),
+                    1.0,
+                    "distance to target at fix $i, density $spacing m",
+                )
+                assertTrue(
+                    abs(deltaAngle(assertNotNull(r.courseDeg), assertNotNull(d.courseDeg))) < 2.0,
+                    "desired course at fix $i: ${r.courseDeg} at $referenceDensity m vs ${d.courseDeg} at $spacing m",
+                )
+            }
+        }
+    }
+
+    @Test
+    fun theWalkFixtureActuallyExercisesTheCorner() {
+        // Guards the test above from passing vacuously. If every fix produced the same course, or
+        // the detectors never got past "no match", equality across densities would mean nothing.
+        val decisions = decisionsAt(2.0)
+        val courses = decisions.mapNotNull { it.courseDeg }
+
+        assertTrue(courses.size == decisions.size, "every fix must produce a course")
+        assertTrue(
+            courses.any { abs(deltaAngle(0.0, it)) < 20.0 } && courses.any { abs(deltaAngle(90.0, it)) < 20.0 },
+            "the walk must turn from north to east, got $courses",
+        )
+        assertTrue(
+            decisions.all { it.offTrail?.startsWith("bail:on_line") == true },
+            "a walk a metre off the line must read as on-line throughout: ${decisions.map { it.offTrail }}",
+        )
     }
 
     @Test
