@@ -2,6 +2,7 @@ package com.boldexplorer.audio
 
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.model.LocationSample
+import com.boldexplorer.shared.navigation.MatchEvidence
 import com.boldexplorer.shared.navigation.MatchEvidenceRecorder
 import com.boldexplorer.shared.navigation.ProgressTracker
 import com.boldexplorer.shared.navigation.TrailMatch
@@ -39,10 +40,32 @@ class TrailMatcher(
     var lastMatch: TrailMatch? = null
         private set
 
-    /** Matches [sample] and returns the record to append. Never throws on trail geometry. */
-    fun onFix(sample: LocationSample): AudioLogEntry {
+    private var lastEvidence: MatchEvidence? = null
+
+    /**
+     * Matches [sample] against the trail. Never throws on trail geometry.
+     *
+     * The evidence recorder runs here rather than with the logging, because it carries a rate
+     * baseline between fixes and would measure across the gap if it were skipped. Building the log
+     * *record* is [logEntryFor]'s job and happens only if something will read it.
+     */
+    fun onFix(sample: LocationSample): TrailMatch {
         val match = tracker.onFix(sample)
         lastMatch = match
-        return trailMatchLogEntry(sample, match, evidence.observe(sample, match))
+        lastEvidence = evidence.observe(sample, match)
+        return match
     }
+
+    /**
+     * The `TRAIL_MATCH` record for the fix [onFix] just matched.
+     *
+     * Separate from [onFix] because it is the expensive half — a 27-key map and three formatted
+     * strings — and the Debug switch exists precisely to not pay for it. Building it unconditionally
+     * and discarding it when the switch was off made that switch save the file write and nothing
+     * else, which is not what its documentation claimed.
+     */
+    fun logEntryFor(
+        sample: LocationSample,
+        match: TrailMatch,
+    ): AudioLogEntry? = lastEvidence?.let { trailMatchLogEntry(sample, match, it) }
 }

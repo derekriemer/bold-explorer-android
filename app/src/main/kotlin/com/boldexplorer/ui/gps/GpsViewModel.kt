@@ -1005,17 +1005,21 @@ class GpsViewModel
          *
          * Gated on the live follower being active so a matcher left over from a finished follow
          * cannot keep running. The Debug switch gates the **logging** only: since S5a wrong-way
-         * detection reads the match, so switching off a per-fix log line must not quietly switch off
-         * an alert. TRAIL_MATCH is still the only per-fix kind in the log, and the ~2 MB/hour that
-         * switch exists for is all in the writing.
+         * detection reads the match, switching off a per-fix log line must not quietly switch off an
+         * alert. TRAIL_MATCH is still the only per-fix kind in the log.
+         *
+         * With the switch off the record is not built at all, only the match — which is what the
+         * switch was always documented to do and, until review caught it, did not: `onFix` used to
+         * return the finished `AudioLogEntry`, so a 27-key map and three formatted strings were
+         * assembled every fix and dropped on the next line.
          */
         private fun matchTrail(sample: LocationSample) {
             val matcher = trailMatcher ?: return
             if (trailFollower.state.value !is TrailFollowerState.Active) return
-            val entry = matcher.onFix(sample)
+            val match = matcher.onFix(sample)
             if (!shadowMatchMonitor.enabled.value) return
-            audioEventLog.append(entry)
-            shadowMatchMonitor.record(matcher.lastMatch ?: return)
+            matcher.logEntryFor(sample, match)?.let { audioEventLog.append(it) }
+            shadowMatchMonitor.record(match)
         }
 
         fun stopFollowTrail() {
