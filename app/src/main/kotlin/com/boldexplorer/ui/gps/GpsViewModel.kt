@@ -96,7 +96,6 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import javax.inject.Inject
-import kotlin.math.max
 import kotlin.math.roundToInt
 
 data class GpsUiState(
@@ -538,8 +537,8 @@ class GpsViewModel
                     if (id == null || loc == null) {
                         emptyList()
                     } else {
-                        val acc = loc.accuracy ?: 0.0
-                        val gate = max(NavigationPolicy.NEAR_TRAIL_FLOOR_M, NavigationPolicy.NEAR_TRAIL_ACCURACY_FACTOR * acc)
+                        // The same gate the resolver will filter by — asked for, not re-derived.
+                        val gate = NearbyTrailResolver.gateM(loc.accuracy)
                         val center = LatLng(loc.lat, loc.lon)
                         val snapshot = navPointsRepo.trailPointsInBbox(id, center, radiusM = gate + NEARBY_TRAIL_BBOX_MARGIN_M)
                         NearbyTrailResolver.resolve(center, loc.accuracy, snapshot)

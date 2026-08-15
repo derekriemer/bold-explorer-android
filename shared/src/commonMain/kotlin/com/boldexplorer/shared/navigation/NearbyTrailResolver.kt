@@ -40,6 +40,22 @@ object NearbyTrailResolver {
      * @return all trails whose closest segment is within the accuracy-scaled threshold, ordered
      *   nearest-first. Empty when no trail in [points] qualifies.
      */
+    /**
+     * How far from the trail a point still counts as "near", at this reported accuracy.
+     *
+     * Public because the bbox query that *feeds* [resolve] has to be at least this wide, and it was
+     * hand-rolling the formula: two derivations of one gate, already diverged in form. When the cap
+     * this deliberately leaves unbounded is finally chosen, a caller sizing its own query would have
+     * kept the uncapped radius and quietly stopped fetching trails the resolver would have accepted.
+     */
+    fun gateM(accuracyM: Double?): Double =
+        NavigationPolicy.widenWithAccuracy(
+            baseM = NavigationPolicy.NEAR_TRAIL_FLOOR_M,
+            factor = NavigationPolicy.NEAR_TRAIL_ACCURACY_FACTOR,
+            accuracyM = accuracyM,
+            capM = NavigationPolicy.UNBOUNDED_CAP_M,
+        )
+
     fun resolve(
         location: LatLng,
         accuracyM: Double?,
@@ -50,13 +66,7 @@ object NearbyTrailResolver {
         // unbounded. NavigationPolicy.UNBOUNDED_CAP_M names it so the remaining unbounded gates
         // helper, so this behaves identically to the old `max(floor, factor*accuracy)` for every
         // accuracy value, not merely the ones the test suite happens to exercise.
-        val threshold =
-            NavigationPolicy.widenWithAccuracy(
-                baseM = NavigationPolicy.NEAR_TRAIL_FLOOR_M,
-                factor = NavigationPolicy.NEAR_TRAIL_ACCURACY_FACTOR,
-                accuracyM = accuracyM,
-                capM = NavigationPolicy.UNBOUNDED_CAP_M,
-            )
+        val threshold = gateM(accuracyM)
 
         return points
             .groupBy { it.trailId }

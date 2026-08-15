@@ -62,13 +62,18 @@ class AudioEventLog
                     if (!logFile.exists()) return@withLock
                     val lines = logFile.readLines()
                     val parsed = lines.mapNotNull { parseLine(it) }.reversed() // newest-first
-                    _entries.value = parsed
+                    _entries.value = parsed.take(MAX_IN_MEMORY_ENTRIES)
                 }
             }
         }
 
         override fun append(entry: AudioLogEntry) {
-            _entries.value = listOf(entry) + _entries.value
+            // Bounded, because this list is only what the Debug screen renders — the file is the
+            // record. It used to grow without limit while `append` rebuilt it whole: after an hour
+            // of following at 1 Hz that is ~10k entries copied per fix, garbage that grows with the
+            // length of the walk, on a phone in someone's pocket. TRAIL_MATCH made it three appends
+            // per fix rather than two, which is what made it worth bounding.
+            _entries.value = (listOf(entry) + _entries.value).take(MAX_IN_MEMORY_ENTRIES)
             scope.launch {
                 fileMutex.withLock {
                     logFile.appendText(formatLine(entry) + "\n")
@@ -127,3 +132,12 @@ class AudioEventLog
 
         private fun parseLine(line: String): AudioLogEntry? = AudioLogCodec.parse(line)
     }
+
+/**
+ * How many entries the Debug screen keeps in memory.
+ *
+ * The file keeps everything; this is only what can be scrolled. Generous enough to cover the recent
+ * past a field session actually inspects, small enough that the per-append copy stays constant
+ * rather than growing with the length of the walk.
+ */
+private const val MAX_IN_MEMORY_ENTRIES = 2_000
