@@ -66,12 +66,13 @@ class TrailGuidanceCoordinatorTest {
      */
     private inner class Harness {
         val coordinator = TrailGuidanceCoordinator(TestScope())
-        private val polyline = TrailPolyline(active.waypoints.map { LatLng(it.lat, it.lon) })
+        private val points = active.waypoints.map { LatLng(it.lat, it.lon) }
+        private val polyline = TrailPolyline(points)
         private val tracker = ProgressTracker(polyline)
         private var acquired = false
 
         init {
-            coordinator.startFollow(polyline, TravelDirection.Forward)
+            coordinator.startFollow(points, TravelDirection.Forward)
         }
 
         fun resetThrottle(sample: LocationSample) = coordinator.resetThrottle(sample)
@@ -321,7 +322,7 @@ class TrailGuidanceCoordinatorTest {
         val armed = assertNotNull(h.evaluateBacktrack(active, sample(102_000, lat = 0.00064, accuracy = 5.0), guidance(90.0)))
         assertEquals(2, armed.consecutiveCount, "precondition: the detector is one fix from firing")
 
-        h.coordinator.startFollow(TrailPolyline(active.waypoints.map { LatLng(it.lat, it.lon) }), TravelDirection.Forward)
+        h.coordinator.startFollow(active.waypoints.map { LatLng(it.lat, it.lon) }, TravelDirection.Forward)
 
         val afterAdopt =
             assertNotNull(h.evaluateBacktrack(active, sample(103_000, lat = 0.00056, accuracy = 5.0), guidance(90.0)))

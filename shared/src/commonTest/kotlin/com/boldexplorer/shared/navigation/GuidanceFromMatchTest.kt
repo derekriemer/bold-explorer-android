@@ -116,7 +116,7 @@ class GuidanceFromMatchTest {
         // direction stays 180° from travel. That is the S5 defect again, reached through state
         // rather than through an unwindowed projection.
         val coordinator = TrailGuidanceCoordinator(TestScope())
-        coordinator.startFollow(polyline, TravelDirection.Forward)
+        coordinator.startFollow(points, TravelDirection.Forward)
         val active = activeAt(points.size - 1)
         val sample = fixOnReturnArm()
 
@@ -139,7 +139,7 @@ class GuidanceFromMatchTest {
         // reading the frozen value there — going blind on every momentary dropout would be worse
         // than steering by a position a few seconds old.
         val coordinator = TrailGuidanceCoordinator(TestScope())
-        coordinator.startFollow(polyline, TravelDirection.Forward)
+        coordinator.startFollow(points, TravelDirection.Forward)
 
         val course =
             assertNotNull(

@@ -163,7 +163,7 @@ class DensityEquivalenceTest {
         val polyline = TrailPolyline(points)
         val tracker = ProgressTracker(polyline)
         val coordinator = TrailGuidanceCoordinator(TestScope())
-        coordinator.startFollow(polyline, TravelDirection.Forward)
+        coordinator.startFollow(points, TravelDirection.Forward)
         // The last vertex is the same physical point at every density — densify preserves it — so
         // distance-to-target is comparable too, not just the continuous quantities.
         val active =

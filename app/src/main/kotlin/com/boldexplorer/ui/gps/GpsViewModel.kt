@@ -14,7 +14,6 @@ import com.boldexplorer.audio.AudioLogEntry
 import com.boldexplorer.audio.LastOutput
 import com.boldexplorer.audio.LiveRegionAnnouncement
 import com.boldexplorer.audio.OutputRouter
-import com.boldexplorer.audio.TrailMatcher
 import com.boldexplorer.compass.SensorCompassProvider
 import com.boldexplorer.location.BeaconAudioInputs
 import com.boldexplorer.location.GpsBackgroundMode
@@ -48,6 +47,8 @@ import com.boldexplorer.shared.navigation.NavigationTargetResolver
 import com.boldexplorer.shared.navigation.NearbyTrail
 import com.boldexplorer.shared.navigation.NearbyTrailResolver
 import com.boldexplorer.shared.navigation.TrailFollower
+import com.boldexplorer.shared.navigation.FixOutcome
+import com.boldexplorer.audio.trailMatchLogEntry
 import com.boldexplorer.shared.navigation.TravelDirection
 import com.boldexplorer.shared.navigation.TrailFollowerEvent
 import com.boldexplorer.shared.navigation.TrailFollowerState
@@ -484,16 +485,6 @@ class GpsViewModel
         val trailFollowState: StateFlow<TrailFollowerState> = trailFollower.state
         private var lastAdvancementReason: AdvancementReason? = null
 
-        /**
-         * Continuous matcher running beside [trailFollower] on the same fixes (ADR 0001, S4).
-         *
-         * Wrong-way detection is its one consumer (S5a); everything else still comes from
-         * [trailFollower] until S5. It also writes [AudioLogEntry.Kind.TRAIL_MATCH] records, which
-         * is what the Debug switch gates — not the matching itself. Null whenever no trail is being
-         * followed.
-         */
-        private var trailMatcher: TrailMatcher? = null
-
         // Guidance state + the off-trail/backtrack/ordinary-guidance detection state machine live in a
         // dedicated coordinator (pure, JVM-tested in :shared). It decides *whether* to alert; this
         // ViewModel performs the effects (TTS, audio event log, wrong-vector beep, on-screen text).
@@ -763,11 +754,11 @@ class GpsViewModel
             // Also handle auto-recording.
             viewModelScope.launch {
                 location.filterNotNull().collect { sample ->
-                    val smoothedHeading = guidanceCoordinator.updateTrustedCourse(sample)
-                    // Before the follower, deliberately: wrong-way detection now decides on this
-                    // fix's match (S5a), so the match has to exist by the time the detectors run.
-                    matchTrail(sample)
-                    announceTrailFollowerEvent(sample, smoothedHeading?.deg?.toFloat())
+                    // One call folds the trusted course and the match. Ordering used to be a
+                    // comment here; it is now inside the coordinator, where it cannot be skipped.
+                    val outcome = guidanceCoordinator.onFix(sample)
+                    recordMatch(sample, outcome)
+                    announceTrailFollowerEvent(sample, outcome.smoothedHeading?.deg?.toFloat())
                     // Drive CollectionExplorer on every fix; it is the primary navigator. When no
                     // collection is loaded its state is Idle and onLocationUpdate is a no-op.
                     val travelHeadingDeg = sample.heading?.takeIf { (sample.speed ?: 0.0) >= MIN_TRAVEL_HEADING_SPEED_MPS }
@@ -910,19 +901,14 @@ class GpsViewModel
                     }
                 _selectedTrailId.value = trailId
                 enterFollowing(trailId)
-                // The matcher takes the trail in RECORDED order and carries the traversal
-                // direction separately — deliberately not `ordered`, which is reversed in place.
-                // Reversing the point list would make alongTrackM session-relative and stop two
-                // walks of the same trail being comparable in the field logs.
-                val matcher =
-                    TrailMatcher(
-                        points = wps.map { LatLng(it.lat, it.lon) },
-                        direction = if (reversed) TravelDirection.Reverse else TravelDirection.Forward,
-                    )
-                trailMatcher = matcher
-                // Guidance shares that same polyline and direction, so the along-track the matcher
-                // confirms and the along-track guidance measures its course at are one coordinate.
-                guidanceCoordinator.startFollow(matcher.polyline, matcher.direction)
+                // RECORDED order, with the traversal direction carried separately — deliberately
+                // not `ordered`, which is reversed in place. Reversing the point list would make
+                // alongTrackM session-relative and stop two walks of the same trail being
+                // comparable in the field logs.
+                guidanceCoordinator.startFollow(
+                    points = wps.map { LatLng(it.lat, it.lon) },
+                    direction = if (reversed) TravelDirection.Reverse else TravelDirection.Forward,
+                )
                 if (loc != null) trailFollower.startNearest(points, loc, bearing) else trailFollower.start(points)
                 refreshTrailGuidanceFromLatestLocation(resetOrdinaryThrottle = true)
                 backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, true)
@@ -1012,17 +998,19 @@ class GpsViewModel
          * return the finished `AudioLogEntry`, so a 27-key map and three formatted strings were
          * assembled every fix and dropped on the next line.
          */
-        private fun matchTrail(sample: LocationSample) {
-            val matcher = trailMatcher ?: return
+        private fun recordMatch(
+            sample: LocationSample,
+            outcome: FixOutcome,
+        ) {
+            val match = outcome.match ?: return
+            val evidence = outcome.evidence ?: return
             if (trailFollower.state.value !is TrailFollowerState.Active) return
-            val match = matcher.onFix(sample)
             if (!shadowMatchMonitor.enabled.value) return
-            matcher.logEntryFor(sample, match)?.let { audioEventLog.append(it) }
+            audioEventLog.append(trailMatchLogEntry(sample, match, evidence))
             shadowMatchMonitor.record(match)
         }
 
         fun stopFollowTrail() {
-            trailMatcher = null
             shadowMatchMonitor.clear()
             trailFollower.stop()
             recordingMachine.stop()
@@ -1210,23 +1198,14 @@ class GpsViewModel
 
         private fun refreshTrailGuidanceFromLatestLocation(resetOrdinaryThrottle: Boolean = false) {
             val sample = location.value ?: return
-            // Acquire before the first guidance is computed, so the opening "Following X" cue names
-            // a direction measured where the matcher says the user is rather than falling back to
-            // segment geometry for want of a match.
-            //
-            // Only from a *fresh* fix. `location` is a StateFlow that keeps its last value
-            // indefinitely, so at follow-start this can be minutes old — and acquiring from it sets
-            // the tracker's last-confirmed timestamp to then, so the first live fix exceeds the
-            // reckoning horizon and drops it straight into Lost. It would need 25 m of corroborated
-            // displacement to recover, with wrong-way and windowed guidance unavailable meanwhile.
-            // A stale seed is worse than no seed: without one the matcher simply acquires on the
-            // first real fix. Found in review, 2026-08-15.
-            if (!isLocationStale(System.currentTimeMillis(), sample.timestamp)) matchTrail(sample)
+            // `location` keeps its last value indefinitely, so this fix can be minutes old; the
+            // coordinator declines to match a stale one rather than letting it set the tracker's
+            // clock. Passing the real clock is what lets it tell.
             guidanceCoordinator.refreshFromLocation(
                 trailFollower.state.value,
                 sample,
-                trailMatcher?.lastMatch,
                 resetOrdinaryThrottle,
+                nowMs = System.currentTimeMillis(),
             )
         }
 
@@ -1256,7 +1235,7 @@ class GpsViewModel
             ) {
                 is TrailFollowerEvent.WaypointReached -> {
                     val guidance =
-                        guidanceCoordinator.computeGuidance(trailFollower.state.value, sample, trailMatcher?.lastMatch)
+                        guidanceCoordinator.computeGuidance(trailFollower.state.value, sample)
                     val text = buildTrailAdvanceAnnouncement(event, guidance)
                     val reason = lastAdvancementReason
                     lastAdvancementReason = null
@@ -1299,7 +1278,7 @@ class GpsViewModel
 
                 null -> {
                     val followState = trailFollower.state.value
-                    val guidance = guidanceCoordinator.computeGuidance(followState, sample, trailMatcher?.lastMatch)
+                    val guidance = guidanceCoordinator.computeGuidance(followState, sample)
                     announceOrdinaryTrailGuidance(followState, sample, guidance)
                     announceOffTrail(followState, sample, guidance)
                     announceBacktrack(followState, sample, guidance)
@@ -1359,7 +1338,7 @@ class GpsViewModel
             guidance: TrailGuidanceState?,
         ) {
             val eval =
-                guidanceCoordinator.evaluateOffTrail(followState, sample, guidance, trailMatcher?.lastMatch) ?: return
+                guidanceCoordinator.evaluateOffTrail(followState, sample, guidance) ?: return
             viewModelScope.launch {
                 audioEventLog.append(
                     AudioLogEntry(
@@ -1393,12 +1372,7 @@ class GpsViewModel
             guidance: TrailGuidanceState?,
         ) {
             val eval =
-                guidanceCoordinator.evaluateBacktrack(
-                    followState,
-                    sample,
-                    guidance,
-                    trailMatcher?.lastMatch,
-                ) ?: return
+                guidanceCoordinator.evaluateBacktrack(followState, sample, guidance) ?: return
             viewModelScope.launch {
                 audioEventLog.append(
                     AudioLogEntry(

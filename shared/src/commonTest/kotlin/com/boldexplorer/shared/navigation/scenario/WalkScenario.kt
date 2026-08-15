@@ -117,8 +117,9 @@ class ScenarioResult(
 }
 
 /**
- * Replays a [WalkScenario] through the matcher and the guidance coordinator together, exactly as
- * `GpsViewModel` drives them: match first, then guidance, then the detectors.
+ * Replays a [WalkScenario] through the coordinator exactly as `GpsViewModel` drives it: `onFix`
+ * folds the course and the match, then guidance, then the detectors. Since the coordinator owns the
+ * session, this is now the same call sequence production makes rather than a reconstruction of it.
  *
  * The follower's target is pinned to the far end of the trail rather than advanced. `currentIndex`
  * is on its way out (ADR 0001, S7) and nothing asserted here depends on it — pinning keeps
@@ -132,9 +133,8 @@ object ScenarioRunner {
     ): ScenarioResult {
         val points = scenario.trailMetres.map { (east, north) -> offsetFromOrigin(northM = north, eastM = east) }
         val polyline = TrailPolyline(points)
-        val tracker = ProgressTracker(polyline, scenario.direction, tuning)
         val coordinator = TrailGuidanceCoordinator(TestScope())
-        coordinator.startFollow(polyline, scenario.direction)
+        coordinator.startFollow(points, scenario.direction, tuning)
 
         // Travel order, which is what the follower is given, so the pinned target is the end the
         // user is walking toward rather than the one behind them.
@@ -149,11 +149,10 @@ object ScenarioRunner {
         val steps =
             scenario.fixes.map { fix ->
                 val sample = fix.toSample()
-                val match: TrailMatch = tracker.onFix(sample)
-                coordinator.updateTrustedCourse(sample)
-                val guidance = coordinator.computeGuidance(active, sample, match)
-                val offTrail = coordinator.evaluateOffTrail(active, sample, guidance, match)
-                val backtrack = coordinator.evaluateBacktrack(active, sample, guidance, match)
+                val match: TrailMatch = coordinator.onFix(sample).match!!
+                val guidance = coordinator.computeGuidance(active, sample)
+                val offTrail = coordinator.evaluateOffTrail(active, sample, guidance)
+                val backtrack = coordinator.evaluateBacktrack(active, sample, guidance)
                 ScenarioStep(
                     fix = fix,
                     matchState = match.state,

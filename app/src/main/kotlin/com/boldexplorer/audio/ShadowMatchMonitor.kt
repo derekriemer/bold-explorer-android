@@ -21,8 +21,9 @@ data class ShadowMatchSnapshot(
  * On/off switch for per-fix trail-match **logging**, and the debug readout beside it.
  *
  * It gated the matching too until S5a, when wrong-way detection became a consumer of the match. A
- * switch that silently disables a navigation alert is not a logging switch, so [TrailMatcher] now
- * runs whenever a follow is active and this governs only what gets written.
+ * switch that silently disables a navigation alert is not a logging switch, so the matching runs
+ * whenever a follow is active — inside `TrailGuidanceCoordinator`'s session — and this governs only
+ * what gets written.
  *
  * ## Why there is a switch at all
  *

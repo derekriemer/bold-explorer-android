@@ -2,6 +2,7 @@ package com.boldexplorer.shared.navigation
 
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.haversineDistanceMeters
+import com.boldexplorer.shared.location.isLocationStale
 import com.boldexplorer.shared.model.LocationSample
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -60,13 +61,16 @@ class TrailGuidanceCoordinator(
     private var prevCrossTrackAtMs = 0L
 
     /**
-     * The followed trail in recorded order, and which way along it the user declared they are going.
+     * The trail being followed and its matcher, or null when no follow is active.
      *
-     * Set by [startFollow]. The single geometry every detector here measures against, shared with
-     * the matcher so `alongTrackM` means one thing app-wide.
+     * Owned rather than injected: see [FollowSession] for what went wrong when the caller assembled
+     * these pieces itself. Everything here that needs geometry, direction or a match reads it from
+     * this one place.
      */
-    private var followPolyline: TrailPolyline? = null
-    private var followDirection: TravelDirection = TravelDirection.Forward
+    private var session: FollowSession? = null
+
+    private val followDirection: TravelDirection
+        get() = session?.direction ?: TravelDirection.Forward
 
     // Backtrack detection.
     private var consecutiveBacktrackCount = 0
@@ -95,19 +99,46 @@ class TrailGuidanceCoordinator(
     fun courseIsSmoothed(): Boolean = lastTrustedCourse?.isSmoothed ?: false
 
     /**
-     * Adopt the followed trail's geometry for the session.
+     * Fold one GPS fix into the session: trusted course first, then the match.
      *
-     * Takes the polyline in **recorded order** with [direction] carried separately — the same
-     * instance the matcher holds, so `alongTrackM` means one thing across the whole app. The
-     * follower's own waypoint list is reversed in place for a reverse follow, which makes its
-     * along-track session-relative and incomparable with the match's.
+     * The single per-fix entry point, and the reason the detectors below can read the match rather
+     * than be handed one. Ordering used to be a comment at the call site — match before the
+     * follower, follower before the detectors — and a caller who got it wrong decided this fix on
+     * the previous fix's position, silently.
+     *
+     * A **stale** sample is folded into the course but not matched. `location` in the app is a
+     * StateFlow that keeps its last value indefinitely, so a caller refreshing guidance from the
+     * cached fix can hand over one that is minutes old; the tracker would take that timestamp as
+     * its last-confirmed time and declare itself Lost on the next real fix. That invariant belongs
+     * here, where elapsed time is already the unit of thought, rather than at each call site.
+     */
+    fun onFix(
+        sample: LocationSample,
+        nowMs: Long = sample.timestamp,
+    ): FixOutcome {
+        val smoothed = updateTrustedCourse(sample)
+        val active = session?.takeIf { !isLocationStale(nowMs, sample.timestamp) }
+        active?.onFix(sample)
+        return FixOutcome(smoothed, session?.lastMatch, session?.lastEvidence)
+    }
+
+    /**
+     * Begin following [points] in [direction] — the one way to start a follow.
+     *
+     * Takes the trail in **recorded order**, with direction carried separately, and builds the
+     * matcher itself. The follower's own waypoint list is reversed in place for a reverse follow,
+     * which makes its along-track session-relative and incomparable with the match's, so it is not
+     * what to pass here.
      */
     fun startFollow(
-        polyline: TrailPolyline,
+        points: List<LatLng>,
         direction: TravelDirection,
-    ) {
-        followPolyline = polyline
-        followDirection = direction
+        tuning: MatchTuning = MatchTuning.DEFAULT,
+    ) = adopt(FollowSession(points, direction, tuning))
+
+    /** Adopt a prepared session. Test seam: production goes through [startFollow]. */
+    internal fun adopt(followSession: FollowSession) {
+        session = followSession
         // Adopting a trail is the start of a session, so the detectors start over with it. This
         // used to be left to `resetThrottle`, which follow-start only reaches when there is a
         // cached fix to refresh guidance from — start a follow cold and the new trail inherited the
@@ -138,7 +169,7 @@ class TrailGuidanceCoordinator(
     fun computeGuidance(
         followState: TrailFollowerState,
         sample: LocationSample,
-        match: TrailMatch?,
+        match: TrailMatch? = session?.lastMatch,
     ): TrailGuidanceState? {
         // The desired course is a chord over a physical baseline, centred where the *windowed*
         // matcher says the user is. Both halves matter: the chord makes the answer density-
@@ -159,7 +190,7 @@ class TrailGuidanceCoordinator(
                 followState,
                 sample,
                 lastTrustedCourse,
-                followPolyline,
+                session?.polyline,
                 steerableAlongM,
                 followDirection,
             )
@@ -174,19 +205,18 @@ class TrailGuidanceCoordinator(
     fun refreshFromLocation(
         followState: TrailFollowerState,
         sample: LocationSample,
-        match: TrailMatch?,
         resetOrdinaryThrottle: Boolean = false,
+        nowMs: Long = sample.timestamp,
     ) {
-        updateTrustedCourse(sample)
-        computeGuidance(followState, sample, match)
+        onFix(sample, nowMs)
+        computeGuidance(followState, sample)
         if (resetOrdinaryThrottle) resetThrottle(sample)
     }
 
     /** Clear all guidance + detection state (trail follow stopped / completed). */
     fun clear() {
         _guidance.value = null
-        followPolyline = null
-        followDirection = TravelDirection.Forward
+        session = null
         lastOrdinaryGuidanceAtMs = Long.MIN_VALUE
         lastOrdinaryGuidanceLocation = null
         offTrailGraceUntilMs = 0L
@@ -246,7 +276,7 @@ class TrailGuidanceCoordinator(
         followState: TrailFollowerState,
         sample: LocationSample,
         guidance: TrailGuidanceState?,
-        match: TrailMatch?,
+        match: TrailMatch? = session?.lastMatch,
     ): OffTrailEvaluation? {
         if (followState !is TrailFollowerState.Active) return null
         if (sample.timestamp < offTrailGraceUntilMs) return null
@@ -395,7 +425,7 @@ class TrailGuidanceCoordinator(
         followState: TrailFollowerState,
         sample: LocationSample,
         guidance: TrailGuidanceState?,
-        match: TrailMatch?,
+        match: TrailMatch? = session?.lastMatch,
     ): BacktrackEvaluation? {
         if (followState !is TrailFollowerState.Active) return null
         if (sample.timestamp < backtrackGraceUntilMs) return null

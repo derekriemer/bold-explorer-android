@@ -39,12 +39,13 @@ class OffTrailCrossTrackTest {
      */
     private inner class Harness {
         val coordinator = TrailGuidanceCoordinator(TestScope())
-        private val polyline = TrailPolyline(active.waypoints.map { LatLng(it.lat, it.lon) })
+        private val points = active.waypoints.map { LatLng(it.lat, it.lon) }
+        private val polyline = TrailPolyline(points)
         private val tracker = ProgressTracker(polyline)
         private var acquired = false
 
         init {
-            coordinator.startFollow(polyline, TravelDirection.Forward)
+            coordinator.startFollow(points, TravelDirection.Forward)
         }
 
         fun resetThrottle(sample: LocationSample) = coordinator.resetThrottle(sample)

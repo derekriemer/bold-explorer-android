@@ -91,7 +91,7 @@ class OffTrailFromMatchTest {
         // 30 m off the arm the user is on is past the match gate at 5 m accuracy, so the tracker is
         // Uncertain. That is precisely the condition the alert exists to report.
         val c = coordinator()
-        c.startFollow(polyline, TravelDirection.Forward)
+        c.startFollow(points, TravelDirection.Forward)
 
         val evals =
             (0..4).mapNotNull { i ->
@@ -111,7 +111,7 @@ class OffTrailFromMatchTest {
         // point on the whole trail, which is a *lower bound* on how far off they are: if even that
         // exceeds the gate, they are off trail, and saying so cannot be a false positive.
         val c = coordinator()
-        c.startFollow(polyline, TravelDirection.Forward)
+        c.startFollow(points, TravelDirection.Forward)
 
         val evals =
             (0..6).mapNotNull { i ->
@@ -126,7 +126,7 @@ class OffTrailFromMatchTest {
         // A `Lost` fix inside the rescan cooldown carries no candidate. There is genuinely no
         // cross-track to report then, and inventing one would mean projecting unwindowed again.
         val c = coordinator()
-        c.startFollow(polyline, TravelDirection.Forward)
+        c.startFollow(points, TravelDirection.Forward)
 
         val eval =
             assertNotNull(
@@ -140,7 +140,7 @@ class OffTrailFromMatchTest {
     @Test
     fun withNoMatchAtAllThereIsNoCrossTrack() {
         val c = coordinator()
-        c.startFollow(polyline, TravelDirection.Forward)
+        c.startFollow(points, TravelDirection.Forward)
 
         val eval = assertNotNull(c.evaluateOffTrail(active, sample(100_000L), guidance(), null))
 
@@ -154,7 +154,7 @@ class OffTrailFromMatchTest {
         // re-arms the alert, and under degraded GPS the ladder flaps often enough to do that
         // repeatedly — fire, one gap, two over-gate fixes, fire again, about every three seconds.
         val c = coordinator()
-        c.startFollow(polyline, TravelDirection.Forward)
+        c.startFollow(points, TravelDirection.Forward)
 
         val fired =
             (0..4)
@@ -181,8 +181,8 @@ class OffTrailFromMatchTest {
         // The sign is "right of travel", and travel reverses. A user to the right of the recorded
         // direction is to the *left* of a reverse walk; the logged sign has to say so, since it is
         // what a field log is read for.
-        val forward = coordinator().also { it.startFollow(polyline, TravelDirection.Forward) }
-        val reverse = coordinator().also { it.startFollow(polyline, TravelDirection.Reverse) }
+        val forward = coordinator().also { it.startFollow(points, TravelDirection.Forward) }
+        val reverse = coordinator().also { it.startFollow(points, TravelDirection.Reverse) }
 
         val f = assertNotNull(forward.evaluateOffTrail(active, sample(100_000L), guidance(), matchWith(MatchState.Matched, 12.0)))
         val r = assertNotNull(reverse.evaluateOffTrail(active, sample(100_000L), guidance(), matchWith(MatchState.Matched, 12.0)))
@@ -194,7 +194,7 @@ class OffTrailFromMatchTest {
     @Test
     fun theMagnitudeIsWhatGatesRegardlessOfSide() {
         val c = coordinator()
-        c.startFollow(polyline, TravelDirection.Reverse)
+        c.startFollow(points, TravelDirection.Reverse)
 
         val evals =
             (0..4).mapNotNull { i ->

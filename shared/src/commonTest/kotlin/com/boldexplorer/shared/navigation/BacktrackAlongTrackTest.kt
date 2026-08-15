@@ -63,13 +63,12 @@ class BacktrackAlongTrackTest {
         distanceM: (Int) -> Double = { 100.0 + it * 10.0 },
     ): List<BacktrackEvaluation> {
         val c = coordinator()
-        val polyline = TrailPolyline(points)
-        val tracker = ProgressTracker(polyline, direction)
         val active = activeFor(points)
-        c.startFollow(polyline, direction)
+        c.startFollow(points, direction)
         c.resetThrottle(fixes.first().copy(timestamp = 0L))
         return fixes.mapIndexedNotNull { i, fix ->
-            c.evaluateBacktrack(active, fix, guidanceWithDistance(distanceM(i)), tracker.onFix(fix))
+            c.onFix(fix)
+            c.evaluateBacktrack(active, fix, guidanceWithDistance(distanceM(i)))
         }
     }
 
@@ -206,7 +205,7 @@ class BacktrackAlongTrackTest {
         val c = coordinator()
         val points = densify(northShape(400.0), spacingM = 5.0)
         val active = activeFor(points)
-        c.startFollow(TrailPolyline(points), TravelDirection.Forward)
+        c.startFollow(points, TravelDirection.Forward)
         val sample = sampleAt(northM = 100.0, eastM = 0.0, timestampMs = 100_000L)
         c.resetThrottle(sample.copy(timestamp = 0L))
 
@@ -240,7 +239,7 @@ class BacktrackAlongTrackTest {
         val c = coordinator()
         val points = densify(northShape(400.0), spacingM = 5.0)
         val active = activeFor(points)
-        c.startFollow(TrailPolyline(points), TravelDirection.Forward)
+        c.startFollow(points, TravelDirection.Forward)
         val sample = sampleAt(northM = 100.0, eastM = 0.0, timestampMs = 100_000L)
         c.resetThrottle(sample.copy(timestamp = 0L))
 
@@ -280,7 +279,7 @@ class BacktrackAlongTrackTest {
         val c = coordinator()
         val points = densify(northShape(400.0), spacingM = 5.0)
         val active = activeFor(points)
-        c.startFollow(TrailPolyline(points), TravelDirection.Forward)
+        c.startFollow(points, TravelDirection.Forward)
         c.resetThrottle(sampleAt(northM = 100.0, eastM = 0.0, timestampMs = 0L))
 
         val evals =
@@ -309,7 +308,7 @@ class BacktrackAlongTrackTest {
         val c = coordinator()
         val points = densify(northShape(400.0), spacingM = 5.0)
         val active = activeFor(points)
-        c.startFollow(TrailPolyline(points), TravelDirection.Forward)
+        c.startFollow(points, TravelDirection.Forward)
         c.resetThrottle(sampleAt(northM = 100.0, eastM = 0.0, timestampMs = 0L))
 
         val evals =
@@ -330,7 +329,7 @@ class BacktrackAlongTrackTest {
         val c = coordinator()
         val points = densify(northShape(400.0), spacingM = 5.0)
         val active = activeFor(points)
-        c.startFollow(TrailPolyline(points), TravelDirection.Forward)
+        c.startFollow(points, TravelDirection.Forward)
         c.resetThrottle(sampleAt(northM = 100.0, eastM = 0.0, timestampMs = 0L))
 
         val eval =
@@ -351,7 +350,7 @@ class BacktrackAlongTrackTest {
         val c = coordinator()
         val points = densify(northShape(400.0), spacingM = 5.0)
         val active = activeFor(points)
-        c.startFollow(TrailPolyline(points), TravelDirection.Forward)
+        c.startFollow(points, TravelDirection.Forward)
         val sample = sampleAt(northM = 100.0, eastM = 0.0, timestampMs = 100_000L)
         c.resetThrottle(sample.copy(timestamp = 0L))
 

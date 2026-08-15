@@ -344,9 +344,9 @@ false positive — was found in field data and only then reduced to a synthetic 
 itself belongs in the suite.
 
 `shared/src/commonTest/.../navigation/scenario/` holds `WalkScenario` (the harness), one object per
-recorded session, and `RecordedWalkTest`. `ScenarioRunner` drives `ProgressTracker` and
-`TrailGuidanceCoordinator` together exactly as `GpsViewModel` does — match, then guidance, then the
-detectors — and returns a decision per fix.
+recorded session, and `RecordedWalkTest`. `ScenarioRunner` drives `TrailGuidanceCoordinator` with
+the same call sequence `GpsViewModel` makes — `startFollow`, then per fix `onFix` (course + match),
+guidance, detectors — and returns a decision per fix.
 
 **Fixtures contain no coordinates.** `tools/build-scenario.py` converts everything to metres in a
 local frame, rotates it by a per-scenario angle and re-anchors on a synthetic origin; names, marker
