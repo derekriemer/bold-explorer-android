@@ -22,8 +22,8 @@ import com.boldexplorer.shared.navigation.TravelDirection
  * walk is known to have been.
  *
  * ```
- *     0s  TRAIL_STARTED: [suppressed] Following <trail>. Checkpoint 1 of 46. 41 feet.
- *   856s  TRAIL_COMPLETED: [suppressed] Trail complete
+ *     0s  TRAIL_STARTED: [via live region] Following <trail>. Checkpoint 1 of 46. 41 feet.
+ *   856s  TRAIL_COMPLETED: [via live region] Trail complete
  * ```
  *
  * Regenerate with `tools/build-scenario.py`.

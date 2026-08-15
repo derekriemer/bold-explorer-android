@@ -22,10 +22,10 @@ import com.boldexplorer.shared.navigation.TravelDirection
  * walk is known to have been.
  *
  * ```
- *     0s  TRAIL_STARTED: [suppressed] Following <trail> in reverse. Checkpoint 257 of 337. 9 feet, sharp left.
- *   846s  OFF_TRAIL_ALERT: [suppressed] You may be off trail.
- *   870s  OFF_TRAIL_ALERT: [suppressed] You may be off trail.
- *   887s  TRAIL_COMPLETED: [suppressed] Trail complete
+ *     0s  TRAIL_STARTED: [via live region] Following <trail> in reverse. Checkpoint 257 of 337. 9 feet, sharp left.
+ *   846s  OFF_TRAIL_ALERT: [via live region] You may be off trail.
+ *   870s  OFF_TRAIL_ALERT: [via live region] You may be off trail.
+ *   887s  TRAIL_COMPLETED: [via live region] Trail complete
  * ```
  *
  * Regenerate with `tools/build-scenario.py`.

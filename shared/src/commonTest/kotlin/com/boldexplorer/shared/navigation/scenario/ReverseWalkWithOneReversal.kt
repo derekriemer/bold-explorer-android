@@ -24,10 +24,10 @@ import com.boldexplorer.shared.navigation.TravelDirection
  * walk is known to have been.
  *
  * ```
- *     0s  TRAIL_STARTED: [suppressed] Following <trail> in reverse. Checkpoint 9 of 139. 3 feet, straight ahead.
+ *     0s  TRAIL_STARTED: [via live region] Following <trail> in reverse. Checkpoint 9 of 139. 3 feet, straight ahead.
  *   495s  ORDINARY_GUIDANCE: Checkpoint 61 of 139. 177 feet, sharp left.
  *   495s  BACKTRACK_ALERT: You may be going the wrong way.
- *   496s  OFF_TRAIL_ALERT: [suppressed] You may be off trail.
+ *   496s  OFF_TRAIL_ALERT: [via live region] You may be off trail.
  *  1108s  TRAIL_COMPLETED: Trail complete
  * ```
  *

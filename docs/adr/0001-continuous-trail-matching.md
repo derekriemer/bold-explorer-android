@@ -552,9 +552,21 @@ names, in the one place where being wrong steers the user directly. Measured by 
 against the shipped rule:
 
 ```
-  walk1_session3_trail12_reverse    5.6% of Matched fixes, spoken direction ≥45° wrong
-  walk2_session2_trail12_reverse   17.1% of Matched fixes, worst cases 162°
+                                    real GPS          injected degradation
+  walk1_session1_trail7_reverse       0 / 106            —
+  walk1_session2_trail12_forward      0 / 984            —
+  walk1_session3_trail12_reverse     15 / 213  = 7.0%    0 / 56
+  walk2_session1_trail12_forward      0 / 120            —
+  walk2_session2_trail12_reverse      0 /  22           18 / 83  = 21.7%
+                                                        (worst cases 162°)
 ```
+
+Read the split, not the total. **The defect is real on clean GPS**: 7.0% of `Matched` fixes on
+walk 1 session 3, at ~3.5 m reported accuracy, had the spoken direction 45° or more from the truth.
+The larger-looking 21.7% is entirely inside a span where accuracy was *injected* at 25 m by the debug
+degradation feature (#62, canyon preset), which the owner's marker at 16:07:13 declares — "fixes from
+here are deliberately degraded; readings are not real". Quoting the combined figure would have
+credited simulated conditions with finding a defect that clean GPS shows on its own.
 
 `desiredTrailCourseDeg` and `evaluateOffTrail` now both read the match and never re-derive position.
 Three things this forced that the decision above did not anticipate:
@@ -593,8 +605,17 @@ Same family as the `acquire()` question below, and it wants the same field walk.
 projection, distinct from the `currentIndex` hazard noted in S5, and unlike that one it is
 mis-firing **today**.
 
-Field evidence, 2026-08-12, walk 2 at 16:07 under 25 m reported accuracy. The owner was ~120 m along
-a trail that doubles back, leaving him physically 11–18 m from the trail's own **start**:
+Field evidence, 2026-08-12, walk 2 at 16:07. The owner was ~120 m along a trail that doubles back,
+leaving him physically 11–18 m from the trail's own **start**.
+
+**Read the conditions honestly** (corrected 2026-08-15, when the full export was recovered). The 25 m
+accuracy here was **injected**, not observed: the debug degradation feature (#62) was switched on at
+16:07:14, one second after the owner's marker saying "fixes from here are deliberately degraded;
+readings are not real". That does not weaken the mechanism — an unwindowed projection snapping to the
+trail head is a property of the geometry, and 25 m accuracy is an ordinary canyon reading, which is
+what the preset simulates — but it does mean this table shows a hazard *reproduced on demand* rather
+than one caught in the wild. The same defect does appear on clean GPS: see the 7.0% figure under S5's
+guidance half, from walk 1 session 3 at ~3.5 m accuracy.
 
 ```
               live (unwindowed)     shadow (windowed)
@@ -606,10 +627,18 @@ a trail that doubles back, leaving him physically 11–18 m from the trail's own
 ```
 
 The unwindowed projection snapped to the trail head, read as a 113 m regression, counted to three and
-announced "you may be going the wrong way". The windowed matcher, given the identical fixes, never
-left ~113 m — 0 was not in its window. This is the switchback teleport the window exists to prevent,
-observed on real geometry, with a wrong announcement the owner heard as the consequence. It is the
-clearest field evidence in this document that the redesign is load-bearing rather than tidier.
+announced "you may be going the wrong way" at 16:07:54. The windowed matcher, given the identical
+fixes, never left ~113 m — 0 was not in its window. This is the switchback teleport the window exists
+to prevent, observed on real geometry, and the clearest demonstration in this document that the
+redesign is load-bearing rather than tidier.
+
+The owner heard it. Worth stating explicitly, because the log's own wording says otherwise and
+briefly fooled this document: the entry reads `Suppressed: 'You may be going the wrong way.'`, and
+all 38 announcements in the session read the same way. `Suppressed` there is
+`OutputDisposition.LIVE_REGION_ONLY` (`OutputRouter.kt:108`) — the app skipped its *own* TTS because
+the text went to a Compose live region for TalkBack to speak, which is what it deliberately does
+while in the foreground so it does not talk over the screen reader. Only
+`Suppressed (silence mode)` means nothing was heard.
 
 Note what it is *not*: two other "wrong way" alerts on the same day had different causes — one was a
 genuine backtrack correctly reported, and one was an artifact of the stray waypoint described in S5b,
@@ -1022,6 +1051,20 @@ Every one of those is `Matched` on a windowed scan. The user was standing still.
 accuracy the *confirmed* along-track wanders 4–12 m between fixes, and three consecutive wanders in
 the same direction is an ordinary outcome of noise, not evidence of travel.
 
+**Provenance, corrected 2026-08-15** when the full export was recovered: this window is inside the
+span where accuracy was **injected** at 25 m by the debug degradation feature (#62, canyon preset),
+switched on at 16:07:14. So the one false positive this amendment removes was produced under
+simulated conditions, not observed in the wild — and across the whole corpus it is the *only* alert
+the change removes. Two consequences worth stating rather than burying:
+
+- The reasoning still holds on its own terms. A flat 2 m floor is a walking pace at 1 Hz, so it
+  cannot survive any regime where the position noise exceeds that, simulated or not; and 25 m is an
+  ordinary canyon reading, which is precisely what the preset exists to reproduce.
+- But `BACKTRACK_NOISE_ACCURACY_FACTOR` is tuned against a **degradation model**, not against
+  measured GPS. Nothing in the corpus tests it at genuinely-observed poor accuracy, because no walk
+  yet recorded has any. Treat 0.5 as provisional until a walk produces real degraded fixes, and do
+  not quote the sweep as evidence that it is *right* — only that it changes nothing else.
+
 `BACKTRACK_NOISE_FLOOR_M` was the only threshold left in this rule that did not scale with
 conditions — a flat 2 m, which is a walking pace at 1 Hz and well inside the noise of a poor fix.
 That is the same "constant that does not scale to the situation" failure this ADR exists to remove,
@@ -1053,10 +1096,17 @@ Swept over all 2110 corpus fixes, with the 45 s alert cooldown applied:
 | walk2 s2 trail 12 reverse | **16:07:35** | — |
 
 The three surviving alerts are all sustained regression at walking pace under 2.5–3.4 m accuracy —
-ten or more seconds of consistent backwards movement, which is what the announcement is for. Note
-what cannot be checked: the corpus lost the announcement records with the original exports, so
-whether those three were *heard* in the field, and whether they were right, is not recoverable.
-Field verification of the new behaviour is therefore a walk, not a replay.
+ten or more seconds of consistent backwards movement, which is what the announcement is for, and all
+three are on **real** GPS. The one removed is the injected-degradation case above.
+
+What can now be checked, and what still cannot (updated 2026-08-15): walk 2's full export has been
+recovered, so its announcements and the owner's markers are available again. Walk 1's has not, though
+its alert timeline was reconstructed from session transcripts — 3 wrong-way, 20 off-trail, with times
+— and lives in the corpus as `RECOVERED-LABELS.md`. Against it, today's rule reproduces the
+01:10:19 wrong-way (firing at 01:10:18), is silent at 01:37:27 and 01:37:46 where the old build fired
+twice, and fires at 01:32:12 where it did not. Whether those differences are improvements is not
+settled by the log: the markers that would say are in the export still missing. Field verification of
+the new behaviour is therefore still a walk, not a replay.
 
 ## Revisions since first draft
 
