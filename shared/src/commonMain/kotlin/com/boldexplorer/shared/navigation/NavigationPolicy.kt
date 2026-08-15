@@ -15,20 +15,18 @@ import kotlin.math.min
  * Grouping every threshold here, banner-per-decision, makes that kind of accidental reuse visible
  * at a glance instead of requiring a cross-file audit to notice.
  *
- * This file is a pure by-reference relocation: every value below is numerically identical to the
- * constant it replaced. Do not retune values here without a separate, deliberate change.
+ * **Not all of this file is a relocation, and the difference matters.** It began as one — the
+ * proximity, reach, trail-approach, heading-penalty, near-trail and follower-advancement constants
+ * are numerically identical to the ones they replaced, and must not be retuned without a separate,
+ * deliberate change. Everything under the off-trail, completion, course-baseline, reacquisition and
+ * backtrack-noise banners was introduced or changed here, so a reader must not assume unchanged
+ * behaviour for those. `OFF_TRAIL_CONSECUTIVE_THRESHOLD = 2` in particular became a
+ * `FAST = 2` / `SLOW = 5` pair, which is a behaviour change wearing a relocation's clothes.
  */
 object NavigationPolicy {
     // ── Accuracy-aware threshold shapes ──────────────────────────────────────────────────────
     // Two shapes, opposite directions — see each KDoc for which decisions use which.
 
-    /**
-     * An accuracy-aware threshold that WIDENS with uncertainty, bounded by [capM].
-     *
-     * For gates where poor GPS should yield fewer confident decisions (off-trail, near-trail): a
-     * wider gate means fewer alerts. The cap is what stops an implausible accuracy report from
-     * disabling the check entirely.
-     */
     /**
      * Sentinel cap meaning "this gate is deliberately still unbounded".
      *
@@ -43,6 +41,13 @@ object NavigationPolicy {
      */
     const val UNBOUNDED_CAP_M = Double.MAX_VALUE
 
+    /**
+     * An accuracy-aware threshold that WIDENS with uncertainty, bounded by [capM].
+     *
+     * For gates where poor GPS should yield fewer confident decisions (off-trail, near-trail): a
+     * wider gate means fewer alerts. The cap is what stops an implausible accuracy report from
+     * disabling the check entirely.
+     */
     fun widenWithAccuracy(
         baseM: Double,
         factor: Double,
