@@ -76,7 +76,14 @@ class ScenarioResult(
     val backtrackAlerts: List<ScenarioStep> get() = steps.filter { it.backtrackFired }
 
     val matchedFraction: Double
-        get() = steps.count { it.matchState == MatchState.Matched }.toDouble() / steps.size
+        get() = matchedFractionIn(0L..Long.MAX_VALUE)
+
+    /** Matched share over a time window, so a hard span can be judged apart from an easy one. */
+    fun matchedFractionIn(windowMs: LongRange): Double {
+        val inWindow = steps.filter { it.fix.tMs in windowMs }
+        if (inWindow.isEmpty()) return 0.0
+        return inWindow.count { it.matchState == MatchState.Matched }.toDouble() / inWindow.size
+    }
 
     /** Along-track actually confirmed over the walk, as a fraction of the trail's length. */
     val coverageFraction: Double

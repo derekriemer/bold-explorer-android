@@ -102,6 +102,60 @@ class RecordedWalkTest {
         )
     }
 
+    // ── Walks the owner labelled while walking them (2026-08-12) ──────────────────
+
+    @Test
+    fun aDeliberateExcursionOffTheTrailIsReported() {
+        // 01:19:33, mid-walk: "making a big old loop off trail. Will be back on earlier stretch
+        // eventually". The user left the trail on purpose and said so, so the eleven alerts the
+        // build of the day produced from 1458s onward were right. This is the one scenario here
+        // that asserts an alert *must* happen on real geometry.
+        val result = ScenarioRunner.run(DeliberateOffTrailLoop)
+        val excursion = 1_450_000L..2_100_000L
+
+        val during = result.offTrailAlerts.filter { it.fix.tMs in excursion }
+        assertTrue(
+            during.isNotEmpty(),
+            "the user was deliberately off trail here and heard about it; we said nothing. " +
+                "alerts anywhere: ${result.offTrailAlerts.map { it.fix.tMs / 1000 }}",
+        )
+    }
+
+    @Test
+    fun theMarkedFalseWrongWayAlertsAreNotReproduced() {
+        // 01:37:40, mid-walk: "weird wrong way fired". Two wrong-way alerts eight seconds apart —
+        // 422s and 441s here — inside a span where accuracy was deliberately degraded to 25 m. The
+        // user called them wrong at the time, which is as close to ground truth as this corpus gets.
+        val result = ScenarioRunner.run(DegradedReverseFalseAlarms)
+        val degraded = 371_000L..463_000L
+
+        val during = result.backtrackAlerts.filter { it.fix.tMs in degraded }
+        assertTrue(
+            during.isEmpty(),
+            "reproduced a wrong-way alert the user called wrong:\n" + during.joinToString("\n") { result.around(it) },
+        )
+    }
+
+    @Test
+    fun theDegradedWalkStillReportsBeingOffTheLine() {
+        // The companion to the assertion above, which silence alone would satisfy. The owner spent
+        // this session deliberately provoking switchback drift: cross-track runs to 20 m at p90 and
+        // 35 m at its worst *while matched*, and the build of the day announced off-trail six times.
+        // Being off the line is the one thing this walk unambiguously was, so we have to say so.
+        val result = ScenarioRunner.run(DegradedReverseFalseAlarms)
+
+        assertTrue(
+            result.offTrailAlerts.isNotEmpty(),
+            "a walk that spent minutes 20-35 m off the line produced no off-trail alert",
+        )
+    }
+
+    // Deliberately not asserted on this scenario: match rate and coverage. Measured at 52% matched
+    // and 35% of the trail covered, and both are the honest answer rather than a defect — the owner
+    // was standing around a switchback provoking drift, then degrading the fixes, so `Uncertain` is
+    // what the ladder is *for*. A threshold here would be a judgement about the walk, not the code,
+    // and would break the moment someone tuned the matcher in a way this session happens to dislike.
+
     @Test
     fun aWalkPushedOffTheTrailDoesAlert() {
         // Guards the three assertions above, which are all of the form "no alert" and would pass
@@ -130,7 +184,8 @@ class RecordedWalkTest {
     fun everyScenarioProducesADecisionForEveryFix() {
         // Guards the harness rather than the code. A scenario that silently produced no steps, or
         // no guidance, would satisfy every "no alert" assertion above while testing nothing.
-        for (scenario in listOf(ReverseWalkWithOneReversal, CleanForwardWalk, LakeLoopReverse)) {
+        val all = listOf(ReverseWalkWithOneReversal, CleanForwardWalk, LakeLoopReverse, DeliberateOffTrailLoop, DegradedReverseFalseAlarms)
+        for (scenario in all) {
             val result = ScenarioRunner.run(scenario)
             assertEquals(scenario.fixes.size, result.steps.size, "${scenario.label}: steps lost")
             assertTrue(

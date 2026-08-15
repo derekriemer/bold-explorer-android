@@ -39,6 +39,7 @@ import datetime as _dt
 import hashlib
 import json
 import math
+import os
 import re
 import sys
 import textwrap as _textwrap
@@ -177,11 +178,38 @@ def rotation_for(name: str) -> float:
     return int(digest[:8], 16) % 360
 
 
+def fix_of(row: dict) -> dict | None:
+    """One GPS fix from a log row, whichever schema wrote it, or None if the row carries no position.
+
+    v1 puts the position at the top level on most row kinds. v2 moved it into `extra` and writes it
+    on `TRAIL_MATCH` rows only, so a v2 announcement has no position of its own — which is why
+    scenarios are built from the fix stream and announcements are only ever context.
+    """
+    if row.get("userLat") is not None and row.get("userLng") is not None:
+        return {
+            "lat": float(row["userLat"]),
+            "lon": float(row["userLng"]),
+            "acc": row.get("userAccuracy_m"),
+            "speed": row.get("userSpeed_ms"),
+            "course": row.get("userHeading"),
+        }
+    extra = row.get("extra") or {}
+    if row.get("kind") == "TRAIL_MATCH" and extra.get("lat") is not None:
+        return {
+            "lat": float(extra["lat"]),
+            "lon": float(extra["lon"]),
+            "acc": extra.get("acc_m"),
+            "speed": extra.get("speed_mps"),
+            "course": extra.get("course_deg"),
+        }
+    return None
+
+
 def collect_fixes(session: Session) -> list[dict]:
     seen: set[int] = set()
     out = []
     for row in session.rows:
-        if row.get("userLat") is None or row.get("userLng") is None:
+        if fix_of(row) is None:
             continue
         ts = row.get("ts")
         if ts in seen:
@@ -189,6 +217,21 @@ def collect_fixes(session: Session) -> list[dict]:
         seen.add(ts)
         out.append(row)
     return out
+
+
+def read_gpx(path: str) -> list[tuple[float, float]]:
+    """Trail geometry from an exported GPX, in **recorded** order.
+
+    Read at *generation* time and baked into the fixture as scrubbed metres. The fixture must stay
+    self-contained: these tests run in CI and on machines that have never seen the corpus, so a
+    runtime dependency on a file in someone's home directory would make them pass only here. It also
+    keeps real geometry out of the repo, which is the same reason the fixes are transformed.
+    """
+    text = open(path).read()
+    points = [(float(a), float(b)) for a, b in re.findall(r'<trkpt[^>]*lat="([-\d.]+)"[^>]*lon="([-\d.]+)"', text)]
+    if not points:
+        points = [(float(a), float(b)) for a, b in re.findall(r'<wpt[^>]*lat="([-\d.]+)"[^>]*lon="([-\d.]+)"', text)]
+    return points
 
 
 def baseline_timeline(session: Session) -> list[tuple[int, str, str]]:
@@ -310,6 +353,13 @@ def main() -> None:
     parser.add_argument("--package", default="com.boldexplorer.shared.navigation.scenario")
     parser.add_argument("--description", default="A recorded walk, replayed against the navigation core.")
     parser.add_argument("--rotate-deg", type=float, help="override the derived rotation")
+    parser.add_argument(
+        "--trail-gpx",
+        help="take trail geometry from this GPX instead of the log's targets. Required for v2 logs "
+        "(20260812 onwards), which record no targetIndex. Read at generation time and baked into "
+        "the fixture as scrubbed metres, so the fixture stays self-contained and the GPX stays out "
+        "of the repo.",
+    )
     args = parser.parse_args()
 
     rows = load(args.log)
@@ -341,9 +391,18 @@ def main() -> None:
     if session is None:
         parser.error(f"no session {args.session}")
 
-    trail_ll, first_index, last_index = reconstruct_trail(session)
+    if args.trail_gpx:
+        # v2 logs carry no targetIndex, so the geometry cannot come from the log. The GPX is the
+        # trail in recorded order — not follower order — so it is never reversed below.
+        trail_ll = read_gpx(os.path.expanduser(args.trail_gpx))
+        first_index, last_index = 0, len(trail_ll) - 1
+        trail_from_gpx = True
+    else:
+        trail_ll, first_index, last_index = reconstruct_trail(session)
+        trail_from_gpx = False
     if len(trail_ll) < 2:
-        parser.error(f"session {args.session} targeted {len(trail_ll)} waypoint(s); too few to be a trail")
+        where = "the GPX" if trail_from_gpx else f"session {args.session}'s targets"
+        parser.error(f"{where} yielded {len(trail_ll)} point(s); too few to be a trail")
 
     fix_rows = collect_fixes(session)
     if not fix_rows:
@@ -356,25 +415,29 @@ def main() -> None:
     rotation_deg = args.rotate_deg if args.rotate_deg is not None else rotation_for(args.name)
 
     trail_m = rotate(to_local(trail_ll, lat0, lon0), rotation_deg)
-    fix_m = rotate(to_local([(float(r["userLat"]), float(r["userLng"])) for r in fix_rows], lat0, lon0), rotation_deg)
+    fix_m = rotate(to_local([(fix_of(r)["lat"], fix_of(r)["lon"]) for r in fix_rows], lat0, lon0), rotation_deg)
 
     # A reverse follow hands the follower a reversed waypoint list, so the reconstruction is in
     # travel order. TrailPolyline is always in recorded order, with direction carried separately.
-    if session.reversed_follow:
+    # A reverse follow hands the follower a reversed waypoint list, so a target-reconstructed trail
+    # comes out in travel order and has to be flipped back. A GPX is already in recorded order.
+    if session.reversed_follow and not trail_from_gpx:
         trail_m = list(reversed(trail_m))
 
-    fixes = [
-        Fix(
-            t_ms=row["ts"] - session.start_ms,
-            east_m=east,
-            north_m=north,
-            accuracy_m=row.get("userAccuracy_m"),
-            speed_mps=row.get("userSpeed_ms"),
-            # Course rotates with the frame, like every other bearing here.
-            course_deg=(float(row["userHeading"]) + rotation_deg) % 360 if row.get("userHeading") is not None else None,
+    fixes = []
+    for row, (east, north) in zip(fix_rows, fix_m):
+        f = fix_of(row)
+        fixes.append(
+            Fix(
+                t_ms=row["ts"] - session.start_ms,
+                east_m=east,
+                north_m=north,
+                accuracy_m=f["acc"],
+                speed_mps=f["speed"],
+                # Course rotates with the frame, like every other bearing here.
+                course_deg=(float(f["course"]) + rotation_deg) % 360 if f["course"] is not None else None,
+            )
         )
-        for row, (east, north) in zip(fix_rows, fix_m)
-    ]
 
     source_label = f"{_dt.datetime.fromtimestamp(session.start_ms / 1000):%Y-%m-%d}"
     text = kotlin_fixture(
