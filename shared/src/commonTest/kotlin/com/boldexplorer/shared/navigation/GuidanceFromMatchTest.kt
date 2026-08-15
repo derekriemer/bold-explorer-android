@@ -2,6 +2,7 @@ package com.boldexplorer.shared.navigation
 
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.deltaAngle
+import kotlinx.coroutines.test.TestScope
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertNotNull
@@ -106,6 +107,74 @@ class GuidanceFromMatchTest {
             "under Reverse the user walks up the return arm, heading north; guidance said $course",
         )
     }
+
+    @Test
+    fun aFrozenPositionStopsSteeringOnceTheMatchIsLost() {
+        // `confirmedAlongM` keeps its value through `Uncertain` and `Lost` — that is deliberate, and
+        // the dog fixture depends on it. But a value frozen 90 seconds ago on the *outbound* arm
+        // must not still be choosing which way to point: the chord gets taken there, and the spoken
+        // direction stays 180° from travel. That is the S5 defect again, reached through state
+        // rather than through an unwindowed projection.
+        val coordinator = TrailGuidanceCoordinator(TestScope())
+        coordinator.startFollow(polyline, TravelDirection.Forward)
+        val active = activeAt(points.size - 1)
+        val sample = fixOnReturnArm()
+
+        val stale = matchOnOutboundArm(MatchState.Lost)
+        val course =
+            assertNotNull(
+                coordinator.computeGuidance(active, sample, stale)?.desiredCourseDeg,
+                "guidance must still be produced",
+            )
+
+        assertTrue(
+            abs(deltaAngle(0.0, course)) > 90.0,
+            "a Lost match froze the course on the outbound arm; guidance said $course",
+        )
+    }
+
+    @Test
+    fun anUncertainMatchStillSteers() {
+        // The other half. `Uncertain` is a brief gap, and the ADR is explicit that consumers keep
+        // reading the frozen value there — going blind on every momentary dropout would be worse
+        // than steering by a position a few seconds old.
+        val coordinator = TrailGuidanceCoordinator(TestScope())
+        coordinator.startFollow(polyline, TravelDirection.Forward)
+
+        val course =
+            assertNotNull(
+                coordinator
+                    .computeGuidance(activeAt(points.size - 1), fixOnReturnArm(), matchAtAlong(returnArmAlongM, MatchState.Uncertain))
+                    ?.desiredCourseDeg,
+            )
+
+        assertTrue(
+            abs(deltaAngle(180.0, course)) < 15.0,
+            "an Uncertain match should still steer by its frozen position; guidance said $course",
+        )
+    }
+
+    private fun matchOnOutboundArm(state: MatchState) = matchAtAlong(60.0, state)
+
+    private fun matchAtAlong(
+        alongM: Double,
+        state: MatchState,
+    ) = TrailMatch(
+        state = state,
+        confirmedAlongM = alongM,
+        predictedAlongM = alongM,
+        position = null,
+        chosen = null,
+        bestRejected = null,
+        unmatchedCount = 0,
+        uncertainSec = 0.0,
+        travelledM = 0.0,
+        scanKind = ScanKind.Windowed,
+        windowM = null,
+        budgetM = 0.0,
+        predictionErrorM = null,
+        disposition = "test",
+    )
 
     @Test
     fun withNoMatchYetTheCourseFallsBackToLocalGeometryRatherThanGuessing() {

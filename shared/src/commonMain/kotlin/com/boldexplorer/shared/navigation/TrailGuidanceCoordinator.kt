@@ -119,13 +119,24 @@ class TrailGuidanceCoordinator(
         // The desired course is a chord over a physical baseline, centred where the *windowed*
         // matcher says the user is. Both halves matter: the chord makes the answer density-
         // invariant, and the windowed centre keeps it on the arm the user is actually walking.
+        //
+        // `confirmedAlongM` survives `Uncertain` and `Lost` by design, and `Uncertain` is a brief
+        // gap where steering by a slightly old position beats going blind on every dropout. Past
+        // the reckoning horizon it is a different claim: the value can be minutes old and on
+        // another arm, and steering by it reproduces the S5 defect through state instead of through
+        // an unwindowed projection. Beyond that, guidance says nothing rather than something stale,
+        // and `TrailGuidance` falls back to local geometry. Found in review, 2026-08-15.
+        val steerableAlongM =
+            match
+                ?.takeIf { it.state == MatchState.Matched || it.state == MatchState.Uncertain }
+                ?.confirmedAlongM
         val guidance =
             TrailGuidance.compute(
                 followState,
                 sample,
                 lastTrustedCourse,
                 followPolyline,
-                match?.confirmedAlongM,
+                steerableAlongM,
                 followDirection,
             )
         _guidance.value = guidance
