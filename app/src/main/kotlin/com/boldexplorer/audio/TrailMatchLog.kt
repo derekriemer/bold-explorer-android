@@ -1,5 +1,6 @@
 package com.boldexplorer.audio
 
+import com.boldexplorer.BuildConfig
 import com.boldexplorer.shared.model.LocationSample
 import com.boldexplorer.shared.navigation.MatchEvidence
 import com.boldexplorer.shared.navigation.TrailMatch
@@ -44,12 +45,21 @@ fun trailMatchLogEntry(
         extra =
             buildMap {
                 // ── Raw fix: everything needed to replay this walk offline ──
-                put("lat", sample.lat)
-                put("lon", sample.lon)
-                put("acc_m", sample.accuracy)
-                put("speed_mps", sample.speed)
-                put("course_deg", sample.heading)
-                put("provider", sample.provider)
+                //
+                // Debug and beta builds only. This is the one log record that carries the user's
+                // position on *every* fix, so in a release build it would write a complete track of
+                // wherever they walked — at 1 Hz, with the switch defaulting to on. Release already
+                // strips coordinates everywhere else (`AudioCuePlayer`, and the build-type table in
+                // AGENTS.md); this record was writing them anyway. Offline replay is a debug
+                // activity, so losing it in release costs nothing.
+                if (BuildConfig.SHOW_DEBUG_FEATURES) {
+                    put("lat", sample.lat)
+                    put("lon", sample.lon)
+                    put("acc_m", sample.accuracy)
+                    put("speed_mps", sample.speed)
+                    put("course_deg", sample.heading)
+                    put("provider", sample.provider)
+                }
 
                 // ── The decision ──
                 put("state", match.state.name)
