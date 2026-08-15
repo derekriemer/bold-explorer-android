@@ -571,10 +571,26 @@ credited simulated conditions with finding a defect that clean GPS shows on its 
 `desiredTrailCourseDeg` and `evaluateOffTrail` now both read the match and never re-derive position.
 Three things this forced that the decision above did not anticipate:
 
-- **The coordinator needs the trail in recorded order**, adopted once per session by `startFollow`
-  and shared with the matcher. It had been building its own polyline from the follower's waypoint
-  list, which is *reversed in place* for a reverse follow — a second, session-relative along-track
-  coordinate, and exactly what "always in recorded order" exists to prevent.
+- **The coordinator needs the trail in recorded order**, adopted once per session by `startFollow`.
+  It had been building its own polyline from the follower's waypoint list, which is *reversed in
+  place* for a reverse follow — a second, session-relative along-track coordinate, and exactly what
+  "always in recorded order" exists to prevent.
+
+  **Amended 2026-08-15, after review:** the coordinator now *owns* the session rather than being
+  handed its pieces. `FollowSession` holds the polyline, direction, tracker and evidence recorder
+  together; `startFollow(points, direction)` is the only way to begin a follow and `onFix(sample)`
+  the only way to advance it, folding the trusted course and the match in that order. Guidance and
+  both detectors read the match from the session instead of being passed one.
+
+  This is not tidiness. Starting a follow previously took four independent steps — build a matcher,
+  hand over its geometry, order the matcher ahead of the detectors, thread its result into six
+  calls — every one of them silently optional. Review found all four failure modes in a codebase
+  with a single follow path: no adoption falls back to the segment bearing this step exists to
+  remove; no matcher bails both detectors for the whole walk; wrong ordering decides each fix on the
+  previous fix's position; a separately-passed direction inverts wrong-way on a reverse follow. S6
+  and S7 add follow paths, and none of these is visible outside a field log. `TrailMatcher` in the
+  app module dissolved into `FollowSession` as part of this — it was `:shared` navigation logic
+  living in `com.boldexplorer.audio` only because it returned an `AudioLogEntry`.
 - **Direction is not only a tie-break.** The chord is measured over the trail *ahead of the user*,
   which is toward increasing along-track only under `Forward`; cross-track's "right of travel" flips
   for the same reason. Both are now derived from the declared direction rather than from whichever
