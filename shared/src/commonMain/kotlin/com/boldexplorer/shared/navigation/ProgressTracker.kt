@@ -104,6 +104,16 @@ class ProgressTracker(
     private var lastGlobalScanMs: Long? = null
 
     private var unconfirmedAlongM: Double? = null
+
+    /**
+     * Where the global scan first proposed the unconfirmed candidate.
+     *
+     * Corroboration is measured from here, and this does **not** move as the candidate is tracked.
+     * [unconfirmedAlongM] follows the user so the search window stays around them; measuring
+     * against that instead summed the per-fix wobble, which GPS noise supplies for free while the
+     * user stands still.
+     */
+    private var unconfirmedOriginM: Double? = null
     private var unconfirmedSinceMs: Long? = null
     private var corroboratedM: Double = 0.0
 
@@ -269,6 +279,7 @@ class ProgressTracker(
 
         state = MatchState.Unconfirmed
         unconfirmedAlongM = chosen.alongTrackM
+        unconfirmedOriginM = chosen.alongTrackM
         unconfirmedSinceMs = ts
         corroboratedM = 0.0
         return emit(
@@ -306,6 +317,7 @@ class ProgressTracker(
         if (chosen == null || abs(chosen.crossTrackM) > gateM) {
             state = MatchState.Lost
             unconfirmedAlongM = null
+            unconfirmedOriginM = null
             unconfirmedSinceMs = null
             corroboratedM = 0.0
             unmatchedCount++
@@ -320,7 +332,11 @@ class ProgressTracker(
             )
         }
 
-        corroboratedM += abs(chosen.alongTrackM - anchorM)
+        // Net displacement from where the scan proposed, not the running total of how much the
+        // reading moved. The old sum counted a stationary user's noise as evidence: at ~4 m of
+        // wobble per fix it reached CORROBORATION_M in under ten seconds and promoted a candidate
+        // that nothing had corroborated — the exact outcome this state exists to prevent.
+        corroboratedM = abs(chosen.alongTrackM - (unconfirmedOriginM ?: anchorM))
         unconfirmedAlongM = chosen.alongTrackM
         unconfirmedSinceMs = ts
 
@@ -429,6 +445,7 @@ class ProgressTracker(
         lastConfirmedMs = ts
         unmatchedCount = 0
         unconfirmedAlongM = null
+        unconfirmedOriginM = null
         unconfirmedSinceMs = null
         corroboratedM = 0.0
         state = MatchState.Matched

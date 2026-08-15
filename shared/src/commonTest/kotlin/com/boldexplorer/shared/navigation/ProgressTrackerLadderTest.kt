@@ -87,6 +87,47 @@ class ProgressTrackerLadderTest {
     }
 
     @Test
+    fun standingStillDoesNotCorroborateAGlobalCandidate() {
+        // Corroboration exists to make a global scan earn its result with *displacement*. Summing
+        // the absolute change per fix does not measure displacement — it measures how much the
+        // reading moved about, and GPS noise moves it about while the user is motionless. A
+        // stationary walker accumulated the whole corroboration distance out of jitter and promoted
+        // a candidate that nothing had corroborated.
+        val tracker = trackerAt200(speedMps = 0.0)
+        repeat(120) { tracker.onFix(sampleAt(200.0, eastM = 90.0, timestampMs = (it + 1) * 1_000L, speedMps = 0.0)) }
+        val proposed = tracker.onFix(sampleAt(500.0, eastM = 0.0, timestampMs = 200_000L, speedMps = 0.0))
+        assertEquals(MatchState.Unconfirmed, proposed.state, "precondition: a global candidate is on the table")
+
+        // Standing at 500 m, the reading wobbling a few metres either way. Net movement: none.
+        var last = proposed
+        for ((i, wobbleM) in listOf(3.0, -3.0, 4.0, -4.0, 3.0, -3.0, 4.0, -4.0, 3.0, -3.0).withIndex()) {
+            last = tracker.onFix(sampleAt(500.0 + wobbleM, eastM = 0.0, timestampMs = 201_000L + i * 1_000L, speedMps = 0.0))
+        }
+
+        assertEquals(
+            MatchState.Unconfirmed,
+            last.state,
+            "jitter promoted an uncorroborated candidate: ${last.disposition}",
+        )
+    }
+
+    @Test
+    fun walkingOnAfterAGlobalScanStillCorroborates() {
+        // The other half — the fix must not make corroboration unreachable. Real travel away from
+        // where the scan proposed is exactly what should earn it.
+        val tracker = trackerAt200(speedMps = 0.0)
+        repeat(120) { tracker.onFix(sampleAt(200.0, eastM = 90.0, timestampMs = (it + 1) * 1_000L, speedMps = 0.0)) }
+        tracker.onFix(sampleAt(500.0, eastM = 0.0, timestampMs = 200_000L, speedMps = 1.4))
+
+        var last: TrailMatch? = null
+        for (step in 1..8) {
+            last = tracker.onFix(sampleAt(500.0 + step * 5.0, eastM = 0.0, timestampMs = 200_000L + step * 1_000L, speedMps = 1.4))
+        }
+
+        assertEquals(MatchState.Matched, assertNotNull(last).state, "40 m of real walking must corroborate")
+    }
+
+    @Test
     fun globalScan_yieldsUnconfirmedRatherThanMatched() {
         val tracker = trackerAt200(speedMps = 0.0)
         repeat(120) { tracker.onFix(sampleAt(200.0, eastM = 90.0, timestampMs = (it + 1) * 1_000L, speedMps = 0.0)) }
