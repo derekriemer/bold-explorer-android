@@ -298,7 +298,9 @@ Session logs are JSONL files (`bold_explorer_audio_log_<timestamp>.jsonl`), one 
 The `played` field records the *audio outcome*, not intent:
 
 - `"Spoke: '<text>'"` — TTS was actually spoken aloud (app was **backgrounded**)
-- `"Suppressed: '<text>'"` — TTS was skipped because the app was **foregrounded**; the UI live region announced it via TalkBack instead. This is **normal and expected** — do not treat it as a missing announcement.
+- `"Live region: '<text>'"` — TTS was skipped because the app was **foregrounded**; the UI live region announced it via TalkBack instead. This is **normal and expected** — do not treat it as a missing announcement. A whole session reads this way whenever the screen was on.
+- `"Suppressed: '<text>'"` — **archived logs only** (before 2026-08-15). Identical meaning to `Live region:` above. The wording was changed because it reads as silence: an entire walk logged this way was written up in ADR 0001 as the user having heard nothing, and it took the owner to correct it. Treat the two spellings as the same thing when reading old logs.
+- `"Not spoken, app in foreground: '<text>'"` — the `AudioCuePlayer` waypoint-approach and trail-complete paths, which have no live region of their own
 - `"Wrong-vector earcon"` / `"Accuracy earcon"` / similar — a non-TTS audio tone played
 - `"bail:<reason>"` — the detector ran but decided not to act (e.g. `bail:no_relative_deg`, `bail:count_1_of_2`)
 - `""` (empty) — no audio output for this event (informational log only)
@@ -316,10 +318,56 @@ Both are free-form `key=value, key=value` strings. Common fields in `DIRECTIONAL
 ### Reading a log
 
 1. **USER_MARKERs first** — grep for `"kind":"USER_MARKER"` to see the user's in-field notes; these are the highest-signal observations.
-2. **TTS_ANNOUNCEMENTs** — `"ttsDelivered":true` means the app was backgrounded and spoke aloud. `"Suppressed"` in `played` means foregrounded (normal).
+2. **TTS_ANNOUNCEMENTs** — `"ttsDelivered":true` means the app was backgrounded and spoke aloud. `"Live region:"` (or `"Suppressed:"` in older logs) means foregrounded, and the user still heard it.
 3. **DETECTION_STATE bail clusters** — repeated `bail:no_relative_deg` means off-trail detection was blind (user nearly stationary, heading unknown).
 4. **Duplicate-event clusters** — same `trigger` + same target within a few seconds = proximity threshold being crossed repeatedly.
 5. **Timestamps** — `ts` is Unix epoch milliseconds. Gaps > 30s with no `DIRECTIONAL_BEACON` entries usually mean the app was paused or the screen was off and GPS duty-cycled.
+
+### Two log schemas
+
+They differ in where the position lives, which matters for every analysis:
+
+| | positions | on which rows | trail geometry |
+|---|---|---|---|
+| **v1** (before 2026-08-12) | top-level `userLat` / `userLng` | announcements, beacons, detections | reconstructable from `targetIndex` / `targetLat` |
+| **v2** (`"v":2`, 2026-08-12 on) | `extra.lat` / `extra.lon` | **`TRAIL_MATCH` rows only** | not in the log — needs the trail's GPX |
+
+So a v2 announcement carries no position of its own; take it from the nearest `TRAIL_MATCH`.
+
+## Scenario tests from field logs
+
+Recorded walks are checked into `:shared` as replayable fixtures. Every navigation defect this
+project has actually fixed — the switchback teleport, the reversed spoken course, the noise-floor
+false positive — was found in field data and only then reduced to a synthetic case, so the field data
+itself belongs in the suite.
+
+`shared/src/commonTest/.../navigation/scenario/` holds `WalkScenario` (the harness), one object per
+recorded session, and `RecordedWalkTest`. `ScenarioRunner` drives `ProgressTracker` and
+`TrailGuidanceCoordinator` together exactly as `GpsViewModel` does — match, then guidance, then the
+detectors — and returns a decision per fix.
+
+**Fixtures contain no coordinates.** `tools/build-scenario.py` converts everything to metres in a
+local frame, rotates it by a per-scenario angle and re-anchors on a synthetic origin; names, marker
+text and absolute dates are stripped, and timestamps become offsets from the session start. Every
+quantity the nav core computes is relative, so the replay is unaffected. This is not optional
+tidiness: the walks are near the owner's home and this repo is public. The raw logs, GPX and database
+copy stay outside the repo.
+
+```bash
+tools/build-scenario.py <log>.jsonl --list                      # sessions in a log
+tools/build-scenario.py <log>.jsonl --session 1 --name X \
+    --trail-gpx trail_12.gpx \                                  # v2 logs only; v1 uses its targets
+    --description "..." --out shared/src/commonTest/.../scenario/X.kt
+```
+
+The GPX is read at **generation** time and baked in. Fixtures must run on a fresh clone on a machine
+that has never seen the corpus, so nothing may be a runtime dependency.
+
+**Label a walk from its geometry and the user's markers before asserting on it.** A plausible label
+can be wrong: one scenario was labelled "the user finished the trail, so nothing should announce
+wrong way", and the geometry showed a real 38 m reversal — the alert was right and the label was not.
+Prefer "exactly one alert, inside this verified window" over "no alerts", and keep at least one
+assertion that *requires* an alert, or a detector that never fires would pass the whole suite.
 
 ## Rules
 ### Commit guidelines
