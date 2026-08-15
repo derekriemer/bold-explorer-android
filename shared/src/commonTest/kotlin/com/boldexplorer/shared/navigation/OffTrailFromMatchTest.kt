@@ -102,13 +102,35 @@ class OffTrailFromMatchTest {
     }
 
     @Test
-    fun aGlobalCandidateIsNotSomethingToMeasureAgainst() {
+    fun aSustainedExcursionKeepsAlertingAfterTheMatcherGivesUp() {
+        // The case that matters most and is easiest to lose. A walker who leaves the trail and keeps
+        // going trips the reckoning horizon — 120 m or 90 s — and the tracker goes `Lost`, retrying
+        // a global scan every 30 s and failing every time, because they are not near the trail.
+        // Gating off-trail on `Matched`/`Uncertain` therefore silences it permanently for exactly
+        // the person who is most off-trail. The candidate a global scan produces is the nearest
+        // point on the whole trail, which is a *lower bound* on how far off they are: if even that
+        // exceeds the gate, they are off trail, and saying so cannot be a false positive.
+        val c = coordinator()
+        c.startFollow(polyline, TravelDirection.Forward)
+
+        val evals =
+            (0..6).mapNotNull { i ->
+                c.evaluateOffTrail(active, sample(100_000L + i * 1_000L), guidance(), matchWith(MatchState.Lost, 60.0))
+            }
+
+        assertTrue(evals.any { it.fired }, "60 m off trail and Lost must still alert: ${evals.map { it.disposition }}")
+    }
+
+    @Test
+    fun withNoCandidateAtAllThereIsNothingToMeasure() {
+        // A `Lost` fix inside the rescan cooldown carries no candidate. There is genuinely no
+        // cross-track to report then, and inventing one would mean projecting unwindowed again.
         val c = coordinator()
         c.startFollow(polyline, TravelDirection.Forward)
 
         val eval =
             assertNotNull(
-                c.evaluateOffTrail(active, sample(100_000L), guidance(), matchWith(MatchState.Lost, 30.0)),
+                c.evaluateOffTrail(active, sample(100_000L), guidance(), matchWith(MatchState.Lost, null)),
             )
 
         assertEquals("bail:no_window", eval.disposition)

@@ -231,16 +231,20 @@ class TrailGuidanceCoordinator(
         if (sample.timestamp < offTrailGraceUntilMs) return null
 
         val relative = guidance?.relativeDeg
-        // The candidate the matcher chose *near where the user was*, not the nearest point on the
-        // whole trail — at a switchback the opposite arm is close, so an unwindowed projection
-        // reports a small cross-track for someone who has walked off their own arm.
+        // The candidate the matcher chose, whatever state it is in. What that candidate *means*
+        // changes with the state, and both readings are the right one for their state:
         //
-        // `Uncertain` counts: it usually means the best candidate is past the match gate, which is
-        // the off-trail condition itself. Under `Lost`/`Unconfirmed` the candidate came from a
-        // global scan and may be a different part of the trail, so there is nothing honest to
-        // measure and the detector says so rather than guessing.
-        val windowed = match?.takeIf { it.state == MatchState.Matched || it.state == MatchState.Uncertain }
-        val signedCrossTrackM = windowed?.chosen?.crossTrackM?.times(followDirection.sign)
+        // - `Matched`/`Uncertain`: a windowed candidate, near where the user was. This is the one
+        //   that matters at a switchback, where the opposite arm is close and an unwindowed
+        //   projection would report a small cross-track for someone off their own arm.
+        // - `Lost`/`Unconfirmed`: a global candidate — the nearest point on the whole trail, which
+        //   is a *lower bound* on how far off the user is. If even that exceeds the gate they are
+        //   off trail, so acting on it cannot produce a false positive.
+        //
+        // Gating this on `Matched`/`Uncertain` silenced the alert permanently for the person most
+        // off-trail: leave the trail and keep walking, and the reckoning horizon puts the tracker in
+        // `Lost` within 90 s, where it stays. Found in review, 2026-08-15.
+        val signedCrossTrackM = match?.chosen?.crossTrackM?.times(followDirection.sign)
         val absCrossTrackM = signedCrossTrackM?.let { abs(it) }
         val rateMps = updateCrossTrackRate(absCrossTrackM, sample.timestamp)
 

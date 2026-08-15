@@ -588,11 +588,26 @@ from `currentIndex`.
 section says "distinct uncertain earcon; off-trail alerts and completion suppressed". Implementing
 the suppression *without* the earcon, which does not exist, would replace an alert with silence at
 the moment it matters most — and `Uncertain` most often means "the best candidate is past the match
-gate", which is the off-trail condition itself rather than ignorance of it. Off-trail therefore
-reads `chosen.crossTrackM` under `Matched` **and** `Uncertain`, and bails only under `Lost` /
-`Unconfirmed`, where the sole candidate came from a global scan and may be a different part of the
-trail entirely. Owner-confirmed. When the uncertain earcon lands, revisit: the original pairing is
-still the better end state.
+gate", which is the off-trail condition itself rather than ignorance of it. Owner-confirmed. When the
+uncertain earcon lands, revisit: the original pairing is still the better end state.
+
+**Corrected in review, 2026-08-15.** The first implementation read `chosen.crossTrackM` under
+`Matched`/`Uncertain` only and bailed under `Lost`/`Unconfirmed`, reasoning that a global candidate
+might be a different part of the trail. That silenced the alert permanently for the person most
+off-trail: leave the trail and keep walking, and the reckoning horizon puts the tracker in `Lost`
+within 90 s, where the rescan-and-fail cycle keeps it. The previous angle-based rule kept firing
+every 45 s indefinitely, so this was a regression in exactly the case the alert exists for.
+
+The candidate is now read in **every** state, because what it means changes with the state and both
+readings are right for their state:
+
+| state | the candidate is | why it is safe to act on |
+| --- | --- | --- |
+| `Matched` / `Uncertain` | windowed, near where the user was | the switchback case: the near arm is not the user's arm |
+| `Lost` / `Unconfirmed` | the nearest point on the whole trail | a *lower bound* on the distance off — over gate means over gate |
+
+Only a fix carrying no candidate at all — a `Lost` fix inside the rescan cooldown — bails, and it
+bails because there is genuinely nothing to measure rather than because the state is distrusted.
 
 **Known gap, found while doing this and deliberately left open:** a follow started while the user is
 already past the match gate never acquires, so the tracker sits in `Lost` and off-trail stays quiet.
