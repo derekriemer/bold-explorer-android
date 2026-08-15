@@ -1099,14 +1099,29 @@ The three surviving alerts are all sustained regression at walking pace under 2.
 ten or more seconds of consistent backwards movement, which is what the announcement is for, and all
 three are on **real** GPS. The one removed is the injected-degradation case above.
 
-What can now be checked, and what still cannot (updated 2026-08-15): walk 2's full export has been
-recovered, so its announcements and the owner's markers are available again. Walk 1's has not, though
-its alert timeline was reconstructed from session transcripts — 3 wrong-way, 20 off-trail, with times
-— and lives in the corpus as `RECOVERED-LABELS.md`. Against it, today's rule reproduces the
-01:10:19 wrong-way (firing at 01:10:18), is silent at 01:37:27 and 01:37:46 where the old build fired
-twice, and fires at 01:32:12 where it did not. Whether those differences are improvements is not
-settled by the log: the markers that would say are in the export still missing. Field verification of
-the new behaviour is therefore still a walk, not a replay.
+**Both 2026-08-12 exports were recovered on 2026-08-15**, with the owner's 27 markers, which settles
+most of what this section previously had to leave open. Against walk 1's three wrong-way alerts:
+
+| the old build | today's rule | the owner's marker |
+| --- | --- | --- |
+| 01:10:19, real GPS at 2.6 m | fires 01:10:18 | — |
+| 01:37:27 + 01:37:46, injected 25 m | **silent** | 01:37:40 *"weird wrong way fired"* |
+| — | fires 01:32:12, real GPS at 3.4 m | — |
+
+The middle row is the one that matters: the owner flagged those two as wrong *while walking*, and the
+rule no longer produces them. The first is reproduced unchanged. The third is new and unlabelled —
+nobody remarked on that moment either way, so it stays an open question for a walk.
+
+The eleven off-trail alerts from 01:19:16 to 01:29:36 are **correct**, and labelled so at the time:
+01:19:33, *"making a big old loop off trail. Will be back on earlier stretch eventually"*. Any change
+that silences those is a regression, which makes them the most useful off-trail fixture available.
+
+One trap the markers set and then sprang: three of them read "fixes from here are deliberately
+degraded", at 01:08:20, 01:29:27 and 01:30:34, yet reported accuracy never left 2.5–3.8 m across any
+of those spans — and at 01:10:40 the owner writes *"Not degrading."* Accuracy is actually pinned at
+25 m for exactly one span, 01:36:36–01:38:08. **Trust the accuracy values, not the marker text**, for
+where degradation was really in effect; the marker records an intent, sometimes one that was
+immediately reversed.
 
 ## Revisions since first draft
 
