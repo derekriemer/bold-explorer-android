@@ -1210,7 +1210,15 @@ class GpsViewModel
             // Acquire before the first guidance is computed, so the opening "Following X" cue names
             // a direction measured where the matcher says the user is rather than falling back to
             // segment geometry for want of a match.
-            matchTrail(sample)
+            //
+            // Only from a *fresh* fix. `location` is a StateFlow that keeps its last value
+            // indefinitely, so at follow-start this can be minutes old — and acquiring from it sets
+            // the tracker's last-confirmed timestamp to then, so the first live fix exceeds the
+            // reckoning horizon and drops it straight into Lost. It would need 25 m of corroborated
+            // displacement to recover, with wrong-way and windowed guidance unavailable meanwhile.
+            // A stale seed is worse than no seed: without one the matcher simply acquires on the
+            // first real fix. Found in review, 2026-08-15.
+            if (!isLocationStale(System.currentTimeMillis(), sample.timestamp)) matchTrail(sample)
             guidanceCoordinator.refreshFromLocation(
                 trailFollower.state.value,
                 sample,
