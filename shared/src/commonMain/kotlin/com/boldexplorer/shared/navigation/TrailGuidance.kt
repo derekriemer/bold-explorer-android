@@ -72,12 +72,14 @@ object TrailGuidance {
         sample: LocationSample,
         trustedCourse: TrustedCourse?,
         polyline: TrailPolyline? = null,
+        alongTrackM: Double? = null,
+        direction: TravelDirection = TravelDirection.Forward,
     ): TrailGuidanceState? {
         val active = followState as? TrailFollowerState.Active ?: return null
         val target = active.waypoints.getOrNull(active.currentIndex) ?: return null
         val location = LatLng(sample.lat, sample.lon)
         val targetLocation = LatLng(target.lat, target.lon)
-        val desiredCourse = desiredTrailCourseDeg(active, location, polyline) ?: return null
+        val desiredCourse = desiredTrailCourseDeg(active, location, polyline, alongTrackM, direction) ?: return null
         val freshCourse = freshCourseAt(trustedCourse, sample.timestamp)
 
         return TrailGuidanceState(
@@ -98,6 +100,8 @@ object TrailGuidance {
         active: TrailFollowerState.Active,
         location: LatLng,
         polyline: TrailPolyline?,
+        alongTrackM: Double?,
+        direction: TravelDirection,
     ): Double? {
         // Preferred: the bearing of a chord over a fixed *physical* baseline ahead of the user.
         //
@@ -110,15 +114,21 @@ object TrailGuidance {
         // A chord over NavigationPolicy.COURSE_BASELINE_M averages that noise out and is
         // density-invariant, so the same physical road behaves identically whether recorded every
         // 2 m or every 30 m.
-        if (polyline != null) {
-            val alongM = polyline.project(location)?.alongTrackM
-            if (alongM != null) {
-                polyline
-                    .chordBearingAt(
-                        alongM + NavigationPolicy.COURSE_BASELINE_M / 2.0,
-                        baselineM = NavigationPolicy.COURSE_BASELINE_M,
-                    )?.let { return it }
-            }
+        //
+        // [alongTrackM] comes from the windowed matcher and is never re-derived here. Projecting
+        // for itself is what made this measure the chord on the wrong arm of a switchback and speak
+        // a course up to 162° from the truth (ADR 0001, S5) — the same defect S5a removed from
+        // wrong-way detection, in the one place where being wrong steers the user directly.
+        if (polyline != null && alongTrackM != null) {
+            // The chord is measured over the trail *ahead of the user*, which is toward increasing
+            // along-track only under Forward. `alongTrackM` is always in recorded order, so under
+            // Reverse the baseline is taken behind the recorded direction and the resulting bearing
+            // is reversed to face travel.
+            val half = NavigationPolicy.COURSE_BASELINE_M / 2.0
+            val centreM = if (direction == TravelDirection.Reverse) alongTrackM - half else alongTrackM + half
+            polyline
+                .chordBearingAt(centreM, baselineM = NavigationPolicy.COURSE_BASELINE_M)
+                ?.let { return if (direction == TravelDirection.Reverse) (it + 180.0) % 360.0 else it }
         }
 
         val points = active.waypoints

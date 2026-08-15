@@ -41,6 +41,19 @@ class DesiredCourseStabilityTest {
     private fun sampleAt(northM: Double) =
         LocationSample(lat = latFor(northM), lon = 0.0, accuracy = 5.0, timestamp = 100_000L)
 
+    /**
+     * Where the matcher would say the user is.
+     *
+     * Guidance no longer projects for itself — it is handed a windowed along-track (ADR 0001 S5).
+     * These fixtures are a straight line and a single right-angle bend, where a fix has exactly one
+     * plausible position, so projecting here is unambiguous and keeps the tests about what they are
+     * about: the *bearing* measured at that position. Windowing itself is [GuidanceFromMatchTest].
+     */
+    private fun alongFor(
+        polyline: TrailPolyline,
+        sample: LocationSample,
+    ) = polyline.project(LatLng(sample.lat, sample.lon))?.alongTrackM
+
     @Test
     fun straightTrailRecordedWithNoise_yieldsAStableNorthwardCourse() {
         val points = noisyStraightTrail()
@@ -49,9 +62,10 @@ class DesiredCourseStabilityTest {
         val courses = mutableListOf<Double>()
         for (index in 8..20) {
             val active = TrailFollowerState.Active(points, currentIndex = index, thresholdM = 15.0)
+            val sample = sampleAt(index * 8.0)
             val guidance =
                 assertNotNull(
-                    TrailGuidance.compute(active, sampleAt(index * 8.0), null, polyline),
+                    TrailGuidance.compute(active, sample, null, polyline, alongFor(polyline, sample)),
                     "guidance at index $index",
                 )
             courses += assertNotNull(guidance.desiredCourseDeg, "desired course at index $index")
@@ -78,9 +92,12 @@ class DesiredCourseStabilityTest {
         var previous: Double? = null
         for (index in 8..20) {
             val active = TrailFollowerState.Active(points, currentIndex = index, thresholdM = 15.0)
+            val sample = sampleAt(index * 8.0)
             val course =
                 assertNotNull(
-                    TrailGuidance.compute(active, sampleAt(index * 8.0), null, polyline)?.desiredCourseDeg,
+                    TrailGuidance
+                        .compute(active, sample, null, polyline, alongFor(polyline, sample))
+                        ?.desiredCourseDeg,
                 )
             previous?.let { worstSwingDeg = maxOf(worstSwingDeg, abs(deltaAngle(it, course))) }
             previous = course
@@ -106,22 +123,26 @@ class DesiredCourseStabilityTest {
                 (1..12).map { i -> TrailPoint(100L + i, "e$i", latFor(120.0), lonFor(i * 10.0)) }
         val polyline = TrailPolyline(points.map { LatLng(it.lat, it.lon) })
 
+        val beforeSample = sampleAt(50.0)
         val before =
             assertNotNull(
                 TrailGuidance.compute(
                     TrailFollowerState.Active(points, currentIndex = 5, thresholdM = 15.0),
-                    sampleAt(50.0),
+                    beforeSample,
                     null,
                     polyline,
+                    alongFor(polyline, beforeSample),
                 )?.desiredCourseDeg,
             )
+        val afterSample = LocationSample(lat = latFor(120.0), lon = lonFor(60.0), accuracy = 5.0, timestamp = 100_000L)
         val after =
             assertNotNull(
                 TrailGuidance.compute(
                     TrailFollowerState.Active(points, currentIndex = 18, thresholdM = 15.0),
-                    LocationSample(lat = latFor(120.0), lon = lonFor(60.0), accuracy = 5.0, timestamp = 100_000L),
+                    afterSample,
                     null,
                     polyline,
+                    alongFor(polyline, afterSample),
                 )?.desiredCourseDeg,
             )
         assertTrue(abs(deltaAngle(0.0, before)) < 15.0, "before the bend should read north, got $before")

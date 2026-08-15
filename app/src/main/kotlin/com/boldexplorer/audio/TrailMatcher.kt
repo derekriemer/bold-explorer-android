@@ -30,7 +30,8 @@ class TrailMatcher(
     points: List<LatLng>,
     val direction: TravelDirection,
 ) {
-    private val polyline = TrailPolyline(points)
+    /** The trail in recorded order. Shared with guidance so along-track means one thing app-wide. */
+    val polyline = TrailPolyline(points)
     private val tracker = ProgressTracker(polyline, direction)
     private val evidence = MatchEvidenceRecorder(polyline)
 

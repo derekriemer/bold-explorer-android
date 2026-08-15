@@ -915,11 +915,15 @@ class GpsViewModel
                 // direction separately — deliberately not `ordered`, which is reversed in place.
                 // Reversing the point list would make alongTrackM session-relative and stop two
                 // walks of the same trail being comparable in the field logs.
-                trailMatcher =
+                val matcher =
                     TrailMatcher(
                         points = wps.map { LatLng(it.lat, it.lon) },
                         direction = if (reversed) TravelDirection.Reverse else TravelDirection.Forward,
                     )
+                trailMatcher = matcher
+                // Guidance shares that same polyline and direction, so the along-track the matcher
+                // confirms and the along-track guidance measures its course at are one coordinate.
+                guidanceCoordinator.startFollow(matcher.polyline, matcher.direction)
                 if (loc != null) trailFollower.startNearest(points, loc, bearing) else trailFollower.start(points)
                 refreshTrailGuidanceFromLatestLocation(resetOrdinaryThrottle = true)
                 backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, true)
@@ -1203,7 +1207,16 @@ class GpsViewModel
 
         private fun refreshTrailGuidanceFromLatestLocation(resetOrdinaryThrottle: Boolean = false) {
             val sample = location.value ?: return
-            guidanceCoordinator.refreshFromLocation(trailFollower.state.value, sample, resetOrdinaryThrottle)
+            // Acquire before the first guidance is computed, so the opening "Following X" cue names
+            // a direction measured where the matcher says the user is rather than falling back to
+            // segment geometry for want of a match.
+            matchTrail(sample)
+            guidanceCoordinator.refreshFromLocation(
+                trailFollower.state.value,
+                sample,
+                trailMatcher?.lastMatch,
+                resetOrdinaryThrottle,
+            )
         }
 
         /**
@@ -1231,7 +1244,8 @@ class GpsViewModel
                     )
             ) {
                 is TrailFollowerEvent.WaypointReached -> {
-                    val guidance = guidanceCoordinator.computeGuidance(trailFollower.state.value, sample)
+                    val guidance =
+                        guidanceCoordinator.computeGuidance(trailFollower.state.value, sample, trailMatcher?.lastMatch)
                     val text = buildTrailAdvanceAnnouncement(event, guidance)
                     val reason = lastAdvancementReason
                     lastAdvancementReason = null
@@ -1274,7 +1288,7 @@ class GpsViewModel
 
                 null -> {
                     val followState = trailFollower.state.value
-                    val guidance = guidanceCoordinator.computeGuidance(followState, sample)
+                    val guidance = guidanceCoordinator.computeGuidance(followState, sample, trailMatcher?.lastMatch)
                     announceOrdinaryTrailGuidance(followState, sample, guidance)
                     announceOffTrail(followState, sample, guidance)
                     announceBacktrack(followState, sample, guidance)
@@ -1333,7 +1347,8 @@ class GpsViewModel
             sample: LocationSample,
             guidance: TrailGuidanceState?,
         ) {
-            val eval = guidanceCoordinator.evaluateOffTrail(followState, sample, guidance) ?: return
+            val eval =
+                guidanceCoordinator.evaluateOffTrail(followState, sample, guidance, trailMatcher?.lastMatch) ?: return
             viewModelScope.launch {
                 audioEventLog.append(
                     AudioLogEntry(

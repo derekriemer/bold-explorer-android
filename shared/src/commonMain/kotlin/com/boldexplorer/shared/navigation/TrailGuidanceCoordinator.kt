@@ -60,15 +60,13 @@ class TrailGuidanceCoordinator(
     private var prevCrossTrackAtMs = 0L
 
     /**
-     * Cached polyline for the followed trail.
+     * The followed trail in recorded order, and which way along it the user declared they are going.
      *
-     * Keyed on the waypoint list's *identity*, not its contents: [TrailFollower] copies its state
-     * on every advance but carries the same list instance forward, so identity holds for a session
-     * and changes exactly when a different trail is followed. Rebuilding a 10k-point polyline on
-     * every fix would not be viable.
+     * Set by [startFollow]. The single geometry every detector here measures against, shared with
+     * the matcher so `alongTrackM` means one thing app-wide.
      */
-    private var cachedPolylineFor: List<TrailPoint>? = null
-    private var cachedPolyline: TrailPolyline? = null
+    private var followPolyline: TrailPolyline? = null
+    private var followDirection: TravelDirection = TravelDirection.Forward
 
     // Backtrack detection.
     private var consecutiveBacktrackCount = 0
@@ -96,15 +94,40 @@ class TrailGuidanceCoordinator(
 
     fun courseIsSmoothed(): Boolean = lastTrustedCourse?.isSmoothed ?: false
 
+    /**
+     * Adopt the followed trail's geometry for the session.
+     *
+     * Takes the polyline in **recorded order** with [direction] carried separately — the same
+     * instance the matcher holds, so `alongTrackM` means one thing across the whole app. The
+     * follower's own waypoint list is reversed in place for a reverse follow, which makes its
+     * along-track session-relative and incomparable with the match's.
+     */
+    fun startFollow(
+        polyline: TrailPolyline,
+        direction: TravelDirection,
+    ) {
+        followPolyline = polyline
+        followDirection = direction
+    }
+
     /** Recompute and publish guidance for [sample] against [followState]; returns the new value. */
     fun computeGuidance(
         followState: TrailFollowerState,
         sample: LocationSample,
+        match: TrailMatch?,
     ): TrailGuidanceState? {
-        // Pass the cached polyline so the desired course comes from a chord over a physical
-        // baseline rather than one noisy recorded segment. Without this the new path is dead code.
-        val polyline = (followState as? TrailFollowerState.Active)?.let { polylineFor(it) }
-        val guidance = TrailGuidance.compute(followState, sample, lastTrustedCourse, polyline)
+        // The desired course is a chord over a physical baseline, centred where the *windowed*
+        // matcher says the user is. Both halves matter: the chord makes the answer density-
+        // invariant, and the windowed centre keeps it on the arm the user is actually walking.
+        val guidance =
+            TrailGuidance.compute(
+                followState,
+                sample,
+                lastTrustedCourse,
+                followPolyline,
+                match?.confirmedAlongM,
+                followDirection,
+            )
         _guidance.value = guidance
         return guidance
     }
@@ -116,16 +139,19 @@ class TrailGuidanceCoordinator(
     fun refreshFromLocation(
         followState: TrailFollowerState,
         sample: LocationSample,
+        match: TrailMatch?,
         resetOrdinaryThrottle: Boolean = false,
     ) {
         updateTrustedCourse(sample)
-        computeGuidance(followState, sample)
+        computeGuidance(followState, sample, match)
         if (resetOrdinaryThrottle) resetThrottle(sample)
     }
 
     /** Clear all guidance + detection state (trail follow stopped / completed). */
     fun clear() {
         _guidance.value = null
+        followPolyline = null
+        followDirection = TravelDirection.Forward
         lastOrdinaryGuidanceAtMs = Long.MIN_VALUE
         lastOrdinaryGuidanceLocation = null
         consecutiveOffTrailCount = 0
@@ -199,13 +225,22 @@ class TrailGuidanceCoordinator(
         followState: TrailFollowerState,
         sample: LocationSample,
         guidance: TrailGuidanceState?,
+        match: TrailMatch?,
     ): OffTrailEvaluation? {
-        val active = followState as? TrailFollowerState.Active ?: return null
+        if (followState !is TrailFollowerState.Active) return null
         if (sample.timestamp < offTrailGraceUntilMs) return null
 
         val relative = guidance?.relativeDeg
-        val signedCrossTrackM =
-            polylineFor(active)?.project(LatLng(sample.lat, sample.lon))?.crossTrackM
+        // The candidate the matcher chose *near where the user was*, not the nearest point on the
+        // whole trail — at a switchback the opposite arm is close, so an unwindowed projection
+        // reports a small cross-track for someone who has walked off their own arm.
+        //
+        // `Uncertain` counts: it usually means the best candidate is past the match gate, which is
+        // the off-trail condition itself. Under `Lost`/`Unconfirmed` the candidate came from a
+        // global scan and may be a different part of the trail, so there is nothing honest to
+        // measure and the detector says so rather than guessing.
+        val windowed = match?.takeIf { it.state == MatchState.Matched || it.state == MatchState.Uncertain }
+        val signedCrossTrackM = windowed?.chosen?.crossTrackM?.times(followDirection.sign)
         val absCrossTrackM = signedCrossTrackM?.let { abs(it) }
         val rateMps = updateCrossTrackRate(absCrossTrackM, sample.timestamp)
 
@@ -240,7 +275,7 @@ class TrailGuidanceCoordinator(
         val trend = if (diverging) "diverging" else "converging"
         val disposition =
             when {
-                absCrossTrackM == null -> "bail:no_geometry"
+                absCrossTrackM == null -> "bail:no_window"
                 !overGate -> "bail:on_line_xt_${xt}m_gate_${gateM.roundToInt()}m"
                 consecutiveOffTrailCount < required ->
                     "hold:xt_${xt}m_${trend}_${consecutiveOffTrailCount}of$required"
@@ -262,16 +297,6 @@ class TrailGuidanceCoordinator(
             gateM = gateM,
             requiredCount = required,
         )
-    }
-
-    /** Builds or reuses the polyline for [active]'s geometry. Null when there is no segment yet. */
-    private fun polylineFor(active: TrailFollowerState.Active): TrailPolyline? {
-        if (active.waypoints.size < 2) return null
-        if (cachedPolylineFor !== active.waypoints) {
-            cachedPolyline = TrailPolyline(active.waypoints.map { LatLng(it.lat, it.lon) })
-            cachedPolylineFor = active.waypoints
-        }
-        return cachedPolyline
     }
 
     /**

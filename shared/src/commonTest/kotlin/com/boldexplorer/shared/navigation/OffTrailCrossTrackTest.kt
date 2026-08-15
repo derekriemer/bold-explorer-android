@@ -1,5 +1,6 @@
 package com.boldexplorer.shared.navigation
 
+import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.model.LocationSample
 import kotlinx.coroutines.test.TestScope
 import kotlin.test.Test
@@ -25,7 +26,43 @@ import kotlin.test.assertTrue
  * parallel path 30 m away has a small bearing delta and is never told today.
  */
 class OffTrailCrossTrackTest {
-    private fun coordinator() = TrailGuidanceCoordinator(TestScope())
+    /**
+     * Drives a real [ProgressTracker] beside the coordinator, as the ViewModel does.
+     *
+     * Off-trail no longer projects for itself — it reads the cross-track of the candidate the
+     * matcher chose near where the user was (ADR 0001, S5). These fixtures are one straight
+     * segment, where that candidate is the obvious one; windowing itself is [OffTrailFromMatchTest].
+     *
+     * The tracker acquires **on the line**, a second before the first evaluated fix, because that
+     * is what follow-start does. Acquiring 30 m off the trail instead fails the match gate outright
+     * and the tracker never gets a prior — a real gap, but a different one from what these test.
+     */
+    private inner class Harness {
+        val coordinator = TrailGuidanceCoordinator(TestScope())
+        private val polyline = TrailPolyline(active.waypoints.map { LatLng(it.lat, it.lon) })
+        private val tracker = ProgressTracker(polyline)
+        private var acquired = false
+
+        init {
+            coordinator.startFollow(polyline, TravelDirection.Forward)
+        }
+
+        fun resetThrottle(sample: LocationSample) = coordinator.resetThrottle(sample)
+
+        fun evaluateOffTrail(
+            followState: TrailFollowerState,
+            sample: LocationSample,
+            guidance: TrailGuidanceState?,
+        ): OffTrailEvaluation? {
+            if (!acquired) {
+                tracker.onFix(sample(sample.timestamp - 1_000, eastM = 0.0))
+                acquired = true
+            }
+            return coordinator.evaluateOffTrail(followState, sample, guidance, tracker.onFix(sample))
+        }
+    }
+
+    private fun harness() = Harness()
 
     /** Trail running due north from (0,0) for ~111 m. At the equator, 1° lon ≈ 111 195 m. */
     private val active =
@@ -76,7 +113,7 @@ class OffTrailCrossTrackTest {
     fun standingOnTheLine_neverFires_evenWithAStaleTargetBehind() {
         // The defect, as a test. Ten fixes squarely on the trail with the angle condition
         // screaming; not one of them may alert.
-        val c = coordinator()
+        val c = harness()
         c.resetThrottle(sample(0, eastM = 0.0))
         for (i in 1..10) {
             val eval = c.evaluateOffTrail(active, sample(100_000L + i * 1_000L, eastM = 0.0), staleTargetGuidance())
@@ -92,7 +129,7 @@ class OffTrailCrossTrackTest {
 
     @Test
     fun divergingWellOffTrail_firesQuickly() {
-        val c = coordinator()
+        val c = harness()
         c.resetThrottle(sample(0, eastM = 0.0))
         c.evaluateOffTrail(active, sample(100_000, eastM = 25.0), staleTargetGuidance())
         val second = assertNotNull(c.evaluateOffTrail(active, sample(101_000, eastM = 35.0), staleTargetGuidance()))
@@ -103,7 +140,7 @@ class OffTrailCrossTrackTest {
     fun parallelPathWellOffTrail_firesEventually() {
         // The new true positive: constant 30 m offset, walking parallel, small bearing delta. This
         // is silent today and should not be.
-        val c = coordinator()
+        val c = harness()
         c.resetThrottle(sample(0, eastM = 0.0))
         val onCourse = onCourseGuidance()
         var fired = false
@@ -124,12 +161,12 @@ class OffTrailCrossTrackTest {
         // place would push both arms fast and the test would isolate nothing.
         val onCourse = onCourseGuidance()
 
-        val diverging = coordinator()
+        val diverging = harness()
         diverging.resetThrottle(sample(0, eastM = 0.0))
         diverging.evaluateOffTrail(active, sample(100_000, eastM = 25.0), onCourse)
         val d2 = assertNotNull(diverging.evaluateOffTrail(active, sample(101_000, eastM = 32.0), onCourse))
 
-        val converging = coordinator()
+        val converging = harness()
         converging.resetThrottle(sample(0, eastM = 0.0))
         converging.evaluateOffTrail(active, sample(100_000, eastM = 32.0), onCourse)
         val c2 = assertNotNull(converging.evaluateOffTrail(active, sample(101_000, eastM = 30.0), onCourse))
@@ -142,13 +179,13 @@ class OffTrailCrossTrackTest {
     fun angleAloneCanSelectTheFastPath_butNeverSuppresses() {
         // The demotion, stated precisely: a corroborating angle shortens the sustain window, and a
         // non-corroborating one lengthens it — but neither can stop an over-gate fix from counting.
-        val withAngle = coordinator()
+        val withAngle = harness()
         withAngle.resetThrottle(sample(0, eastM = 0.0))
         withAngle.evaluateOffTrail(active, sample(100_000, eastM = 30.0), staleTargetGuidance())
         val fast = assertNotNull(withAngle.evaluateOffTrail(active, sample(101_000, eastM = 30.0), staleTargetGuidance()))
         assertEquals(2, fast.requiredCount, "a corroborating angle selects the fast path")
 
-        val withoutAngle = coordinator()
+        val withoutAngle = harness()
         withoutAngle.resetThrottle(sample(0, eastM = 0.0))
         withoutAngle.evaluateOffTrail(active, sample(100_000, eastM = 30.0), onCourseGuidance())
         val slow = assertNotNull(withoutAngle.evaluateOffTrail(active, sample(101_000, eastM = 30.0), onCourseGuidance()))
@@ -160,7 +197,7 @@ class OffTrailCrossTrackTest {
     fun gateWidensWithPoorAccuracyButIsCapped() {
         // Bad GPS must produce fewer confident alerts, not more — but the widening is bounded so a
         // wildly wrong accuracy report cannot switch off-trail detection off entirely.
-        val loose = coordinator()
+        val loose = harness()
         loose.resetThrottle(sample(0, eastM = 0.0))
         var firedLoose = false
         for (i in 1..8) {
@@ -169,7 +206,7 @@ class OffTrailCrossTrackTest {
         }
         assertFalse(firedLoose, "25 m off with 30 m accuracy is inside the widened gate")
 
-        val tight = coordinator()
+        val tight = harness()
         tight.resetThrottle(sample(0, eastM = 0.0))
         var firedTight = false
         for (i in 1..8) {
@@ -183,7 +220,7 @@ class OffTrailCrossTrackTest {
     fun crossTrackAndRate_areReportedForTheLog() {
         // S4 replays these logs to decide whether the angle condition adds anything over
         // cross-track rate, so both must actually be recorded.
-        val c = coordinator()
+        val c = harness()
         c.resetThrottle(sample(0, eastM = 0.0))
         c.evaluateOffTrail(active, sample(100_000, eastM = 25.0), staleTargetGuidance())
         val eval = assertNotNull(c.evaluateOffTrail(active, sample(101_000, eastM = 35.0), staleTargetGuidance()))
