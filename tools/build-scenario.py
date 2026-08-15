@@ -203,16 +203,19 @@ def baseline_timeline(session: Session) -> list[tuple[int, str, str]]:
         text = announcement_text(row)
         # "Following <the trail's name> in reverse." — the name is the user's, and goes no further.
         text = re.sub(r"Following .*?( in reverse)?\.", lambda m: f"Following <trail>{m.group(1) or ''}.", text)
-        # "Suppressed: '<text>'" is OutputDisposition.LIVE_REGION_ONLY — the app skipped its own
-        # TTS because TalkBack was speaking the live region, so the user DID hear it. Only
-        # "Suppressed (silence mode)" means silence. Labelling the first as suppressed misled the
-        # ADR for an afternoon, so the timeline says which channel carried it.
+        # Which channel carried it. Two spellings, because the log's vocabulary changed: archived
+        # logs write the live-region case as a bare "Suppressed: '<text>'", which reads as silence
+        # and misled ADR 0001 for an afternoon. Newer ones say "Live region:". Only
+        # "Suppressed (silence mode)" has ever meant nothing was heard.
         played = str(row.get("played", ""))
-        channel = ""
         if "silence mode" in played:
             channel = "[silenced] "
-        elif played.startswith("Suppressed"):
+        elif played.startswith("Live region") or played.startswith("Suppressed"):
             channel = "[via live region] "
+        elif played.startswith("Not spoken"):
+            channel = "[screen reader only] "
+        else:
+            channel = ""
         out.append((row["ts"] - session.start_ms, trigger, channel + text))
     return out
 

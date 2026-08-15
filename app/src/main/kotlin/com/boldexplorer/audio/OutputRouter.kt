@@ -22,7 +22,17 @@ import javax.inject.Singleton
  * actually know: whether TTS was queued at all. */
 enum class OutputDisposition {
     QUEUED_FOR_TTS,
+
+    /**
+     * Posted to a Compose live region and *not* spoken by the app's own TTS.
+     *
+     * This is the normal path while the app is in the foreground — the screen reader announces the
+     * live region, and speaking as well would talk over it. It is emphatically **not** silence, and
+     * the log line says so; the string used to read "Suppressed", which misled analysis of a real
+     * walk. What the app cannot know either way is whether a screen reader was running to speak it.
+     */
     LIVE_REGION_ONLY,
+
     // Neither channel fired — absolute silence mode (#14) suppressed this event entirely.
     SILENCED,
 }
@@ -102,10 +112,15 @@ class OutputRouter
                         trigger = event.kind.name,
                         inputs = "text=\"$text\"",
                         outputs = "",
+                        // Name the channel rather than the absence of one. This line used to read
+                        // "Suppressed: '<text>'" for the live-region case, which reads as silence
+                        // to anyone analysing a field log — and did: a whole walk logs as
+                        // "Suppressed" simply because the screen was on, and that was written up as
+                        // the user having heard nothing. Only SILENCED is silence.
                         played =
                             when (disposition) {
                                 OutputDisposition.QUEUED_FOR_TTS -> "Spoke: '$text'"
-                                OutputDisposition.LIVE_REGION_ONLY -> "Suppressed: '$text'"
+                                OutputDisposition.LIVE_REGION_ONLY -> "Live region: '$text'"
                                 OutputDisposition.SILENCED -> "Suppressed (silence mode): '$text'"
                             },
                         // "ttsDelivered" preserved as an explicit queryable field for existing log

@@ -252,11 +252,13 @@ class AudioCuePlayer
                                 trigger = "Waypoint reached",
                                 inputs = "waypointName=\"${event.waypointName}\"",
                                 outputs = "",
+                                // Two different reasons not to speak, and only one is silence:
+                                // in the foreground the screen reader is carrying the UI instead.
                                 played =
-                                    if (spoke) {
-                                        "Spoke: 'Next waypoint: ${event.waypointName}'"
-                                    } else {
-                                        "Suppressed: 'Next waypoint: ${event.waypointName}'"
+                                    when {
+                                        spoke -> "Spoke: 'Next waypoint: ${event.waypointName}'"
+                                        silenced -> "Suppressed (silence mode): 'Next waypoint: ${event.waypointName}'"
+                                        else -> "Not spoken, app in foreground: 'Next waypoint: ${event.waypointName}'"
                                     },
                             ),
                         )
@@ -276,7 +278,12 @@ class AudioCuePlayer
                                 trigger = "Trail complete",
                                 inputs = "",
                                 outputs = "",
-                                played = if (spoke) "Spoke: 'Trail complete'" else "Suppressed: 'Trail complete'",
+                                played =
+                                    when {
+                                        spoke -> "Spoke: 'Trail complete'"
+                                        silenced -> "Suppressed (silence mode): 'Trail complete'"
+                                        else -> "Not spoken, app in foreground: 'Trail complete'"
+                                    },
                             ),
                         )
                     }
