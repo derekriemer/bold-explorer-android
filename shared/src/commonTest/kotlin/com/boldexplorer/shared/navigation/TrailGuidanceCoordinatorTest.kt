@@ -306,6 +306,29 @@ class TrailGuidanceCoordinatorTest {
         assertNull(c.evaluateOrdinaryGuidance(active, sample(100_000), guidance(relativeDeg = 10.0)))
     }
 
+    // ── Adopting a new trail ──────────────────────────────────────────────────────────
+
+    @Test
+    fun startFollow_resetsDetectionStateFromThePreviousTrail() {
+        // startFollow replaced the geometry but reset nothing, leaving the reset to resetThrottle —
+        // which follow-start only reaches when there is a cached GPS fix to refresh from. Start a
+        // follow cold and the new trail inherits the old one's prevAlongTrackM and counters, so the
+        // first fix on trail B is differenced against a position on trail A. With the count already
+        // at 2, "you may be going the wrong way" can fire on the first or second fix of a walk.
+        val h = harness()
+        h.evaluateBacktrack(active, sample(100_000, lat = 0.00080, accuracy = 5.0), guidance(90.0))
+        h.evaluateBacktrack(active, sample(101_000, lat = 0.00072, accuracy = 5.0), guidance(90.0))
+        val armed = assertNotNull(h.evaluateBacktrack(active, sample(102_000, lat = 0.00064, accuracy = 5.0), guidance(90.0)))
+        assertEquals(2, armed.consecutiveCount, "precondition: the detector is one fix from firing")
+
+        h.coordinator.startFollow(TrailPolyline(active.waypoints.map { LatLng(it.lat, it.lon) }), TravelDirection.Forward)
+
+        val afterAdopt =
+            assertNotNull(h.evaluateBacktrack(active, sample(103_000, lat = 0.00056, accuracy = 5.0), guidance(90.0)))
+        assertEquals(0, afterAdopt.consecutiveCount, "a new trail must not inherit the old one's count")
+        assertFalse(afterAdopt.fired)
+    }
+
     // ── Clear ─────────────────────────────────────────────────────────────────────────
 
     @Test

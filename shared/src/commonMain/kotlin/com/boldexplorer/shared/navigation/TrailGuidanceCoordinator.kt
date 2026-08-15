@@ -108,6 +108,30 @@ class TrailGuidanceCoordinator(
     ) {
         followPolyline = polyline
         followDirection = direction
+        // Adopting a trail is the start of a session, so the detectors start over with it. This
+        // used to be left to `resetThrottle`, which follow-start only reaches when there is a
+        // cached fix to refresh guidance from — start a follow cold and the new trail inherited the
+        // previous one's `prevAlongTrackM` and counters, so the first fix on the new trail was
+        // differenced against a position on the old one. With the count already at two, that fires
+        // "you may be going the wrong way" on the first fix of a walk. Found in review, 2026-08-15.
+        resetDetectors()
+    }
+
+    /**
+     * Forget what the detectors had accumulated, without touching the grace windows.
+     *
+     * Grace is armed from a timestamp and so belongs to [resetThrottle]; this is only the evidence
+     * that has to refer to one trail to mean anything.
+     */
+    private fun resetDetectors() {
+        consecutiveOffTrailCount = 0
+        offTrailAlertFiredAt = 0L
+        prevAbsCrossTrackM = null
+        prevCrossTrackAtMs = 0L
+        consecutiveBacktrackCount = 0
+        prevDistToTargetM = null
+        prevAlongTrackM = null
+        backtrackAlertFiredAt = 0L
     }
 
     /** Recompute and publish guidance for [sample] against [followState]; returns the new value. */
@@ -165,32 +189,18 @@ class TrailGuidanceCoordinator(
         followDirection = TravelDirection.Forward
         lastOrdinaryGuidanceAtMs = Long.MIN_VALUE
         lastOrdinaryGuidanceLocation = null
-        consecutiveOffTrailCount = 0
-        offTrailAlertFiredAt = 0L
-        prevAbsCrossTrackM = null
-        prevCrossTrackAtMs = 0L
         offTrailGraceUntilMs = 0L
-        consecutiveBacktrackCount = 0
-        prevDistToTargetM = null
-        prevAlongTrackM = null
-        backtrackAlertFiredAt = 0L
         backtrackGraceUntilMs = 0L
+        resetDetectors()
     }
 
     /** Arm grace windows and reset throttles around [sample] (e.g. on waypoint arrival / follow start). */
     fun resetThrottle(sample: LocationSample) {
         lastOrdinaryGuidanceAtMs = sample.timestamp
         lastOrdinaryGuidanceLocation = LatLng(sample.lat, sample.lon)
-        consecutiveOffTrailCount = 0
-        offTrailAlertFiredAt = 0L
-        prevAbsCrossTrackM = null
-        prevCrossTrackAtMs = 0L
         offTrailGraceUntilMs = sample.timestamp + NavigationPolicy.OFF_TRAIL_GRACE_MS
-        consecutiveBacktrackCount = 0
-        prevDistToTargetM = null
-        prevAlongTrackM = null
-        backtrackAlertFiredAt = 0L
         backtrackGraceUntilMs = sample.timestamp + NavigationPolicy.BACKTRACK_GRACE_MS
+        resetDetectors()
     }
 
     /**
