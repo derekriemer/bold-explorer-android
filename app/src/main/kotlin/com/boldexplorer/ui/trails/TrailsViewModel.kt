@@ -12,9 +12,14 @@ import com.boldexplorer.shared.location.LocationProvider
 import com.boldexplorer.shared.model.Collection
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.Waypoint
+import com.boldexplorer.shared.navigation.BearingComputer
 import com.boldexplorer.shared.repository.CollectionRepository
+import com.boldexplorer.shared.repository.SettingsRepository
+import com.boldexplorer.shared.repository.TrailAnnotationRepository
+import com.boldexplorer.shared.repository.TrailAttachment
 import com.boldexplorer.shared.repository.TrailRepository
 import com.boldexplorer.shared.repository.WaypointRepository
+import com.boldexplorer.shared.settings.AppSettings
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -39,10 +44,18 @@ class TrailsViewModel
         private val trailRepo: TrailRepository,
         private val waypointRepo: WaypointRepository,
         private val collectionRepo: CollectionRepository,
+        private val annotationRepo: TrailAnnotationRepository,
         private val targetingStateHolder: TargetingStateHolder,
         private val selectedCollectionHolder: SelectedCollectionHolder,
+        settingsRepo: SettingsRepository,
         locationProvider: LocationProvider,
     ) : ViewModel() {
+        /** Units for the distances this screen reports; see [attachExisting]. */
+        val settings: StateFlow<AppSettings> =
+            settingsRepo
+                .observeSettings()
+                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), AppSettings())
+
         // Current fix, used to decide which trail end is nearest for the end-proximity actions.
         val currentLocation: StateFlow<LatLng?> =
             locationProvider.locationFlow
@@ -248,8 +261,27 @@ class TrailsViewModel
             waypointIds: Set<Long>,
         ) {
             viewModelScope.launch {
-                waypointIds.forEach { waypointRepo.attach(trailId, it) }
-                _toast.value = "${waypointIds.size} waypoint${if (waypointIds.size == 1) "" else "s"} attached"
+                val distant =
+                    waypointIds.mapNotNull { id ->
+                        val outcome = waypointRepo.attach(trailId, id)
+                        // Attaching to a recorded trail annotates it; one that lands far off the
+                        // trail is worth naming, since only the user can say whether it belongs.
+                        (outcome as? TrailAttachment.Annotation)
+                            ?.takeIf { it.fix.farFromTrail }
+                            ?.let { waypointRepo.getById(id)?.name to it.fix.crossTrackM }
+                    }
+                val attached = "${waypointIds.size} waypoint${if (waypointIds.size == 1) "" else "s"} attached"
+                _toast.value =
+                    if (distant.isEmpty()) {
+                        attached
+                    } else {
+                        val units = settings.value.units
+                        val far =
+                            distant.joinToString("; ") { (name, m) ->
+                                "${name ?: "one"} is ${BearingComputer.formatDistance(m, units)} from the trail"
+                            }
+                        "$attached — $far"
+                    }
             }
         }
 
@@ -295,9 +327,12 @@ class TrailsViewModel
             viewModelScope.launch {
                 val trail = trailRepo.getById(trailId) ?: return@launch
                 val waypoints = trailRepo.waypointsForTrail(trailId)
+                // Annotations are not geometry, so they are not in `waypointsForTrail` — but they
+                // are things the user marked, and an export that dropped them would lose them.
+                val annotated = annotationRepo.forTrail(trailId).map { it.waypoint }
                 val filename = "trail-${trail.id}.gpx"
                 GpxFileWriter
-                    .writeToDownloads(context, filename, GpxExporter.exportTrail(trail.name, waypoints))
+                    .writeToDownloads(context, filename, GpxExporter.exportTrail(trail.name, waypoints, annotated))
                     .onSuccess { _exportStatus.value = "Exported ${trail.name} to Downloads/$filename" }
                     .onFailure { _exportStatus.value = "Export failed: ${it.message}" }
             }

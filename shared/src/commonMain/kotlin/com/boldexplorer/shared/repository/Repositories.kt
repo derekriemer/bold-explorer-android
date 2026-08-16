@@ -64,11 +64,19 @@ interface WaypointRepository {
         limit: Int? = null,
     ): List<WaypointWithDistance>
 
+    /**
+     * Attach [waypointId] to [trailId], as geometry or as an annotation — see [TrailAttachment] for
+     * which, and why the caller does not get to say.
+     *
+     * @param position an explicit vertex position. Passing one *is* the claim that this point
+     *   belongs in the geometry at that index, so it is always honoured; it is how a hand-built
+     *   route is assembled, and it is the only way to fabricate geometry left in the API.
+     */
     suspend fun attach(
         trailId: Long,
         waypointId: Long,
         position: Int? = null,
-    )
+    ): TrailAttachment
 
     suspend fun detach(
         trailId: Long,
@@ -249,6 +257,22 @@ interface TrailAnnotationRepository {
 }
 
 /**
+ * What attaching a waypoint to a trail actually did (ADR 0001, S5b).
+ *
+ * The caller does not choose. A trail that already has track points is a recorded trail, and a point
+ * attached to one afterwards is an annotation — it has no legitimate vertex position, so appending
+ * one fabricates geometry. A trail with no track points is a hand-built route whose waypoints *are*
+ * its geometry, so there the attachment is a vertex.
+ */
+sealed interface TrailAttachment {
+    /** The point became a vertex of the trail's geometry, at [position]. */
+    data class Vertex(val position: Int) : TrailAttachment
+
+    /** The point annotates the trail without being part of it. */
+    data class Annotation(val fix: TrailAnnotationFix) : TrailAttachment
+}
+
+/**
  * Where an annotation landed when it was projected onto its trail.
  *
  * @property crossTrackM how far the waypoint is from the trail. Reported so the app can say so out
@@ -259,7 +283,22 @@ data class TrailAnnotationFix(
     val segmentIndex: Int,
     val offsetM: Double,
     val crossTrackM: Double,
-)
+) {
+    /** Far enough off the trail that the app should say so rather than attach it quietly. */
+    val farFromTrail: Boolean get() = crossTrackM > FAR_FROM_TRAIL_M
+
+    companion object {
+        /**
+         * How far off a trail an annotation has to be before it is worth mentioning, in metres.
+         *
+         * A reporting threshold, deliberately not a refusal. Things worth annotating — a bench, a
+         * gate, a parking area — sit beside a path, not on it, and an honest number of metres for
+         * "beside" is generous. What it exists to catch is `dos` at 1031 m, where the useful thing
+         * to say is the distance itself.
+         */
+        const val FAR_FROM_TRAIL_M = 100.0
+    }
+}
 
 interface SettingsRepository {
     fun observeSettings(): Flow<AppSettings>

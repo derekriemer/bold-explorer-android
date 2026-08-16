@@ -45,12 +45,25 @@ INNER JOIN trail_waypoint AS tw ON tw.waypoint_id = w.id
 WHERE tw.trail_id = :trailId
 ORDER BY tw.position;
 
--- Named waypoints only (kind='waypoint') for a trail; used in trail editor UI.
+-- Named waypoints for a trail, however they are attached; used in the trail editor UI.
+--
+-- Two ways to be attached since S5b: as a vertex of the geometry (a hand-built route), or as an
+-- annotation projected onto it (anything attached to a recorded trail, including a waypoint marked
+-- mid-walk). The user made one gesture for both and should see one list, so this unions them and
+-- orders both by where they fall along the trail. A vertex at `position` is polyline vertex
+-- `position - 1`, which is what makes the two sort keys comparable.
 namedWaypointsForTrail:
-SELECT w.* FROM waypoint AS w
-INNER JOIN trail_waypoint AS tw ON tw.waypoint_id = w.id
-WHERE tw.trail_id = :trailId AND w.kind = 'waypoint'
-ORDER BY tw.position;
+SELECT w.*
+FROM waypoint AS w
+INNER JOIN (
+    SELECT waypoint_id AS wid, (position - 1) * 1.0 AS along_seg, 0.0 AS along_off
+    FROM trail_waypoint WHERE trail_id = :trailId
+    UNION ALL
+    SELECT waypoint_id AS wid, segment_index * 1.0 AS along_seg, offset_m AS along_off
+    FROM trail_annotation WHERE trail_id = :trailId
+) AS ord ON ord.wid = w.id
+WHERE w.kind = 'waypoint'
+ORDER BY ord.along_seg, ord.along_off;
 
 -- Count of track points for a trail; cheap query for the summary line.
 trackPointCountForTrail:

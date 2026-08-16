@@ -19,13 +19,22 @@ object GpxExporter {
             appendLine("</gpx>")
         }
 
+    /**
+     * @param waypoints the trail's geometry, in recorded order — what becomes the `<trk>`.
+     * @param annotations points attached to the trail without being part of it (ADR 0001, S5b).
+     *   They are written as `<wpt>` and never as track points, which is what GPX means by the two
+     *   tags anyway. Defaulted to empty so a caller with no annotations reads unchanged, not so a
+     *   caller can forget them: dropping them would silently lose everything the user marked.
+     */
     fun exportTrail(
         trailName: String,
         waypoints: List<Waypoint>,
+        annotations: List<Waypoint> = emptyList(),
     ): String =
         buildString {
             appendGpxHeader()
             for (wpt in waypoints.filter { it.kind == Waypoint.KIND_WAYPOINT }) appendWpt(wpt)
+            for (wpt in annotations) appendWpt(wpt)
             appendTrk(trailName, waypoints)
             appendLine("</gpx>")
         }
