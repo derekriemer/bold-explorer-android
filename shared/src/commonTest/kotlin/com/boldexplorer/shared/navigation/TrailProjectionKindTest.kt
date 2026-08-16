@@ -1,7 +1,9 @@
 package com.boldexplorer.shared.navigation
 
+import com.boldexplorer.shared.geo.LatLng
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 
 /**
  * A projection onto a polyline is not one kind of answer, and ADR 0001 Amendment 1 requires
@@ -65,5 +67,27 @@ class TrailProjectionKindTest {
     fun aSinglePointTrailIsEndpointClamped() {
         val single = TrailPolyline(listOf(offsetFromOrigin(0.0, 0.0)))
         assertEquals(ProjectionKind.EndpointClamped, single.project(offsetFromOrigin(10.0, 10.0))!!.kind)
+    }
+
+    @Test
+    fun aTrailEndingInADuplicatedPointStillClampsAsAnEndpoint() {
+        // GPS recorders emit duplicate fixes, so an imported trail can end with two identical
+        // points — and `densify` leaves a final segment micrometres long for the same reason.
+        // Either way the last segment has no length, both clamps tie on cross-track, and the
+        // tie-break keeps the *lower* alongTrackM: the second-to-last vertex. Classified by index
+        // that is "interior", so walking past the end read as an apex wedge — which the vertex
+        // accept radius rejects, putting the tracker in Uncertain at exactly the point where
+        // completion has to be decided. The end of a trail is a place, not an index.
+        val end = LatLng(40.0 + 40.0 / 111_194.9, -105.0)
+        val poly = TrailPolyline(listOf(LatLng(40.0, -105.0), end, end))
+
+        val pastTheEnd = LatLng(40.0 + 55.0 / 111_194.9, -105.0)
+        val pos = assertNotNull(poly.project(pastTheEnd))
+
+        assertEquals(
+            ProjectionKind.EndpointClamped,
+            pos.kind,
+            "a clamp at the terminus is a terminus clamp, however many points sit on it",
+        )
     }
 }

@@ -286,12 +286,20 @@ class TrailPolyline(
      * interior vertex represents the apex wedge, where the along-track answer is not merely coarse
      * but meaningless.
      */
-    private fun kindOfVertex(vertexIndex: Int): ProjectionKind =
-        if (vertexIndex == 0 || vertexIndex == size - 1) {
+    private fun kindOfVertex(vertexIndex: Int): ProjectionKind {
+        // By *position*, not by index. A trail can end with duplicated points — GPS recorders emit
+        // them, and resampling can leave a final segment micrometres long. The last segment then
+        // has no length, both clamps tie on cross-track, and the tie-break keeps the lower
+        // alongTrackM: the second-to-last vertex. Comparing indices called that interior, so
+        // walking past the end looked like an apex wedge, which the vertex accept radius rejects —
+        // leaving the tracker Uncertain at the one place completion has to be decided.
+        val atM = cumulativeM[vertexIndex]
+        return if (atM <= ENDPOINT_TOLERANCE_M || atM >= totalLengthM - ENDPOINT_TOLERANCE_M) {
             ProjectionKind.EndpointClamped
         } else {
             ProjectionKind.VertexClamped
         }
+    }
 
     /**
      * The point on the trail at [alongTrackM] metres from the start, clamped to the trail's extent.
@@ -390,5 +398,13 @@ class TrailPolyline(
     private companion object {
         /** Below this length a segment carries no direction and is treated as a point. */
         const val DEGENERATE_SEGMENT_M = 1e-9
+
+        /**
+         * How close to a terminus a vertex must be to count as that terminus.
+         *
+         * Well below anything navigationally meaningful, and well above the float noise and
+         * duplicate points that make the last vertex ambiguous.
+         */
+        const val ENDPOINT_TOLERANCE_M = 0.5
     }
 }
