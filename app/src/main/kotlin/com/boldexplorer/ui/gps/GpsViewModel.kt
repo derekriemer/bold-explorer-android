@@ -1231,6 +1231,9 @@ class GpsViewModel
                         // Feeds the endpoint completion radius, which tightens with good GPS and
                         // is capped so poor GPS never widens it.
                         accuracyM = sample.accuracy,
+                        // Completion decided from the match rather than the index, so overshooting
+                        // the end still finishes the trail (ADR 0001, S5).
+                        reachedEnd = guidanceCoordinator.hasReachedTheEnd(),
                     )
             ) {
                 is TrailFollowerEvent.WaypointReached -> {

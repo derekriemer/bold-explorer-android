@@ -153,6 +153,30 @@ object NavigationPolicy {
     const val OFF_TRAIL_ALERT_INTERVAL_MS = 45_000L
     const val OFF_TRAIL_GRACE_MS = 30_000L
 
+    /**
+     * Confirmed along-track travel required before a trail may be completed, on a long trail.
+     *
+     * A loop's start is also its end, and a follow may legitimately begin standing there — so
+     * "you are at the end" is not on its own evidence of having walked the trail. ADR 0001
+     * revision 15 specified this guard; it was never implemented, so until now nothing stopped a
+     * completion firing on the first fix of a loop.
+     */
+    const val MIN_TRAVEL_FOR_COMPLETION_M = 50.0
+
+    /**
+     * The same guard as a fraction of the trail, for trails shorter than the flat minimum.
+     *
+     * The effective guard is `min(MIN_TRAVEL_FOR_COMPLETION_M, totalLengthM × this)`. A flat
+     * minimum alone would make any trail shorter than 50 m impossible to finish — the same
+     * "constant that does not scale to the geometry" failure this ADR exists to remove, and the one
+     * revision 15 was itself written to correct.
+     */
+    const val COMPLETION_TRAVEL_FRACTION = 0.25
+
+    /** Travel a trail of [totalLengthM] must show before completion is believable. */
+    fun completionTravelGuardM(totalLengthM: Double): Double =
+        min(MIN_TRAVEL_FOR_COMPLETION_M, totalLengthM * COMPLETION_TRAVEL_FRACTION)
+
     // ── Backtrack detection ───────────────────────────────────────────────────────────────────
 
     const val BACKTRACK_CONSECUTIVE_THRESHOLD = 3

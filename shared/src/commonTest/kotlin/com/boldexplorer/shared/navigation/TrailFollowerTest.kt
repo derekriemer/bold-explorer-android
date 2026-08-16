@@ -94,6 +94,26 @@ class TrailFollowerTest {
     }
 
     @Test
+    fun reachedEnd_completesEvenWithTheIndexNowhereNearTheEnd() {
+        // The point of deciding completion from the match rather than from `currentIndex`. The
+        // index only advances when a waypoint check fires, so a walker can be standing past the
+        // end of the trail with it still pointing at the first waypoint — and the radial branch
+        // that owns completion never runs, because it is gated on the index being at the last one.
+        // The walk then never finishes: the follow stays active and guidance keeps steering at a
+        // waypoint behind the user.
+        val f = TrailFollower()
+        f.start(listOf(wp1, wp2), thresholdM = 15.0)
+        assertIs<TrailFollowerState.Active>(f.state.value)
+        assertEquals(0, (f.state.value as TrailFollowerState.Active).currentIndex, "precondition: index at the start")
+
+        // Somewhere far from either waypoint, so no radial or projection check can fire.
+        val event = f.onLocationUpdate(LatLng(0.01, 0.01), reachedEnd = true)
+
+        assertIs<TrailFollowerEvent.TrailComplete>(event)
+        assertIs<TrailFollowerState.Complete>(f.state.value)
+    }
+
+    @Test
     fun stop_resetsToIdle() {
         val f = TrailFollower()
         f.start(listOf(wp1, wp2))
