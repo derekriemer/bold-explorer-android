@@ -1271,12 +1271,23 @@ specified.)*
   the Debug logging switch; both logging defects are fixed. See **Amendment 2** for the accuracy-aware
   noise floor the corpus forced on the way. **Not yet field-verified** — the corpus can show which
   fixes would fire, not what the user hears.
-- **S5 is half done** (2026-08-15). Every consumer of an unwindowed projection is gone: wrong-way
-  (S5a), the desired course, and off-trail cross-track. Distance, checkpoint counting and completion
-  still come from `currentIndex`, which is the rest of S5. **Not field-verified.**
-  - Deviation, deliberate: the match is passed as a parameter rather than added to
-    `TrailFollowerState.Active`. `TrailFollower` does not produce a match and should not carry one,
-    and a parameter cannot go stale.
+- **S5 is done as specified** (2026-08-15/16). All four of its requirements are met: the match is
+  available additively, `desiredTrailCourseDeg` is a chord bearing centred on it, `currentIndex`
+  still exists and is still advanced by the old path, and nothing derives it from `TrailPosition`.
+  Every consumer of an unwindowed projection is gone: wrong-way (S5a), the desired course, and
+  off-trail cross-track. **Not field-verified.**
+  - **Correction, 2026-08-16.** This entry previously read "half done", on the grounds that
+    distance, checkpoint counting and completion still come from `currentIndex`. That was a
+    misreading of S5, which says in terms that `currentIndex` *stays and keeps being advanced by
+    the old path* — the shadow-mode duplication is deliberate, and migrating those consumers is
+    **S7** ("migrate `NavigationTargetResolver` to endpoint/POI targets, retire the Checkpoint N of M
+    utterances, migrate the telemetry field set"). Anyone planning from the old wording would have
+    built S7 believing they were finishing S5.
+  - Completion moved to along-track (2026-08-16) because it was a live defect and the fix is the one
+    Verification already specified, not because S5 required it. It is S2's rule finished.
+  - Deviation, deliberate: the match is reached through the coordinator's session rather than added
+    to `TrailFollowerState.Active`. `TrailFollower` does not produce a match and should not carry
+    one, and a session cannot be half-initialised.
   - Density equivalence now covers guidance decisions, not only geometry — the executable form of
     #35, and the half of it that only became assertable at S5.
 - **S5b is open** — the geometry/annotation split. Blocks S6, and #69 is its attach-time guard.
