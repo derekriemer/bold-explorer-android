@@ -825,6 +825,45 @@ Note the direction. Everywhere else in this document a poor fix must *shrink* an
 "may I act on this fix?" but "may I call this fix impossible?", and the cost of being wrong is a hole
 in someone's recorded walk.
 
+**Design, decided with the owner 2026-08-16.** Three questions the decision above left open, answered
+before any of it was built.
+
+*An annotation is a link, not a copy.* `auto_waypoint` gains a nullable `waypoint_id`; the `waypoint`
+row stays the single truth for name, position, description, elevation, `tentative` and collection
+membership. A null `waypoint_id` is an app-generated anchor — the bend anchors the table was
+reserved for — and a set one is an annotation for a user's waypoint. Copying name and lat/lon into
+the annotation instead would fork the truth on the first rename: the waypoint would move and the
+trail's copy would not, which is the same class of silent divergence this step exists to remove.
+
+*The trail decides which path a point takes, not the user.* Restating the invariant in terms the data
+can answer:
+
+> A trail's geometry is the points it was **built from**, in order. Anything attached to it
+> **afterwards** is an annotation.
+
+For a recorded trail "built from" means its track points; for a hand-built route — a trail with no
+track points at all, assembled out of existing waypoints — the attached waypoints *are* the geometry,
+and those are legitimate vertices. So the operational rule is: **a trail that already has track points
+is a recorded trail, and anything attached to it later is an annotation.** That is precisely the `dos`
+case, and it also settles the one the original text called harmless only by luck — a waypoint marked
+*during* a walk becomes an annotation too, because the track already passes through where the user was
+standing. No new question is put to the user at attach time, which matters: the answer is a property of
+the trail, and a blind user should not have to arbitrate a data-model distinction mid-walk.
+
+*The derived values are recomputed by the operations that invalidate them, not cached and hoped over.*
+`segment_index` and `offset_m` are written at attach time and re-projected by every repository
+operation that changes a trail's geometry — recording stopping, a vertex attached, detached or
+reordered, a GPX import. Putting the re-projection inside those methods is what stops it being
+forgotten; annotations per trail are few and a projection is cheap, so there is nothing to optimise
+here yet.
+
+Two consequences worth stating. A trail with fewer than two points has no geometry to project onto, so
+an attach there is a vertex whatever else is true — which also covers a waypoint marked in the seconds
+after recording starts. And once an annotation is not a vertex, a `dos` can no longer fabricate
+geometry *at all*: the attach-time check stops being a guard against corruption and becomes an honest
+report — "attached, but it is 1.0 km from the trail" — because the corruption it guarded against is
+now structurally impossible.
+
 **S6 — stop firing `WaypointReached` per trackpoint.** Replace with `NamedWaypointPassed` /
 `TrailComplete` / `MatchLost` / `MatchReacquired`. **Critical:** `resetThrottle` has exactly one
 production caller — `GpsViewModel.kt:1207`, inside the `WaypointReached` handler. It re-arms both
