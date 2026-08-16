@@ -864,6 +864,48 @@ geometry *at all*: the attach-time check stops being a guard against corruption 
 report — "attached, but it is 1.0 km from the trail" — because the corruption it guarded against is
 now structurally impossible.
 
+**Built 2026-08-16.** Three things the design above did not say, found while doing it.
+
+*It is not `auto_waypoint` after all.* This document named that dormant table as the home for
+annotations, on the grounds that it already stores lat/lon as truth with along-track derived. It
+cannot be. A waypoint-backed row must not carry its own copy of the name and position — that is the
+fork the whole step exists to prevent — so it would have to leave `name`, `lat` and `lon` null, and
+those three columns are exactly what an app-generated bend anchor uses them for. One table would then
+be three nullable columns and a tag: a union pretending to be a row. Annotations get
+`trail_annotation(trail_id, waypoint_id, segment_index, offset_m, created_at)`, every column NOT NULL,
+and `auto_waypoint` is left to the anchors it was reserved for. The invariant the ADR actually cared
+about — lat/lon is the truth, along-track is derived — is stronger here, because the truth is a
+foreign key to the row that already holds it rather than a copy of two of its fields.
+
+*The re-projection has to be owned, not remembered.* `segment_index` and `offset_m` are stale the
+moment the geometry moves under them, so every repository operation that changes a trail's geometry
+re-projects: attaching a vertex, detaching, reordering, and each recorded track point. The last of
+those sounds expensive and is not — it returns on an empty-annotations check, which is every trail
+during an ordinary recording. The case it exists for is real: an annotation past the old end clamps
+to it, and the trail keeps growing.
+
+*Two reads had to learn about annotations, or the change would have lost the user's data in plain
+sight.* Both are the same mistake in different clothes — code that asked "what is attached to this
+trail?" and got the answer from the geometry table.
+
+- The trail editor's named-waypoint list now unions vertices and annotations, ordered by where each
+  falls along the trail. Without it, the waypoint someone marks mid-walk would attach correctly and
+  then vanish from the trail they marked it on. A vertex at `position` is polyline vertex
+  `position - 1`, which is what makes the two sort keys comparable.
+- `GpxExporter.exportTrail` takes annotations and writes them as `<wpt>`, never as `<trkpt>` — which
+  is what those two tags mean in GPX anyway. An export that dropped them would lose every point the
+  user had marked on a recorded trail.
+
+**Fixing `dos` needs no migration at all**, which is the last thing building this settled. The two
+gestures the app already has do it: **detach, then attach again.** Detaching removes the vertex and
+collapses the position gap; attaching lands on the annotate path, because the trail has track points.
+Nothing is moved, projected or deleted — the point keeps the coordinates it was recorded at and stops
+being geometry, which is exactly what the owner asked for. Trail 12 returns to 1492 m because a
+vertex became an annotation, not because anything was corrected. Covered by
+`detachAndReattachDemotesAnExistingStrayPoint`, which asserts the phantom kilometre is present first,
+so it cannot pass vacuously. A migration that did this automatically would still be wrong for the
+reason already given: it cannot know which strays were mistakes.
+
 **S6 — stop firing `WaypointReached` per trackpoint.** Replace with `NamedWaypointPassed` /
 `TrailComplete` / `MatchLost` / `MatchReacquired`. **Critical:** `resetThrottle` has exactly one
 production caller — `GpsViewModel.kt:1207`, inside the `WaypointReached` handler. It re-arms both
@@ -1410,7 +1452,12 @@ specified.)*
     one, and a session cannot be half-initialised.
   - Density equivalence now covers guidance decisions, not only geometry — the executable form of
     #35, and the half of it that only became assertable at S5.
-- **S5b is open** — the geometry/annotation split. Blocks S6, and #69 is its attach-time guard.
+- **S5b is built** (2026-08-16) — the geometry/annotation split. `trail_annotation` exists, attaching
+  to a recorded trail annotates rather than appends, the derived position is re-projected by every
+  operation that invalidates it, and the two reads that would otherwise have lost marked waypoints
+  know about it. See the S5b section for the three things building it changed. **Not field-verified,
+  and no existing data has been touched** — demoting `dos` is still a deliberate act for the owner,
+  on a backed-up database. S6 is unblocked.
 - **`ProgressTracker.acquire()` still uses the plain match gate** (raised by S4c, undecided). A follow
   started while standing in an apex wedge can commit to a degenerate first position. Applying the
   vertex accept radius there would mean silence at follow-start, which is its own harm for a blind
