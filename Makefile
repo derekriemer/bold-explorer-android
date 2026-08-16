@@ -99,6 +99,20 @@ adb-pair:
 logcat:
 	adb logcat -s BoldExplorer:* AndroidRuntime:E
 
+# ── Database backup / restore ──────────────────────────────────────────────
+# Needs a debuggable build on the device (make install) — run-as cannot reach a
+# beta or release APK's data. Backups are written read-only; see tools/db.sh for
+# why the -wal sidecar and force-stop matter.
+
+.PHONY: db-backup
+db-backup:
+	tools/db.sh backup
+
+.PHONY: db-restore
+db-restore:
+	@test -n "$(FROM)" || { echo "usage: make db-restore FROM=<backup-dir>"; exit 2; }
+	tools/db.sh restore "$(FROM)" --force
+
 # ── Formatting ─────────────────────────────────────────────────────────────
 .PHONY: fmt
 fmt:
@@ -132,4 +146,6 @@ help:
 	@echo "make adb-connect       — connect to phone via Tailscale (set PHONE_IP, PHONE_PORT)"
 	@echo "make adb-pair          — pair phone for first-time wireless ADB (set PHONE_IP, PAIR_PORT)"
 	@echo "make logcat            — tail app + crash logs"
+	@echo "make db-backup         — pull the device database (read-only copy, incl. -wal)"
+	@echo "make db-restore FROM=<dir> — push a backup back onto the device"
 	@echo "make xcframework       — build BoldExplorerShared.xcframework (macOS + Xcode only)"
