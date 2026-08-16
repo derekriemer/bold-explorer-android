@@ -52,6 +52,8 @@ import com.boldexplorer.audio.trailMatchLogEntry
 import com.boldexplorer.shared.navigation.TravelDirection
 import com.boldexplorer.shared.navigation.TrailFollowerEvent
 import com.boldexplorer.shared.navigation.TrailFollowerState
+import com.boldexplorer.shared.navigation.TrackPointDecision
+import com.boldexplorer.shared.navigation.TrackPointGate
 import com.boldexplorer.shared.navigation.TrailGuidance
 import com.boldexplorer.shared.navigation.TrailGuidanceCoordinator
 import com.boldexplorer.shared.navigation.TrailGuidanceState
@@ -407,8 +409,9 @@ class GpsViewModel
         private val recordingMachine = TrailRecordingMachine()
         val recordingState: StateFlow<TrailRecordingState> = recordingMachine.state
 
-        // Distance-throttle geometry for auto-record (not part of the state machine).
-        @Volatile private var _lastAutoRecordLoc: LatLng? = null
+        // Distance throttle + plausibility for auto-record (not part of the state machine). One
+        // object because the two anchors it holds have to be kept apart deliberately.
+        private val trackPointGate = TrackPointGate(minSpacingM = AUTO_RECORD_DISTANCE_M)
 
         // ── Reactive data ─────────────────────────────────────────────────────────────
 
@@ -1495,10 +1498,42 @@ class GpsViewModel
          */
         private fun maybeRecordTrackPoint(sample: LocationSample) {
             val recording = recordingMachine.state.value as? TrailRecordingState.Recording ?: return
-            val current = LatLng(sample.lat, sample.lon)
-            val last = _lastAutoRecordLoc
-            if (last != null && haversineDistanceMeters(last, current) < AUTO_RECORD_DISTANCE_M) return
-            _lastAutoRecordLoc = current
+
+            // Recording is the one writer with no filter on the fix it is handed, so a single wild
+            // GPS position becomes a permanent out-and-back spike in the geometry — the `dos` damage
+            // (inflated length, a phantom segment the matcher can project onto) arriving from GPS
+            // rather than from an attach. Projection does not save us: the spike loses on
+            // cross-track, but `alongTrackM` is path length *through* it, so a 10 m real step
+            // carries a kilometre-scale jump in the coordinate the window, backtrack and completion
+            // are all denominated in.
+            //
+            // Both the plausibility test and the distance throttle live in [TrackPointGate], which
+            // holds an anchor for each. They are not the same anchor: see its docs for what sharing
+            // one costs, which is the guard evaporating while the user stands still.
+            when (val decision = trackPointGate.consider(LatLng(sample.lat, sample.lon), sample.timestamp, sample.accuracy)) {
+                is TrackPointDecision.TooClose -> return
+
+                is TrackPointDecision.Impossible -> {
+                    viewModelScope.launch {
+                        audioEventLog.append(
+                            AudioLogEntry(
+                                timestampMs = sample.timestamp,
+                                kind = AudioLogEntry.Kind.DETECTION_STATE,
+                                trigger = "TrackPointRejected",
+                                inputs = "jumpM=${"%.1f".format(decision.jumpM)}, elapsedMs=${decision.elapsedMs}" +
+                                    ", accuracyM=${sample.accuracy?.let { "%.1f".format(it) } ?: "null"}",
+                                outputs = "budgetM=${"%.1f".format(decision.budgetM)}" +
+                                    ", impliedSpeedMps=${"%.1f".format(decision.impliedSpeedMps)}",
+                                played = "not recorded",
+                            ),
+                        )
+                    }
+                    return
+                }
+
+                is TrackPointDecision.Record -> Unit
+            }
+
             val trailId = recording.trailId
             val name = "Track ${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())}"
             viewModelScope.launch {
@@ -1622,7 +1657,11 @@ class GpsViewModel
                 recordingMachine.selectTrail(trailId, hasPoints = trailWaypoints.value.isNotEmpty())
             }
             recordingMachine.startRecording()
-            _lastAutoRecordLoc = location.value?.let { LatLng(it.lat, it.lon) }
+            trackPointGate.start(
+                from = location.value?.let { LatLng(it.lat, it.lon) },
+                timestampMs = location.value?.timestamp,
+                accuracyM = location.value?.accuracy,
+            )
             backgroundSession.setModeActive(GpsBackgroundMode.AutoRecord, true)
             startLocationService() // keep process alive when screen is off
             announce(
@@ -1636,7 +1675,7 @@ class GpsViewModel
         fun stopAutoRecord() {
             val count = (recordingMachine.state.value as? TrailRecordingState.Recording)?.pointCount ?: 0
             recordingMachine.stop()
-            _lastAutoRecordLoc = null
+            trackPointGate.stop()
             backgroundSession.setModeActive(GpsBackgroundMode.AutoRecord, false)
             stopLocationServiceIfIdle()
             announce(

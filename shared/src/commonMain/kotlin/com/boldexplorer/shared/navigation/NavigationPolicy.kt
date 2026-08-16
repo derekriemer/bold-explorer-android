@@ -2,6 +2,7 @@ package com.boldexplorer.shared.navigation
 
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sqrt
 
 /**
  * Central home for navigation *decision thresholds* — the numbers that decide whether an event
@@ -72,6 +73,64 @@ object NavigationPolicy {
     ): Double {
         val acc = accuracyM ?: return ceilingM
         return min(ceilingM, max(floorM, factor * acc))
+    }
+
+    // ── Recording: refusing a fix no walk could have reached ────────────────────────────────
+    //
+    // Swept against the 2026-08-12 corpus (2105 consecutive-fix pairs from five sessions) before
+    // shipping, which is the only reason these are not guesses. The first version of this rule was
+    // a flat 30 m/s and would have refused two real fixes: 34.0 m and 30.2 m of apparent movement
+    // in one second, both at 25 m reported accuracy. Jitter at bad GPS, not teleports.
+
+    /**
+     * Speed beyond which a step is a moved fix rather than a moving person, in m/s.
+     *
+     * 50 m/s is 180 km/h. Deliberately far above anything that could lay down a trail, because at a
+     * 1 Hz fix rate this is a bar on a *single step* — 50 m between consecutive fixes — and the
+     * corpus's fastest honest pair is 34 m/s. A bar tuned close to observed noise would refuse real
+     * walking on the day the noise is slightly worse than the day it was measured.
+     *
+     * Distinct from [TrailGapCheck.MAX_PLAUSIBLE_SPEED_MPS], which classifies gaps in a whole
+     * recorded trail after the fact. Same idea, different time scale, and conflating the two is what
+     * made the first version of this check wrong.
+     */
+    const val WILD_FIX_SPEED_MPS = 50.0
+
+    /**
+     * How many combined standard deviations of reported accuracy a step may cover before the fix,
+     * rather than the walker, is what moved.
+     *
+     * Android reports accuracy as a 68% (1σ) radius, so two fixes admit a combined
+     * `sqrt(a² + b²)`. A jump inside a few of those is a jump the fix already told you it might
+     * invent. At 25 m accuracy this makes the bar 141 m, against a worst observed jitter of 34 m —
+     * four times the noise the corpus actually contains.
+     *
+     * This is the widen-with-uncertainty direction, and deliberately so: unlike an *acceptance*
+     * region (see [tightenWithAccuracy]), a poor fix here must make the app slower to call something
+     * impossible, not quicker. The cost of a false refusal is a hole in someone's recorded walk.
+     */
+    const val WILD_FIX_SIGMA_FACTOR = 4.0
+
+    /**
+     * How far a fix may legitimately be from the previous believed one.
+     *
+     * The looser of two budgets: what a walk could cover in [elapsedMs] at [WILD_FIX_SPEED_MPS], and
+     * what the two fixes' own reported accuracies could invent. Both are needed — the speed term
+     * alone refuses the far side of a GPS dropout, and the accuracy term alone refuses ordinary
+     * walking once the fix rate drops.
+     *
+     * A null accuracy carries no information, so it contributes no budget rather than a default one.
+     */
+    fun wildJumpBudgetM(
+        elapsedMs: Long,
+        accuracyM: Double?,
+        previousAccuracyM: Double?,
+    ): Double {
+        val travelBudget = WILD_FIX_SPEED_MPS * (elapsedMs / 1000.0)
+        val a = accuracyM ?: 0.0
+        val b = previousAccuracyM ?: 0.0
+        val noiseBudget = WILD_FIX_SIGMA_FACTOR * sqrt(a * a + b * b)
+        return max(travelBudget, noiseBudget)
     }
 
     // ── Nearby: proximity announcements & mid-trail pickup ──────────────────────────────────

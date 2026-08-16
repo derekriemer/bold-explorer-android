@@ -744,6 +744,87 @@ a mistake, and the honest outcome is to say so.
 Out of scope: automatic repair of existing bad data. Whether a stray point was an error or a
 deliberate extension is not knowable from the data, so it is a question for the human.
 
+**Answered by the owner, 2026-08-16:** every point that exists keeps the GPS position it was
+recorded at. Nothing is moved, projected onto the trail, or deleted. The migration therefore has no
+judgement to make — an annotation simply stops being geometry and keeps its coordinates, which is
+what the `auto_waypoint` shape already stores. `dos` stays exactly where it is; trail 12 becomes
+1492 m because the point is no longer a vertex, not because the point was corrected.
+
+Also settled: of the four trails the gap check flags, only trail 12 has ever been followed. The
+others are scratch recordings. So the check's value is forward-looking — catching the next one — and
+the existing findings need no action beyond `dos`.
+
+**Where the check actually belongs, decided 2026-08-16.** S5b takes #69's stated job away from it: an
+annotation cannot fabricate geometry, so there is nothing left for an attach-time gap guard to
+prevent. Asking what the check was still *for* turned up a hole nobody had looked at —
+`maybeRecordTrackPoint` has **no accuracy or plausibility gate of any kind**. Once the user has moved
+`AUTO_RECORD_DISTANCE_M`, whatever fix arrives is written as a vertex. A single wild GPS position
+therefore becomes a permanent out-and-back spike: the whole of the `dos` damage, arriving from the
+recorder instead of from an attach. So the check keeps its subject and changes its moment — from
+reporting bad geometry afterwards to refusing it at the one place that can.
+
+Two things this settles that are worth stating plainly, because both are tempting to get wrong:
+
+- **Projection does not save us, though it looks as if it should.** A spike loses on cross-track
+  every time — the user's fixes are a kilometre from it — so *matching* is unharmed. But
+  `alongTrackM` is path length *through* the polyline, and the path through a spike really is two
+  kilometres long. A 10 m real step then carries a kilometre-scale jump in the coordinate that the
+  matching window, backtrack and completion are all denominated in: the window would put the true
+  next position outside itself and drop to `Lost` at the same spot on every walk. The geometry is
+  fine and the coordinate is ruined, which is the more dangerous of the two failures because
+  everything downstream still looks reasonable.
+- **Rejection is on kinematics, never on shape.** A hairpin and the first leg of a spike are
+  indistinguishable as geometry, so any smoothing tuned to flatten the spike rounds off the
+  switchbacks this matcher exists to handle. What separates them is time: a hairpin is ordinary
+  walking, and no walk covers a kilometre in four seconds. Hence `impliesImpossibleSpeed` on a single
+  step, and hence it lives at recording, where the timestamps are real fix times rather than the
+  row-insert times that force `findGaps` to treat speed as a classifier and never as a trigger.
+
+A rejected fix deliberately does not advance the anchor, so one wild position cannot drag the trail
+out after it, and the rejection is logged (`TrackPointRejected`) rather than silent. `findGaps` keeps
+its post-hoc role for imported tracks, where nothing can be prevented and only reporting is possible.
+
+**There are two anchors, and the first implementation had one** (found by the PR bot, fixed
+2026-08-16). Speed was measured from the last *recorded* point, which is not the last fix we
+believed. A recorder writes a vertex only every `AUTO_RECORD_DISTANCE_M`, and while the user stands
+still it writes none at all, so that elapsed time grows without bound and any speed measured against
+it shrinks towards zero. After 34 s of standing still a 1 km teleport reads as 29 m/s and is accepted;
+a 100 m one needs 3.4 s, which is *less* than the interval between vertices at walking pace. The guard
+would have been present only for a teleport landing within seconds of the last kept vertex, and absent
+exactly when a stationary user with a poor sky view is most likely to get a wild fix.
+
+So the questions are separated and the code that answers them is one object, `TrackPointGate`:
+**believability** is judged against the last fix we believed — updated by every plausible fix,
+including the ones then discarded as too close to keep — while the **distance throttle** is judged
+against the last point recorded. A rejected fix updates neither: it is not evidence of where the user
+is, nor of when we last knew. Putting both anchors in one small class is the point, not tidiness; the
+defect was two meanings sharing one field in a view model, where nothing made them argue.
+
+**And the bar was in the wrong units** (2026-08-16, same review). Having fixed the anchor, the rule
+was swept against the 2026-08-12 corpus — 2105 consecutive-fix pairs across five sessions — and a
+flat 30 m/s would have **refused two real fixes**: 34.0 m and 30.2 m of apparent movement in one
+second, both at 25 m reported accuracy, with the 99.9th percentile at 29.3 m/s. The threshold was
+inside the noise, not outside it. 30 m/s was chosen to classify gaps of 200 m and more in a whole
+recorded trail; reusing it on a single step at 1 Hz asks a different question, which is the same
+category error as sharing the anchor.
+
+The corpus also shows what a speed bar gets backwards. The jumps at 25 m accuracy are jitter from a
+fix that *announced* its uncertainty; the 25 m/s jumps at 2.7 m accuracy are the genuinely suspicious
+ones, and a flat bar treats those as safer. So the budget is the looser of two — what a walk could
+cover at `WILD_FIX_SPEED_MPS` (50 m/s), and what the two fixes' own reported accuracies could invent
+(`WILD_FIX_SIGMA_FACTOR` × `sqrt(a² + b²)`, 4σ). Both terms are load-bearing: the speed term alone
+refuses the far side of a dropout, and the accuracy term alone refuses ordinary walking as soon as
+the fix rate drops.
+
+Swept result: **zero refusals across all 2105 pairs**, with the bar at 141 m where the worst observed
+jitter is 34 m. At poor accuracy it converges on roughly the 200 m floor `findGaps` already uses,
+which is a coincidence worth noticing rather than a constraint that was imposed.
+
+Note the direction. Everywhere else in this document a poor fix must *shrink* an acceptance region
+(#55's anti-pattern). Here it must widen the budget, because the question is inverted: this is not
+"may I act on this fix?" but "may I call this fix impossible?", and the cost of being wrong is a hole
+in someone's recorded walk.
+
 **S6 — stop firing `WaypointReached` per trackpoint.** Replace with `NamedWaypointPassed` /
 `TrailComplete` / `MatchLost` / `MatchReacquired`. **Critical:** `resetThrottle` has exactly one
 production caller — `GpsViewModel.kt:1207`, inside the `WaypointReached` handler. It re-arms both
