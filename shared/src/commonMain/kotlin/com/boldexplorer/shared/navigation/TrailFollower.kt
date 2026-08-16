@@ -152,6 +152,9 @@ class TrailFollower(
      * @param smoothedBearingDeg Smoothed GPS heading from [GpsHeadingSmoother] in degrees [0, 360).
      *                          Used as a fallback for the projection heading check when [bearingDeg]
      *                          is null. No-op for existing callers (defaults to null).
+     * @param completion        What the session knows about finishing. Defaults to
+     *                          [CompletionEvidence.None], which completes nothing: a caller that
+     *                          says nothing about travel does not get a completion by accident.
      */
     fun onLocationUpdate(
         location: LatLng,
@@ -159,7 +162,7 @@ class TrailFollower(
         bearingDeg: Float? = null,
         smoothedBearingDeg: Float? = null,
         accuracyM: Double? = null,
-        reachedEnd: Boolean = false,
+        completion: CompletionEvidence = CompletionEvidence.None,
     ): TrailFollowerEvent? {
         val current = _state.value as? TrailFollowerState.Active ?: return null
         val target = current.waypoints[current.currentIndex]
@@ -187,7 +190,7 @@ class TrailFollower(
         //     The radial branch below cannot see that case at all, because it only runs when the
         //     index *is* at the last waypoint — which is how a walk could finish with the follow
         //     still running and guidance still pointing at a waypoint behind the user.
-        if (reachedEnd) {
+        if (completion.completesTheTrail) {
             val atEnd = current.copy(currentIndex = current.waypoints.size - 1)
             _state.value = atEnd
             return fireAdvance(atEnd, location, altitudeM, mechanism = "endpoint_alongtrack", accuracyM = accuracyM)
@@ -198,8 +201,14 @@ class TrailFollower(
         //    t >= 0.9 along the final leg, so on a 300 m final segment it completed the trail 30 m
         //    out (the ~65 ft field report). Completion instead uses a radius that tightens with
         //    good GPS and is capped so poor GPS can never widen it.
+        //
+        //    Gated on the *same* travel evidence as 0a, and for the same reason. `startNearest`
+        //    picks the waypoint nearest the user, so a follow begun at a loop's trailhead — which
+        //    is also its final track point — starts with the index already at the end and the user
+        //    inside a 5–6 m radius of it. Ungated, that announces the trail complete on the first
+        //    fix, before a step has been taken.
         if (current.currentIndex == current.waypoints.size - 1) {
-            return if (d <= completionRadiusM(accuracyM)) {
+            return if (completion.travelled && d <= completionRadiusM(accuracyM)) {
                 fireAdvance(current, location, altitudeM, null, null, null, "endpoint", accuracyM = accuracyM)
             } else {
                 null

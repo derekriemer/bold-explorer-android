@@ -1232,8 +1232,9 @@ class GpsViewModel
                         // is capped so poor GPS never widens it.
                         accuracyM = sample.accuracy,
                         // Completion decided from the match rather than the index, so overshooting
-                        // the end still finishes the trail (ADR 0001, S5).
-                        reachedEnd = guidanceCoordinator.hasReachedTheEnd(),
+                        // the end still finishes the trail, and neither route to it fires before
+                        // the user has walked (ADR 0001, S5).
+                        completion = guidanceCoordinator.completionEvidence(),
                     )
             ) {
                 is TrailFollowerEvent.WaypointReached -> {

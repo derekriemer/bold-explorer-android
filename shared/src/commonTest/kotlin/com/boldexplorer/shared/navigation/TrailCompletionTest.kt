@@ -37,13 +37,20 @@ class TrailCompletionTest {
     private fun followerAtFinalLeg(): TrailFollower =
         TrailFollower().apply { start(longFinalLeg(), fromIndex = 1) }
 
+    /**
+     * A session that has walked far enough for a completion to be believable. Every test here is
+     * about the *radius*, so they all grant the travel evidence the radius is gated on; the guard
+     * itself is tested by [coldFollowAtTheEndDoesNotComplete] and in `CompletionFromMatchTest`.
+     */
+    private val walked = CompletionEvidence(pastTheEnd = false, travelled = true)
+
     @Test
     fun longFinalLeg_doesNotCompleteThirtyMetresOut() {
         // The reported bug, as a test. 30 m short of a 300 m final leg puts the projection fraction
         // at exactly 0.9, which used to complete the trail.
         val f = followerAtFinalLeg()
         assertNull(
-            f.onLocationUpdate(beforeEnd(30.0), accuracyM = 5.0),
+            f.onLocationUpdate(beforeEnd(30.0), accuracyM = 5.0, completion = walked),
             "must not complete 30 m short of the endpoint",
         )
     }
@@ -51,7 +58,7 @@ class TrailCompletionTest {
     @Test
     fun completesInsideTheEndpointRadius() {
         val f = followerAtFinalLeg()
-        val event = f.onLocationUpdate(beforeEnd(4.0), accuracyM = 3.0)
+        val event = f.onLocationUpdate(beforeEnd(4.0), accuracyM = 3.0, completion = walked)
         assertIs<TrailFollowerEvent.TrailComplete>(event, "should complete 4 m from the end")
     }
 
@@ -59,12 +66,12 @@ class TrailCompletionTest {
     fun goodAccuracyTightensTheRadius() {
         // 10 m out with 3 m accuracy gives a 6 m radius, so it must not complete...
         val tight = followerAtFinalLeg()
-        assertNull(tight.onLocationUpdate(beforeEnd(10.0), accuracyM = 3.0), "6 m radius at 10 m out")
+        assertNull(tight.onLocationUpdate(beforeEnd(10.0), accuracyM = 3.0, completion = walked), "6 m radius at 10 m out")
 
         // ...while 10 m accuracy gives the full 15 m ceiling, which does.
         val loose = followerAtFinalLeg()
         assertIs<TrailFollowerEvent.TrailComplete>(
-            loose.onLocationUpdate(beforeEnd(10.0), accuracyM = 10.0),
+            loose.onLocationUpdate(beforeEnd(10.0), accuracyM = 10.0, completion = walked),
             "15 m radius at 10 m out",
         )
     }
@@ -75,13 +82,13 @@ class TrailCompletionTest {
         // the ceiling, 20 m out still does not complete. Bad GPS must produce uncertainty, never a
         // larger acceptance region.
         val f = followerAtFinalLeg()
-        assertNull(f.onLocationUpdate(beforeEnd(20.0), accuracyM = 30.0), "capped at the ceiling")
+        assertNull(f.onLocationUpdate(beforeEnd(20.0), accuracyM = 30.0, completion = walked), "capped at the ceiling")
     }
 
     @Test
     fun poorAccuracyHedgesTheAnnouncement() {
         val hedged = followerAtFinalLeg()
-        val event = hedged.onLocationUpdate(beforeEnd(8.0), accuracyM = 30.0)
+        val event = hedged.onLocationUpdate(beforeEnd(8.0), accuracyM = 30.0, completion = walked)
         assertIs<TrailFollowerEvent.TrailComplete>(event)
         assertTrue(event.hedged, "30 m accuracy must not assert arrival flatly")
     }
@@ -89,7 +96,7 @@ class TrailCompletionTest {
     @Test
     fun goodAccuracyAssertsTheAnnouncement() {
         val confident = followerAtFinalLeg()
-        val event = confident.onLocationUpdate(beforeEnd(4.0), accuracyM = 3.0)
+        val event = confident.onLocationUpdate(beforeEnd(4.0), accuracyM = 3.0, completion = walked)
         assertIs<TrailFollowerEvent.TrailComplete>(event)
         assertTrue(!event.hedged, "3 m accuracy can state arrival plainly")
     }
@@ -109,8 +116,21 @@ class TrailCompletionTest {
                     fromIndex = 1,
                 )
             }
-        val event = f.onLocationUpdate(LatLng(latFor(270.0), 0.0), accuracyM = 5.0)
+        val event = f.onLocationUpdate(LatLng(latFor(270.0), 0.0), accuracyM = 5.0, completion = walked)
         assertIs<TrailFollowerEvent.WaypointReached>(event, "mid-trail projection must still advance")
+    }
+
+    @Test
+    fun coldFollowAtTheEndDoesNotComplete() {
+        // The radius is not a second, ungated route to completion. `startNearest` picks the
+        // waypoint nearest the user, so a follow begun at a loop's trailhead — which is also its
+        // final track point — starts with the index at the end and the user inside the 5–6 m
+        // radius. Ungated, the first fix announces the trail complete before a step is taken.
+        val f = followerAtFinalLeg()
+        assertNull(
+            f.onLocationUpdate(beforeEnd(2.0), accuracyM = 3.0, completion = CompletionEvidence.None),
+            "completed on the first fix of a follow that had walked nothing",
+        )
     }
 
     @Test
@@ -119,7 +139,7 @@ class TrailCompletionTest {
         // projection change, so the trail can always be finished by walking to its end.
         val f = followerAtFinalLeg()
         assertIs<TrailFollowerEvent.TrailComplete>(
-            f.onLocationUpdate(beforeEnd(1.0), accuracyM = 5.0),
+            f.onLocationUpdate(beforeEnd(1.0), accuracyM = 5.0, completion = walked),
             "arriving at the endpoint completes",
         )
     }
