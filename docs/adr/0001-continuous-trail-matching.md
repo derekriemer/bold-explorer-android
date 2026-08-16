@@ -1323,5 +1323,21 @@ specified.)*
   the one already written down under Verification, completion on `alongTrackM` passing
   `totalLengthM` rather than on radius alone, which needs the match as the source of truth. Fixing
   it inside the radial rule instead would be a third tuning of a check that is being deleted.
+
+  **Closed 2026-08-16**, and the fix arrived with a hole of its own, found by the PR bot: the travel
+  guard was written into the along-track route only, leaving the endpoint radius as an ungated second
+  door. `startNearest` picks the waypoint nearest the user, so a follow begun at a loop's trailhead —
+  which is also its last track point — starts with the index already at the end and the user inside a
+  5–6 m radius of it, and announced the trail complete on its first fix. Both routes now read one
+  `CompletionEvidence`, which carries `pastTheEnd` and `travelled` together **because** that is what
+  stops a guard being applied to one route and forgotten on the other. The same shape of mistake as
+  the split session ownership: two places deciding one thing.
+
+  `travelled` is deliberately readable *without* a confirmed match, unlike `pastTheEnd`. It is a
+  session accumulator rather than a claim about this fix, and requiring `Matched` to read it would
+  withdraw the radial completion at a terminus — the place a match is most likely to wobble and the
+  last place a walk can afford to lose it. The accepted cost: a follow whose matcher never confirms
+  anything never auto-completes. That is the never-acquires family listed above, and a walk that
+  never matched has nothing to announce.
 - **The vertex accept radius is unset.** Same untuned status as the original S4 constants, with the
   difference that it can now be swept against the 2026-08-12 corpus before it ships.

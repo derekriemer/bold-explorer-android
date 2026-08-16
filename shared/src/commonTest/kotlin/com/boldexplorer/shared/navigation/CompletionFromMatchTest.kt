@@ -47,7 +47,7 @@ class CompletionFromMatchTest {
 
         walk(c, lengthM = 200.0, toM = 215.0)
 
-        assertTrue(c.hasReachedTheEnd(), "walked 15 m past the end and completion never fired")
+        assertTrue(c.completionEvidence().completesTheTrail, "walked 15 m past the end and completion never fired")
     }
 
     @Test
@@ -61,7 +61,7 @@ class CompletionFromMatchTest {
 
         walk(c, lengthM = 200.0, toM = 210.0, fromM = 205.0)
 
-        assertFalse(c.hasReachedTheEnd(), "completed a trail the user had not walked")
+        assertFalse(c.completionEvidence().completesTheTrail, "completed a trail the user had not walked")
     }
 
     @Test
@@ -75,7 +75,7 @@ class CompletionFromMatchTest {
 
         walk(c, lengthM = 40.0, toM = 55.0)
 
-        assertTrue(c.hasReachedTheEnd(), "a 40 m trail must still be completable")
+        assertTrue(c.completionEvidence().completesTheTrail, "a 40 m trail must still be completable")
     }
 
     @Test
@@ -93,7 +93,38 @@ class CompletionFromMatchTest {
             t += 4_000L
         }
 
-        assertTrue(c.hasReachedTheEnd(), "a reverse walk ends at the recorded start")
+        assertTrue(c.completionEvidence().completesTheTrail, "a reverse walk ends at the recorded start")
+    }
+
+    @Test
+    fun aFollowThatHasWalkedNothingGrantsNoTravel() {
+        // The evidence the *radial* branch reads. It fires on the index alone, so this is the only
+        // thing standing between a follow started at a loop's trailhead — index already at the last
+        // track point, user inside the completion radius of it — and "trail complete" on fix one.
+        val c = coordinator()
+        val points = densify(northShape(200.0), spacingM = 5.0)
+        c.startFollow(points, TravelDirection.Forward)
+
+        walk(c, lengthM = 200.0, toM = 200.0, fromM = 195.0)
+
+        assertFalse(c.completionEvidence().travelled, "a follow that had walked 5 m granted travel")
+    }
+
+    @Test
+    fun travelSurvivesAMatchThatHasGoneUncertain() {
+        // Travel is a session accumulator, not a claim about this fix. Requiring a confirmed match
+        // to read it would withdraw the radial completion exactly at a terminus, where the match is
+        // most likely to wobble and the walk can least afford to lose it.
+        val c = coordinator()
+        val points = densify(northShape(200.0), spacingM = 5.0)
+        c.startFollow(points, TravelDirection.Forward)
+        walk(c, lengthM = 200.0, toM = 190.0)
+
+        // A fix well off the trail: the match cannot confirm a position from it.
+        c.onFix(sampleAt(northM = 190.0, eastM = 120.0, timestampMs = 300_000L, accuracyM = 5.0, speedMps = 1.4))
+
+        assertFalse(c.completionEvidence().pastTheEnd, "an unconfirmed fix must not claim the end")
+        assertTrue(c.completionEvidence().travelled, "190 m of confirmed walking was forgotten")
     }
 
     @Test
@@ -104,6 +135,6 @@ class CompletionFromMatchTest {
 
         walk(c, lengthM = 200.0, toM = 120.0)
 
-        assertFalse(c.hasReachedTheEnd(), "completed halfway along the trail")
+        assertFalse(c.completionEvidence().completesTheTrail, "completed halfway along the trail")
     }
 }

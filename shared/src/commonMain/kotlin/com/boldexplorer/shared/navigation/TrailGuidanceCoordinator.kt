@@ -168,7 +168,8 @@ class TrailGuidanceCoordinator(
     }
 
     /**
-     * Whether the matcher says the user has walked to or past the far end of the trail.
+     * What the session knows about finishing — see [CompletionEvidence]. The single derivation of
+     * the completion rules; both of the follower's routes to `TrailComplete` read this one value.
      *
      * Completion asks geometry, not `currentIndex`. The index only advances when a waypoint check
      * fires, so a user who passed several checkpoints without tripping one can reach the end with
@@ -178,24 +179,28 @@ class TrailGuidanceCoordinator(
      * "Past the end" shows up as an [ProjectionKind.EndpointClamped] projection, because
      * `alongTrackM` is clamped to the polyline and so can never exceed its length. Which end counts
      * depends on the declared direction: a reverse walk finishes at 0.
-     *
-     * Gated on confirmed travel. A loop's start is also its end and a follow may begin standing
-     * there, so being at the end is not by itself evidence of having walked the trail.
      */
-    fun hasReachedTheEnd(): Boolean {
-        val followSession = session ?: return false
-        val match = followSession.lastMatch ?: return false
-        if (match.state != MatchState.Matched) return false
-        val position = match.position ?: return false
-        if (position.kind != ProjectionKind.EndpointClamped) return false
-
+    fun completionEvidence(): CompletionEvidence {
+        val followSession = session ?: return CompletionEvidence.None
+        val match = followSession.lastMatch ?: return CompletionEvidence.None
         val totalLengthM = followSession.polyline.totalLengthM
-        val atFarEnd =
-            when (followSession.direction) {
-                TravelDirection.Forward -> position.alongTrackM >= totalLengthM - END_EPSILON_M
-                TravelDirection.Reverse -> position.alongTrackM <= END_EPSILON_M
-            }
-        return atFarEnd && match.travelledM >= NavigationPolicy.completionTravelGuardM(totalLengthM)
+
+        // Travel is a session accumulator, so it is readable whatever this fix did. Requiring a
+        // confirmed match here would withdraw the radial completion at a terminus — the one place
+        // a match is most likely to wobble, and the last place the walk can afford to lose it.
+        val travelled = match.travelledM >= NavigationPolicy.completionTravelGuardM(totalLengthM)
+
+        // Being past the end, by contrast, is a claim about where this fix is, so it needs one.
+        val position = match.position?.takeIf { match.state == MatchState.Matched }
+        val pastTheEnd =
+            position != null &&
+                position.kind == ProjectionKind.EndpointClamped &&
+                when (followSession.direction) {
+                    TravelDirection.Forward -> position.alongTrackM >= totalLengthM - END_EPSILON_M
+                    TravelDirection.Reverse -> position.alongTrackM <= END_EPSILON_M
+                }
+
+        return CompletionEvidence(pastTheEnd = pastTheEnd, travelled = travelled)
     }
 
     /** Recompute and publish guidance for [sample] against [followState]; returns the new value. */

@@ -81,6 +81,9 @@ class TrailFollowerTest {
         assertEquals(com.boldexplorer.shared.model.Waypoint.KIND_TRACK_POINT, event.kind)
     }
 
+    /** A session that has walked far enough for a completion to be believable. */
+    private val walked = CompletionEvidence(pastTheEnd = false, travelled = true)
+
     @Test
     fun trailComplete_whenLastWaypointReached() {
         val f = TrailFollower()
@@ -88,13 +91,13 @@ class TrailFollowerTest {
         // Reach wp1 → advances to wp2
         f.onLocationUpdate(LatLng(0.0, 0.0))
         // Now reach wp2
-        val event = f.onLocationUpdate(LatLng(0.00009, 0.0))
+        val event = f.onLocationUpdate(LatLng(0.00009, 0.0), completion = walked)
         assertIs<TrailFollowerEvent.TrailComplete>(event)
         assertIs<TrailFollowerState.Complete>(f.state.value)
     }
 
     @Test
-    fun reachedEnd_completesEvenWithTheIndexNowhereNearTheEnd() {
+    fun pastTheEnd_completesEvenWithTheIndexNowhereNearTheEnd() {
         // The point of deciding completion from the match rather than from `currentIndex`. The
         // index only advances when a waypoint check fires, so a walker can be standing past the
         // end of the trail with it still pointing at the first waypoint — and the radial branch
@@ -107,10 +110,30 @@ class TrailFollowerTest {
         assertEquals(0, (f.state.value as TrailFollowerState.Active).currentIndex, "precondition: index at the start")
 
         // Somewhere far from either waypoint, so no radial or projection check can fire.
-        val event = f.onLocationUpdate(LatLng(0.01, 0.01), reachedEnd = true)
+        val event =
+            f.onLocationUpdate(
+                LatLng(0.01, 0.01),
+                completion = CompletionEvidence(pastTheEnd = true, travelled = true),
+            )
 
         assertIs<TrailFollowerEvent.TrailComplete>(event)
         assertIs<TrailFollowerState.Complete>(f.state.value)
+    }
+
+    @Test
+    fun pastTheEndWithoutTravelDoesNotComplete() {
+        // Being at the end is not evidence of having walked to it — a loop's start is also its end.
+        val f = TrailFollower()
+        f.start(listOf(wp1, wp2), thresholdM = 15.0)
+
+        val event =
+            f.onLocationUpdate(
+                LatLng(0.01, 0.01),
+                completion = CompletionEvidence(pastTheEnd = true, travelled = false),
+            )
+
+        assertNull(event, "completed a trail the session had not walked")
+        assertIs<TrailFollowerState.Active>(f.state.value)
     }
 
     @Test
