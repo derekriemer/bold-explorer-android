@@ -23,7 +23,7 @@ class RecordedWalkTest {
 
     @Test
     fun aGenuineReversalIsReported() {
-        // 2026-08-02, 472s-502s: along-track falls 544 m -> 506 m across six consecutive fixes at
+        // 472s-502s into the walk: along-track falls 544 m -> 506 m across six consecutive fixes at
         // 1.4 m/s, with accuracy near 2.7 m and cross-track near 1 m. Not noise, not a switchback,
         // not a stale target — the user walked back down the trail and then resumed.
         val result = ScenarioRunner.run(ReverseWalkWithOneReversal)
@@ -102,11 +102,11 @@ class RecordedWalkTest {
         )
     }
 
-    // ── Walks the owner labelled while walking them (2026-08-12) ──────────────────
+    // ── Walks the owner labelled while walking them ───────────────────────────────
 
     @Test
     fun aDeliberateExcursionOffTheTrailIsReported() {
-        // 01:19:33, mid-walk: "making a big old loop off trail. Will be back on earlier stretch
+        // Marked mid-walk, ~1470s in: "making a big old loop off trail. Will be back on earlier stretch
         // eventually". The user left the trail on purpose and said so, so the eleven alerts the
         // build of the day produced from 1458s onward were right. This is the one scenario here
         // that asserts an alert *must* happen on real geometry.
@@ -123,7 +123,7 @@ class RecordedWalkTest {
 
     @Test
     fun theMarkedFalseWrongWayAlertsAreNotReproduced() {
-        // 01:37:40, mid-walk: "weird wrong way fired". Two wrong-way alerts eight seconds apart —
+        // Marked mid-walk, ~435s in: "weird wrong way fired". Two wrong-way alerts eight seconds apart —
         // 422s and 441s here — inside a span where accuracy was deliberately degraded to 25 m. The
         // user called them wrong at the time, which is as close to ground truth as this corpus gets.
         val result = ScenarioRunner.run(DegradedReverseFalseAlarms)

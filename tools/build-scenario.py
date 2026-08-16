@@ -266,7 +266,6 @@ def baseline_timeline(session: Session) -> list[tuple[int, str, str]]:
 def kotlin_fixture(
     name: str,
     package: str,
-    source_label: str,
     session: Session,
     trail_m: list[tuple[float, float]],
     fixes: list[Fix],
@@ -287,8 +286,7 @@ def kotlin_fixture(
         "/**",
     ] + [f" * {line}" for line in wrapped] + [
         " *",
-        f" * Recorded on a real walk ({source_label}), session {session.index}, ending in"
-        f" `{session.end_reason}`.",
+        f" * Recorded on a real walk, session {session.index}, ending in `{session.end_reason}`.",
         f" * {len(fixes)} fixes over {(session.end_ms - session.start_ms) / 60000:.1f} minutes;"
         f" trail reconstructed from",
         f" * targets {index_span[0]}..{index_span[1]} with no gaps.",
@@ -299,7 +297,11 @@ def kotlin_fixture(
         " preserves every",
         " * relative quantity exactly and destroys absolute position and heading. Names, marker text"
         " and",
-        " * absolute dates are gone; timestamps are milliseconds from the session start.",
+        " * absolute dates are gone — including the walk's own, which this header used to print —"
+        " and",
+        " * timestamps are milliseconds from the session start. The corpus README, outside the repo,"
+        " maps a",
+        " * scenario back to the log it came from.",
         " *",
         " * ## What the build of the day announced",
         " *",
@@ -434,16 +436,19 @@ def main() -> None:
                 north_m=north,
                 accuracy_m=f["acc"],
                 speed_mps=f["speed"],
-                # Course rotates with the frame, like every other bearing here.
-                course_deg=(float(f["course"]) + rotation_deg) % 360 if f["course"] is not None else None,
+                # Course rotates with the frame — but *opposite* in sign to the coordinates.
+                # `rotate()` turns the world counter-clockwise by theta; a bearing is measured
+                # clockwise from north, so the same physical direction reads as `bearing - theta`
+                # afterwards. Adding it instead left every fixture claiming a heading 2*theta away
+                # from the direction its own positions move — 114 degrees in one of them — which
+                # feeds relativeDeg and so the off-trail sustain path.
+                course_deg=(float(f["course"]) - rotation_deg) % 360 if f["course"] is not None else None,
             )
         )
 
-    source_label = f"{_dt.datetime.fromtimestamp(session.start_ms / 1000):%Y-%m-%d}"
     text = kotlin_fixture(
         name=args.name,
         package=args.package,
-        source_label=source_label,
         session=session,
         trail_m=trail_m,
         fixes=fixes,
