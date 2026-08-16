@@ -967,6 +967,207 @@ grace windows and zeroes both consecutive counters (`TrailGuidanceCoordinator.kt
 the event without re-homing that call means grace arms once at follow-start and never again — a
 silent regression in off-trail and backtrack detection.
 
+### S6 design, decided with the owner 2026-08-16
+
+The step began as "remove a noisy event". Working out what should be heard instead turned it into a
+design of the follow's whole audio vocabulary, and turned the "Critical" note above on its head.
+
+**What a follow sounds like.** Five things, and each one owns a question no other answers.
+
+| Cue | Cadence | Says |
+| --- | --- | --- |
+| Progress earcon | every ~5 s | *still following, and I still know where you are* |
+| Progress speech | every ~15 s | "a quarter mile to go" — along-track remaining, in the user's units |
+| Annotation approach | on approach | "Bench ahead, 60 feet, on your left" |
+| Off-trail / backtrack | on evidence | unchanged from S4/S5, but see the heartbeat below |
+| Match lost / regained | on transition | "Lost the trail" / "Back on the trail" |
+
+Track points say nothing at all. "Checkpoint 12 of 40" is not throttled, it is deleted: it reported
+an implementation detail — an index into a vertex array — at whatever rate the trail happened to be
+recorded at. Remaining distance answers the question the user actually has, and answers it the same
+way whatever the recording density. It is `totalLengthM - alongTrackM` through the direction sign,
+so it is correct in reverse and on a loop, where straight-line distance to the end is meaningless.
+(A progress *fraction* — "two thirds of the way" — may read better than metres for some walks. Noted
+as a later refinement, not built.)
+
+**The periodic cue is one producer, not the periodic cue.** Not built now — flagged so S6 does not
+foreclose it. What is periodically spoken will eventually come from more than one source: S8's bend
+guidance wants "300 feet until a right turn", a fraction cue ("three quarters of the way") may read
+better than distance for some walks, and there is no reason to think that list is finished. If S6
+hardcodes one string at one interval, each addition is surgery on the thing that decides *and* the
+thing that speaks.
+
+The cheap insurance, and all that is warranted today, is a seam rather than a mechanism: whatever
+decides the 15-second utterance **returns** a cue rather than speaking one, so a second producer is
+added beside it instead of inside it. No registry, no priority scheme, no configuration — those are
+S8's problem, and inventing them now would be building for a shape nobody has seen yet. One producer
+that returns a value is not more code than one producer that speaks; it is the same code with its
+output named.
+
+**The progress cue yields rather than interrupts.** It is suppressed when anything else spoke
+recently, and suppressed when the trail is not straight — a corner deserves the bend cue S8 will
+add, not a distance readout. "Not straight" is answerable **today**, which was not obvious:
+`TrailPolyline.sagittaOver` already exists, is density-invariant, and catches an S-bend where net
+turn reads zero. **S6 is its first production caller.** Suppression needs far less machinery than
+announcement — no time-derived lookahead, no anchoring to the curvature maximum, no already-announced
+set — because getting it wrong costs one skipped beep, and skipping is idempotent. **So S8 does not
+have to move ahead of the iOS port**, which was the live question.
+
+**Annotations are announced on approach, not on arrival.** This closes the regression S5b took
+deliberately. An annotation is stored at a projected along-track position, so "passing" it is the
+user's along-track crossing it in the direction of travel — `followDirection.sign`, which the
+coordinator already carries, so a reverse follow needs no special case, plus an already-announced set
+so jitter cannot re-announce a mark.
+
+The lead is a **time** budget, `clamp(reactionSeconds × speed, min, max)`, not a fixed distance:
+these are things a walker may want to *stop at*, and being told you are level with the bench means
+you are past it by the time you have reacted. Lead time is what the user experiences, and walking
+speed genuinely varies with terrain and tiredness. The speed is the EMA `ProgressTracker` already
+keeps for dead reckoning (`speedEmaMps`), exposed rather than re-derived — a second speed estimate
+would drift from the first and there would be no way to tell which was wrong.
+
+Distance and side are always spoken, and a distant annotation is phrased as an aside — "Off to your
+right, 250 feet: pavilion" — rather than plainly. Deliberately a **phrasing** boundary and not a
+silence boundary: mis-tuning it changes how something sounds, not whether the user learns it exists.
+
+**Passing a mark during a dropout.** The environmental dropouts are real (field walk 2026-08-02), so
+a mark will be crossed while the tracker is `Uncertain` or `Lost`, and the crossing is then an
+*inference* from the along-track jump at reacquisition. Silence is the wrong default because it is
+ambiguous — for a blind user it reads identically to "there was nothing there". The precedent is
+already in the code: `TrailComplete(hedged)` says "you should be at the end" rather than asserting
+arrival when accuracy was too poor. So the mark is announced late and hedged, with distance behind —
+**but only when the rejoin itself is trustworthy.** S5 already measures that as `predictionErrorM`,
+non-null exactly when the rejoin landed somewhere unpredicted; a rejoin elsewhere on the trail means
+"you passed the bench" may simply be false, and a confident false statement about position is the
+worst thing this app can say. If a long dropout ever produces a burst of these, name the recent ones
+and summarise the rest by count — held in reserve rather than built on speculation.
+
+**Match state is carried by the earcon, not by silence.** While the match is lost the progress earcon
+keeps its cadence but changes character, and speech marks each transition once. There is field
+precedent for why silence and unchanged sound are both wrong: a hard accuracy gate once froze
+distance and bearing while the earcon carried on, so the audio implied everything was fine while the
+app had stopped knowing anything. Sound carries the continuous state, speech carries the change; the
+progress cue can then never imply confidence the tracker does not have. Announcing needs a sustain
+requirement so a `Matched → Uncertain → Matched` flap does not chatter — the same consecutive-count
+shape the detectors already use.
+
+**The heartbeat is dropped, and the "Critical" note above is not what it looks like.** The per-track-point
+event was doing load-bearing work, but not the work the warning implies. Track points are recorded
+every 10 m (`AUTO_RECORD_DISTANCE_M`), so an advance fires every ~7–8 s at walking pace, and each one
+calls `resetThrottle` — arming 30 s of off-trail grace and 20 s of backtrack grace. Both windows are
+re-armed three to four times faster than they can expire. Grace is not a threshold but a hard mute:
+lines 320 and 469 are early returns, so inside the window the detector never runs and its counters
+never advance. **During a normal forward follow, off-trail and backtrack detection is therefore
+suppressed for the entire walk**, becoming live only when advances stop — which is what happens when
+the user leaves the trail or turns around.
+
+Re-homing that call would preserve the mechanism, and the mechanism should not be preserved:
+
+- An **advance-based** heartbeat is purely density-dependent. The same walk on the same path is muted
+  continuously at 10 m spacing, a third as often at 30 m, and barely at all on a four-waypoint
+  hand-built route. Alerting behaviour set by recording density is the exact class of defect S0–S5
+  existed to remove; re-homing it would reintroduce at the policy layer what was just removed from
+  the geometry layer.
+- A **match-based** heartbeat is density-invariant but circular: "the match is good" is the same
+  evidence the off-trail detector reads. Its only distinct effect is a 30 s tail *after* the match
+  stops being good — suppressing precisely the alerts that are wanted.
+
+So grace arms at follow-start and at a named mark, and nothing else. The counters carry the rest, and
+they are strictly more informative: they ask "is this sustained", where grace only asks "have I been
+quiet recently". Everything grace was covering for was added *after* it — the accuracy-widening gate,
+`FAST = 2` / `SLOW = 5` with corroboration, the 45 s cooldowns, the backtrack noise floor scaled by
+reported accuracy, the contiguity requirement that re-baselines across a gap.
+
+The direction of the change is worth stating plainly, because the warning above reads as if it were
+the opposite: **removing the heartbeat makes detection more sensitive and far more timely** — an
+off-trail alert becomes possible after 2–5 fixes instead of 30 s after the last advance, which at
+walking pace is about 40 m of going the wrong way before anyone mentions it. The risk is false
+positives, so this ships in **shadow first**, in the strict sense and not the loose one: grace is
+still consulted before an alert is *spoken*, and the removal is only *evaluated*. Concretely, the
+early returns at lines 320 and 469 become a `suppressedByGrace` flag — the evaluator runs every fix
+and emits its `disposition` either way, and only the firing is still gated. One walk then says what
+dropping grace would have done, and the next build is a one-line flip.
+
+The loose reading — remove grace, let the alerts fire, read the log afterwards — is rejected as the
+*default*. Its failure mode is discovering a false-positive storm several kilometres from home,
+alone, with the alerts that would normally mean something now crying wolf. The strict version costs
+one boolean. That is the S4 method, and it is why the numbers in this section are starting points
+rather than settled.
+
+**But the shadow can be made audible on request** (owner, 2026-08-17). A count in a log says how
+often something would have fired; it says nothing about whether the resulting walk is livable, and
+that is the question actually being asked. So a debug switch — "Speak shadowed alerts", default off —
+lets the held-back alerts through, following the `ShadowMatchMonitor` pattern S4 already established
+for exactly this kind of field question. `suppressedByGrace` still records what grace *would* have
+done, so the log reads the same either way and the two sources of evidence agree. The risk is
+accepted knowingly and bounded by where it is exercised: these are walks where the app is not being
+relied on for support. If it turns out to be genuinely unusable, that is itself the finding, and it
+arrives before the default changes rather than after.
+
+**Off-trail detection is gated on `isRecorded`.** The owner's observation, and it is a geometry
+argument rather than a tuning one: on a hand-built route the polyline *between* waypoints is
+invented. Nobody walked that straight line, so cross-track measured against it is not evidence of
+leaving the path — it is evidence that the path is not a line. On a recorded trail the polyline **is**
+the walked path and cross-track means what the detector thinks it means. Two different geometries
+wearing one type, distinguished by the same predicate S5b used to route attachments. Grace would have
+suppressed this everywhere, including where the geometry is real; the gate suppresses it only where
+the geometry is fiction.
+
+**Every spoken distance goes through the units preference, and through the *spoken* formatter.**
+Not a phrasing note — a correctness rule, and one this step is unusually likely to break because it
+adds four new places that say a distance. Metres are the internal unit and appear in no utterance.
+`AppSettings.units` defaults to `IMPERIAL`, so the plain reading of any example above is already the
+wrong one for the default user.
+
+Two formatters exist and they are not interchangeable: `BearingComputer.formatDistance` writes
+"500 m" / "1.3 mi" for a toast or a label, and `GpsViewModel.formatDistanceM` speaks "500 meters".
+The cues here are heard, so they take the spoken one. Since the progress and annotation cues are
+decided in `:shared` while the spoken formatter currently lives in the Android view model, moving it
+to `:shared` beside `BearingComputer` is part of this step — otherwise the decision and its rendering
+end up on opposite sides of the module boundary, and the JVM tests cannot assert what is said.
+
+The move is small and the end state is checkable: `formatDistanceM` is the **only** unit conversion
+left anywhere in the app module — everything else already calls `BearingComputer.formatDistance` in
+`:shared`. It has five spoken callers, all in `GpsViewModel`. So this is not "S6's new cues use a
+shared formatter" but "all spoken distances do", after which `app/` contains no unit arithmetic at
+all and iOS inherits the rendering rather than reimplementing it. A grep for the conversion factors
+is a fair test of that.
+
+Two things to settle while moving it, both pre-existing and both cheap to get wrong again. Its
+imperial branch switches to miles above 1000 **feet** but divides by 5280, so anything from 1000 ft
+to a mile is spoken as a fraction — "0.2 miles" where "1000 feet" was meant; the metric branch
+switches at exactly its own divisor, which is what the imperial one looks like it intends. And the
+metric branch speaks the abbreviation "km" while the imperial one speaks the word "miles", which is a
+coin toss on how a TTS engine renders it. S6 adds four new spoken distances on top of this, so the
+inconsistency stops being cosmetic the moment it is quadrupled.
+
+**Starting constants.** First guesses, to be measured from the shadow dispositions and the next
+walks rather than defended. They are written down so the implementation has no numbers to invent,
+not because any of them is settled.
+
+| Constant | Start | Why that order of magnitude |
+| --- | --- | --- |
+| `PROGRESS_EARCON_INTERVAL_MS` | 5 000 | Frequent enough to read as continuous presence. |
+| `PROGRESS_SPEECH_INTERVAL_MS` | 15 000 | One short fact; twice the rate of ordinary guidance (30 s). |
+| `PROGRESS_YIELD_MS` | 5 000 | Skip the cue if anything else spoke this recently. |
+| `ANNOTATION_LEAD_SECONDS` | 8.0 | Hear it, decide, and stop — at walking pace, roughly 10 m. |
+| `ANNOTATION_LEAD_MIN_M` / `MAX_M` | 10 / 40 | Floors it when stationary, caps it when moving fast. |
+| `ANNOTATION_ASIDE_M` | 25.0 | Beyond this, phrase as an aside rather than plainly. |
+| `STRAIGHT_LOOKAHEAD_M` | 40.0 | The window `sagittaOver` is asked about. |
+| `STRAIGHT_SAGITTA_M` | 4.0 | Above this bulge over that window, do not call it straight. |
+| `MATCH_LOST_SUSTAIN` | 3 | Non-`Matched` fixes before announcing a loss; stops flap chatter. |
+
+All distances are metres because that is the internal unit; none of them is ever spoken as one.
+
+Only `ANNOTATION_ASIDE_M` and `STRAIGHT_SAGITTA_M` change what the user is *told* rather than when;
+both fail softly, into a differently-phrased sentence and a skipped beep respectively.
+
+**What S6 does not fix.** The spurious "turn around" from the 2026-08-16 walk is a *matching*
+problem, not a detector one, and it will still be there afterwards. Backtrack grace is 20 s re-armed
+every ~7–8 s, so for that alert to have fired at all the advances must already have stopped — the
+match was struggling before the detector said anything. Dropping the heartbeat makes it fire sooner,
+not less often. Expect to see it again, and chase it as a matching defect.
+
 **S7 — delete `currentIndex`.** Migrate `NavigationTargetResolver` to endpoint/POI targets, retire
 the "Checkpoint N of M" utterances (`GpsViewModel.kt:958,1243,1268`,
 `TrailGuidanceCoordinator.kt:156`), migrate the telemetry field set.
@@ -1513,6 +1714,15 @@ specified.)*
   read review caught — the editor's list being taken for the trail's ends. **Not field-verified,
   and no existing data has been touched** — demoting `dos` is still a deliberate act for the owner,
   on a backed-up database. S6 is unblocked.
+- **S6 is designed, not built** (2026-08-16) — see "S6 design, decided with the owner" above. Three
+  things in it are worth carrying forward even if the rest is revisited: the heartbeat is dropped
+  rather than re-homed, and the "Critical" warning it answers is about the change being *silent*
+  rather than about its direction; `sagittaOver` turns out to answer "am I on a straight?" today, so
+  **S8 need not precede the iOS port**; and off-trail detection is gated on `isRecorded`, because a
+  hand-built route's polyline between waypoints is invented and cross-track against it means nothing.
+  The numbers are first guesses and ship in shadow — the `disposition` strings measure what would
+  have fired before anything is retuned. **S6 does not fix the 2026-08-16 spurious "turn around"**,
+  which is a matching defect and will still be there.
 - **`ProgressTracker.acquire()` still uses the plain match gate** (raised by S4c, undecided). A follow
   started while standing in an apex wedge can commit to a degenerate first position. Applying the
   vertex accept radius there would mean silence at follow-start, which is its own harm for a blind
