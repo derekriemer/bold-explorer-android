@@ -1,5 +1,6 @@
 package com.boldexplorer.location
 
+import com.boldexplorer.shared.navigation.ExternalTargetRequest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -39,20 +40,57 @@ sealed interface TrailTargetRequest {
 class TargetingStateHolder
     @Inject
     constructor() {
-        private val _waypointTargetId = MutableStateFlow<Long?>(null)
-        val waypointTargetId: StateFlow<Long?> = _waypointTargetId.asStateFlow()
+        private val _externalTarget = MutableStateFlow<ExternalTargetRequest?>(null)
+        val externalTarget: StateFlow<ExternalTargetRequest?> = _externalTarget.asStateFlow()
+
+        private val _targetApplied = MutableStateFlow<Boolean?>(null)
+
+        /**
+         * Whether the last target request actually took effect — `null` until one is answered.
+         *
+         * Exists because the request crosses ViewModels: the screen that raised it cannot otherwise
+         * know, and used to announce success the instant it asked. For a blind user that is the
+         * worst failure mode available, since there is no screen to glance at and no target to
+         * hear; see issue #78.
+         */
+        val targetApplied: StateFlow<Boolean?> = _targetApplied.asStateFlow()
 
         private val _trailRequest = MutableStateFlow<TrailTargetRequest?>(null)
         val trailRequest: StateFlow<TrailTargetRequest?> = _trailRequest.asStateFlow()
 
         /** Request that [waypointId] become the GPS target. */
         fun requestWaypointTarget(waypointId: Long) {
-            _waypointTargetId.value = waypointId
+            _targetApplied.value = null
+            _externalTarget.value = ExternalTargetRequest.Waypoint(waypointId)
+        }
+
+        /**
+         * Request that one end of [trailId] become the GPS target — point navigation, not a follow.
+         *
+         * Which end is not recoverable from a waypoint id, and a recorded trail's ends are track
+         * points that belong to no collection, so the request has to carry both facts itself.
+         */
+        fun requestTrailEndTarget(
+            trailId: Long,
+            isStart: Boolean,
+        ) {
+            _targetApplied.value = null
+            _externalTarget.value = ExternalTargetRequest.TrailEnd(trailId, isStart)
+        }
+
+        /** Report whether the request could be applied, for the screen that raised it. */
+        fun reportTargetApplied(applied: Boolean) {
+            _targetApplied.value = applied
         }
 
         /** Acknowledge consumption so the same request is not re-applied on the next observation. */
         fun clear() {
-            _waypointTargetId.value = null
+            _externalTarget.value = null
+        }
+
+        /** Acknowledge that the raising screen has surfaced the outcome. */
+        fun clearTargetApplied() {
+            _targetApplied.value = null
         }
 
         /** Request following [trailId], from its end when [reversed]. */

@@ -44,7 +44,9 @@ import com.boldexplorer.shared.navigation.NavMode
 import com.boldexplorer.shared.navigation.NavModeResolver
 import com.boldexplorer.shared.navigation.NavigationPolicy
 import com.boldexplorer.shared.navigation.NavigationTargetResolver
+import com.boldexplorer.shared.navigation.ExternalTargetRequest
 import com.boldexplorer.shared.navigation.NearbyTrail
+import com.boldexplorer.shared.navigation.resolveIn
 import com.boldexplorer.shared.navigation.NearbyTrailResolver
 import com.boldexplorer.shared.navigation.TrailFollower
 import com.boldexplorer.shared.navigation.FixOutcome
@@ -739,8 +741,8 @@ class GpsViewModel
             // Bridge: honour "set as GPS target" requests made from the Waypoints/Trails screens so the
             // user can re-point navigation without leaving the screen they are on.
             viewModelScope.launch {
-                targetingStateHolder.waypointTargetId.filterNotNull().collect { wpId ->
-                    applyExternalWaypointTarget(wpId)
+                targetingStateHolder.externalTarget.filterNotNull().collect { request ->
+                    targetingStateHolder.reportTargetApplied(applyExternalTarget(request))
                     targetingStateHolder.clear()
                 }
             }
@@ -799,27 +801,47 @@ class GpsViewModel
         }
 
         /**
-         * Apply a cross-screen "set as GPS target" request: ensure a collection containing [waypointId]
-         * is selected (so the explorer loads it), then wait for the matching standalone point to appear
-         * and select it. Bounded wait so a missing/slow load never hangs the bridge.
+         * Apply a cross-screen "set as GPS target" request: ensure the collection holding it is
+         * selected (so the explorer loads it), then wait for the matching point to appear and select
+         * it. Bounded wait so a missing/slow load never hangs the bridge.
+         *
+         * @return whether a target was actually set. **The caller must report this.** Every exit
+         *   here used to be a silent `return`, so a request that could not be honoured left the
+         *   raising screen's "Navigating to …" standing as the only evidence — which for a blind
+         *   user is indistinguishable from success (issue #78).
          */
-        private suspend fun applyExternalWaypointTarget(waypointId: Long) {
-            val collections = collectionRepo.collectionsForWaypoint(waypointId)
-            if (collections.isEmpty()) return
+        private suspend fun applyExternalTarget(request: ExternalTargetRequest): Boolean {
+            if (!ensureCollectionSelectedFor(request)) return false
+            val point =
+                withTimeoutOrNull(EXTERNAL_TARGET_TIMEOUT_MS) {
+                    collectionExplorer.state
+                        .mapNotNull { st -> (st as? CollectionExplorerState.Active)?.points?.let(request::resolveIn) }
+                        .first()
+                }
+            point?.let { selectCollectionPoint(it) }
+            return point != null
+        }
+
+        /**
+         * Select a collection that contains the requested target, if one is not already selected.
+         *
+         * The two kinds are found differently, and conflating them is what broke trail endpoints: a
+         * waypoint's collections come from its own membership, while a trail endpoint belongs to no
+         * collection at all — it is a track point — so the collection has to be found through the
+         * *trail*.
+         */
+        private suspend fun ensureCollectionSelectedFor(request: ExternalTargetRequest): Boolean {
+            val collections =
+                when (request) {
+                    is ExternalTargetRequest.Waypoint -> collectionRepo.collectionsForWaypoint(request.waypointId)
+                    is ExternalTargetRequest.TrailEnd -> collectionRepo.collectionsForTrail(request.trailId)
+                }
+            if (collections.isEmpty()) return false
             val current = selectedCollectionHolder.selectedCollectionId.value
             if (current == null || collections.none { it.id == current }) {
                 selectCollection(collections.first().id)
             }
-            val point =
-                withTimeoutOrNull(2_000L) {
-                    collectionExplorer.state
-                        .mapNotNull { st ->
-                            (st as? CollectionExplorerState.Active)
-                                ?.points
-                                ?.firstOrNull { it is CollectionPoint.Standalone && it.waypoint.id == waypointId }
-                        }.first()
-                }
-            point?.let { selectCollectionPoint(it) }
+            return true
         }
 
         fun clearCollectionTarget() {
@@ -1852,6 +1874,14 @@ class GpsViewModel
         }
 
         companion object {
+            /**
+             * How long to wait for the explorer to produce a cross-screen target's point.
+             *
+             * Bounded so a missing or slow collection load cannot hang the bridge. Expiring is a
+             * real answer — the request is reported as not applied, and the raising screen says so.
+             */
+            private const val EXTERNAL_TARGET_TIMEOUT_MS = 2_000L
+
             private const val AUTO_RECORD_DISTANCE_M = 10.0
             private const val AUTO_RECORD_TTS_INTERVAL = 5
 
