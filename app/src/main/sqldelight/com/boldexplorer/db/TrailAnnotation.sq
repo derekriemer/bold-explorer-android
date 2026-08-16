@@ -1,0 +1,53 @@
+-- A point attached to a trail that is not part of its geometry (ADR 0001, S5b).
+--
+-- The `waypoint` row is the truth for name, position, description and collection membership; this
+-- table only says *that* the waypoint annotates the trail, and where along it that lands.
+-- `segment_index` and `offset_m` are derived from the waypoint's real position and are rewritten
+-- whenever the geometry they were projected onto changes.
+CREATE TABLE trail_annotation (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    trail_id INTEGER NOT NULL REFERENCES trail(id),
+    waypoint_id INTEGER NOT NULL REFERENCES waypoint(id),
+    segment_index INTEGER NOT NULL,
+    offset_m REAL NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX idx_trail_annotation_trail ON trail_annotation(trail_id);
+CREATE INDEX idx_trail_annotation_wp ON trail_annotation(waypoint_id);
+CREATE UNIQUE INDEX uq_trail_annotation_pair ON trail_annotation(trail_id, waypoint_id);
+
+-- Annotations in the order they are met walking the trail in recorded order.
+forTrail:
+SELECT a.*, w.name, w.lat, w.lon, w.elev_m, w.description, w.kind, w.tentative,
+       w.created_at AS waypoint_created_at
+FROM trail_annotation AS a
+INNER JOIN waypoint AS w ON w.id = a.waypoint_id
+WHERE a.trail_id = :trailId
+ORDER BY a.segment_index, a.offset_m;
+
+-- Bare rows, for re-projection: the caller already holds the geometry and the waypoints.
+rowsForTrail:
+SELECT * FROM trail_annotation WHERE trail_id = :trailId;
+
+insert:
+INSERT INTO trail_annotation (trail_id, waypoint_id, segment_index, offset_m, created_at)
+VALUES (:trailId, :waypointId, :segmentIndex, :offsetM, :createdAt);
+
+lastInsertRowId:
+SELECT last_insert_rowid();
+
+-- Re-projection after the trail's geometry changed. Position is derived, so it is overwritten
+-- rather than reconciled.
+updateProjection:
+UPDATE trail_annotation SET segment_index = :segmentIndex, offset_m = :offsetM
+WHERE trail_id = :trailId AND waypoint_id = :waypointId;
+
+remove:
+DELETE FROM trail_annotation WHERE trail_id = :trailId AND waypoint_id = :waypointId;
+
+removeForWaypoint:
+DELETE FROM trail_annotation WHERE waypoint_id = :waypointId;
+
+removeForTrail:
+DELETE FROM trail_annotation WHERE trail_id = :trailId;

@@ -44,6 +44,22 @@ data class AutoWaypoint(
     val createdAt: Long,
 )
 
+/**
+ * A waypoint attached to a trail without being part of its geometry (ADR 0001, S5b).
+ *
+ * The [waypoint] is the truth for name, position and description; [segmentIndex] and [offsetM] are
+ * derived by projecting it onto the trail and are re-derived whenever that geometry changes. A
+ * `TrailWaypoint` by contrast *is* geometry — a vertex of the polyline.
+ */
+data class TrailAnnotation(
+    val id: Long,
+    val trailId: Long,
+    val waypoint: Waypoint,
+    val segmentIndex: Int,
+    val offsetM: Double,
+    val createdAt: Long,
+)
+
 data class Collection(
     val id: Long,
     val name: String,

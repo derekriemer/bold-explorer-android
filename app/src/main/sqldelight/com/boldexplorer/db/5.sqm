@@ -1,0 +1,30 @@
+-- An annotation is a point attached to a trail that is NOT part of its geometry (ADR 0001, S5b).
+--
+-- The ADR named the dormant `auto_waypoint` table as the home for this, on the grounds that it
+-- already stores lat/lon as truth with along-track derived. Building it showed that it cannot be:
+-- an annotation must not carry its own copy of the name and position — that is the fork the whole
+-- step exists to prevent, and it happens on the first rename — so a waypoint-backed row would have
+-- to leave `name`, `lat` and `lon` null, and those three columns are exactly what an app-generated
+-- bend anchor uses them for. One table would then mean three nullable columns and a tag, which is a
+-- union pretending to be a row. So annotations get their own table and `auto_waypoint` is left to
+-- the anchors it was reserved for.
+--
+-- No data is moved by this migration. Existing `trail_waypoint` rows keep their positions and keep
+-- being geometry; whether any of them should be demoted to an annotation is a question for the
+-- human, not for a migration (S5b, "out of scope: automatic repair of existing bad data").
+
+CREATE TABLE trail_annotation (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    trail_id INTEGER NOT NULL REFERENCES trail(id),
+    waypoint_id INTEGER NOT NULL REFERENCES waypoint(id),
+    -- Both derived from the waypoint's real position by projecting it onto the trail, and both
+    -- rewritten by every operation that changes the geometry they were derived from.
+    segment_index INTEGER NOT NULL,
+    offset_m REAL NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX idx_trail_annotation_trail ON trail_annotation(trail_id);
+CREATE INDEX idx_trail_annotation_wp ON trail_annotation(waypoint_id);
+-- A waypoint annotates a trail once. The same waypoint may annotate several trails.
+CREATE UNIQUE INDEX uq_trail_annotation_pair ON trail_annotation(trail_id, waypoint_id);

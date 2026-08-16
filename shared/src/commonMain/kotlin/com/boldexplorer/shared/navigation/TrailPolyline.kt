@@ -137,6 +137,17 @@ class TrailPolyline(
     }
 
     /**
+     * How far [position] sits from the start of its own segment.
+     *
+     * The storage form for a trail annotation (ADR 0001, S5b): a segment index plus an offset
+     * within it, rather than a single along-track scalar. Both say the same thing about a given
+     * geometry — `cumulativeM[segmentIndex] + offsetM` is the along-track distance — but the pair
+     * degrades more locally when the geometry is edited, which is the case a stored annotation has
+     * to survive.
+     */
+    fun offsetInSegmentM(position: TrailPosition): Double = position.alongTrackM - cumulativeM[position.segmentIndex]
+
+    /**
      * Every position on this polyline that is a *local* minimum of distance to [point], ordered
      * nearest first.
      *

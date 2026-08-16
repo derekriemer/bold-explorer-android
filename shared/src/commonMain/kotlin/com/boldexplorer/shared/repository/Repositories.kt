@@ -214,6 +214,53 @@ interface AutoWaypointRepository {
     suspend fun removeForTrail(trailId: Long)
 }
 
+/**
+ * Points attached to a trail that are not part of its geometry (ADR 0001, S5b).
+ *
+ * There is no `create(segmentIndex, offsetM)` here on purpose. Where an annotation sits along a
+ * trail is *derived* from the waypoint's real position, so letting a caller state it would be
+ * letting a caller fabricate it — the exact failure this table exists to end.
+ */
+interface TrailAnnotationRepository {
+    /** Annotations in the order they are met walking the trail in recorded order. */
+    suspend fun forTrail(trailId: Long): List<TrailAnnotation>
+
+    /**
+     * Attach [waypointId] to [trailId] as an annotation, projecting it onto the trail's geometry.
+     *
+     * @return where it landed, including how far off the trail it is — reported, never used to
+     *   silently refuse. Null when the trail has no geometry to project onto, which is the caller's
+     *   signal that this attachment has to be a vertex instead.
+     */
+    suspend fun annotate(
+        trailId: Long,
+        waypointId: Long,
+    ): TrailAnnotationFix?
+
+    /** Re-project every annotation of [trailId] after its geometry changed. */
+    suspend fun reproject(trailId: Long)
+
+    suspend fun remove(
+        trailId: Long,
+        waypointId: Long,
+    )
+
+    suspend fun removeForTrail(trailId: Long)
+}
+
+/**
+ * Where an annotation landed when it was projected onto its trail.
+ *
+ * @property crossTrackM how far the waypoint is from the trail. Reported so the app can say so out
+ *   loud — "attached, but it is 1.0 km from the trail" — rather than quietly placing it. Since an
+ *   annotation is no longer geometry, a distant one is merely odd, not corrupting.
+ */
+data class TrailAnnotationFix(
+    val segmentIndex: Int,
+    val offsetM: Double,
+    val crossTrackM: Double,
+)
+
 interface SettingsRepository {
     fun observeSettings(): Flow<AppSettings>
 
