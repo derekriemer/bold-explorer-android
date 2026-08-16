@@ -896,6 +896,60 @@ trail?" and got the answer from the geometry table.
   is what those two tags mean in GPX anyway. An export that dropped them would lose every point the
   user had marked on a recorded trail.
 
+**Review found the list itself had become a geometry read** (PR bot, 2026-08-16). Unioning
+annotations into the editor's named-waypoint list fixed the disappearance and created a subtler
+version of the same mistake one layer up: the trails screen took the **first and last entries of
+that list** as the trail's ends, and chose the direction for "Follow from this end" by which was
+nearer. Before S5b those entries really were vertices; after it, a bench annotated halfway along a
+recorded trail could be the only named row, so standing beside it presented as standing at an end —
+and picked a travel direction from it. That is the one guess this app must never make on a blind
+walker's behalf, and it came in through a read that was never re-examined after its meaning changed.
+
+The first fix was to filter the list to its vertices, and it was wrong — caught by the owner asking
+whether the geometry version should have been taken instead. A recorded trail's vertices are track
+points, and this list is `kind='waypoint'` only, so **a recorded trail has no named vertices at all**:
+filtering leaves it empty, `start` null, and the card's Follow and Reverse gone. That trades "starts
+you in the wrong direction sometimes" for "the button is missing", which is not an improvement. Both
+failures come from the same source — asking a *display* list a question about **shape**.
+
+So the ends come from the geometry, which every trail has: `observeTrailEndsForCollection`, the same
+lean per-collection query the GPS screen already follows from (≤2 rows per trail, no track-point
+body, live as recording extends a trail), surfaced as `TrailEnds`. No new SQL. It is read per
+collection rather than per expanded card on purpose: the collapsed card carries Follow as a TalkBack
+action and is the whole control for a blind user, and the named-waypoint flow it used to share only
+loads once a card has been expanded, so the action was absent until then.
+
+Two consequences. A recorded trail's ends are track points, named for the clock — "Track 14:32:05" —
+so "Navigate to start" names them for the trail they end (`endLabel`) and leaves a hand-built route's
+ends the names the user chose. And the list still has to say which kind each row is (`is_annotation`,
+surfaced as `TrailNamedPoint`), for the other half of the finding: reorder is offered for vertices
+only, because `setPosition` finds no `trail_waypoint` row for an annotation and returns having done
+nothing, so a TalkBack "Move up" on one reported a success that never happened — worse than the
+action's absence, because nothing else would have told the user. An annotation's position along the
+trail is derived from where it actually is; to move it, move the waypoint.
+
+**The scope worth naming:** following a trail was never broken by any of this. Follow runs from the
+GPS screen, off `trailEndsForCollection` and `NearbyTrailResolver` — geometry both, indifferent to
+named waypoints. Everything above is the trails-screen card, which is a second way in.
+
+Two more from the same review, both narrower:
+
+- *Deleting a trail left its annotations behind.* `TrailRepositoryImpl.remove` cleared every other
+  trail-owned table and not this one. The annotation belongs to the trail, not to the waypoint it
+  names — the waypoint outlives the trail, the link must not.
+- *Ownership of re-projection had a gap on the other side.* Every operation that moved the
+  **geometry** re-projected; none that moved the **waypoint** did. Editing a point's coordinates —
+  or fixing a bad GPS fix, which is the same call — left the derived position pointing where the
+  waypoint used to be, in both directions: the edited point may be the annotation that moved, or a
+  vertex of the trail one was projected onto. `reprojectForWaypoint` covers both, and a rename or a
+  description edit does no work.
+
+One more, cosmetic in code and not in what it says out loud: `TrailPolyline.project` returns
+cross-track **signed**, so a waypoint a kilometre to the *left* of a trail reported −1000 m, passed
+under the "far from trail" threshold, and would have printed as a negative number of metres. The fix
+carries a magnitude and is named for it (`distanceFromTrailM`); side is meaningful to a follower
+being told to bear left, and meaningless to "how far off is this?".
+
 **Fixing `dos` needs no migration at all**, which is the last thing building this settled. The two
 gestures the app already has do it: **detach, then attach again.** Detaching removes the vertex and
 collapses the position gap; attaching lands on the annotate path, because the trail has track points.
@@ -1455,7 +1509,8 @@ specified.)*
 - **S5b is built** (2026-08-16) — the geometry/annotation split. `trail_annotation` exists, attaching
   to a recorded trail annotates rather than appends, the derived position is re-projected by every
   operation that invalidates it, and the two reads that would otherwise have lost marked waypoints
-  know about it. See the S5b section for the three things building it changed. **Not field-verified,
+  know about it. See the S5b section for the three things building it changed, and for the fourth
+  read review caught — the editor's list being taken for the trail's ends. **Not field-verified,
   and no existing data has been touched** — demoting `dos` is still a deliberate act for the owner,
   on a backed-up database. S6 is unblocked.
 - **`ProgressTracker.acquire()` still uses the plain match gate** (raised by S4c, undecided). A follow

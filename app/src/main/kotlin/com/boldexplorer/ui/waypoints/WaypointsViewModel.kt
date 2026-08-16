@@ -304,7 +304,7 @@ class WaypointsViewModel
                     when {
                         outcome is TrailAttachment.Annotation && outcome.fix.farFromTrail ->
                             "Attached, but it is ${
-                                BearingComputer.formatDistance(outcome.fix.crossTrackM, settings.value.units)
+                                BearingComputer.formatDistance(outcome.fix.distanceFromTrailM, settings.value.units)
                             } from the trail"
 
                         else -> "Attached to trail"

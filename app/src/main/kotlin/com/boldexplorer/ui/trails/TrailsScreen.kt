@@ -42,6 +42,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.haversineDistanceMeters
 import com.boldexplorer.shared.model.Trail
+import com.boldexplorer.shared.model.TrailNamedPoint
 import com.boldexplorer.shared.model.Waypoint
 import com.boldexplorer.ui.common.CollectionDropdown
 import com.boldexplorer.ui.common.CreateItemDialog
@@ -54,6 +55,19 @@ import com.boldexplorer.ui.common.useToast
 /** Distance, in metres, within which a trail endpoint is treated as "here" for follow-from-end. */
 private const val END_PROXIMITY_M = 10.0
 
+/**
+ * What to call a trail end when navigating to it.
+ *
+ * A recorded trail ends on a track point, and those are named for the clock — "Track 14:32:05" —
+ * which tells a blind user nothing about where they are being sent. Name such an end by the trail it
+ * ends. A hand-built route ends on a real waypoint whose name the user chose, so that name is kept.
+ */
+private fun endLabel(
+    waypoint: Waypoint,
+    which: String,
+    trailName: String,
+) = if (waypoint.kind == Waypoint.KIND_WAYPOINT) waypoint.name else "the $which of $trailName"
+
 @Composable
 fun TrailsScreen(
     paddingValues: PaddingValues,
@@ -61,6 +75,7 @@ fun TrailsScreen(
 ) {
     val trails by viewModel.trails.collectAsStateWithLifecycle()
     val namedWaypoints by viewModel.namedWaypoints.collectAsStateWithLifecycle()
+    val trailEnds by viewModel.trailEnds.collectAsStateWithLifecycle()
     val trackPointCounts by viewModel.trackPointCounts.collectAsStateWithLifecycle()
     val trackPoints by viewModel.trackPoints.collectAsStateWithLifecycle()
     val allWaypoints by viewModel.allWaypoints.collectAsStateWithLifecycle()
@@ -143,6 +158,9 @@ fun TrailsScreen(
                     val expanded = trail.id == expandedId
                     val trackExpanded = trail.id == trackExpandedId
                     val wps = namedWaypoints[trail.id] ?: emptyList()
+                    // Only vertices can be reordered, so the bound "move down" is checked against
+                    // is the number of them, not the length of the list the user sees.
+                    val vertexCount = wps.count { !it.isAnnotation }
                     val trackCount = trackPointCounts[trail.id] ?: 0L
                     val tps = trackPoints[trail.id] ?: emptyList()
 
@@ -150,6 +168,7 @@ fun TrailsScreen(
                         TrailItem(
                             trail = trail,
                             namedWaypoints = wps,
+                            ends = trailEnds[trail.id],
                             trackPointCount = trackCount,
                             expanded = expanded,
                             trackExpanded = trackExpanded,
@@ -179,7 +198,7 @@ fun TrailsScreen(
                             onAttachExisting = { attachWpToTrail = trail.id },
                             onDetach = { wpId -> viewModel.detachWaypoint(trail.id, wpId) },
                             onMoveUp = { idx, wpId -> viewModel.moveUp(trail.id, wpId, idx) },
-                            onMoveDown = { idx, wpId -> viewModel.moveDown(trail.id, wpId, idx, wps.size) },
+                            onMoveDown = { idx, wpId -> viewModel.moveDown(trail.id, wpId, idx, vertexCount) },
                             onFollow = { reversed -> viewModel.followTrail(trail.id, reversed) },
                             onRecord = { viewModel.recordTrail(trail.id) },
                             onNavigateToWaypoint = { wpId, label -> viewModel.navigateToWaypoint(wpId, label) },
@@ -294,7 +313,7 @@ fun TrailsScreen(
 
     // Attach existing waypoint(s) to trail
     attachWpToTrail?.let { trailId ->
-        val existing = namedWaypoints[trailId]?.map { it.id }?.toSet() ?: emptySet()
+        val existing = namedWaypoints[trailId]?.map { it.waypoint.id }?.toSet() ?: emptySet()
         val candidates = allWaypoints.filter { it.id !in existing }
         MultiSelectItemDialog(
             title = "Attach Existing Waypoints",
@@ -312,7 +331,8 @@ fun TrailsScreen(
 @Composable
 private fun TrailItem(
     trail: Trail,
-    namedWaypoints: List<Waypoint>,
+    namedWaypoints: List<TrailNamedPoint>,
+    ends: TrailEnds?,
     trackPointCount: Long,
     expanded: Boolean,
     trackExpanded: Boolean,
@@ -342,8 +362,17 @@ private fun TrailItem(
             // Collapsed = a single focus stop: navigation, rename, and delete all live as TalkBack
             // custom actions (and as visible buttons once expanded). Within END_PROXIMITY_M of an
             // endpoint we offer "Follow from this end"; otherwise we offer explicit start/end navigation.
-            val start = namedWaypoints.firstOrNull()
-            val end = namedWaypoints.lastOrNull()
+            //
+            // The ends are the trail's geometry, never the named-waypoint list. A recorded trail's
+            // geometry is track points, so it has no named vertices at all and the list is entirely
+            // annotations — things *beside* the path. Reading them as ends would offer "Follow from
+            // this end" while standing next to a bench halfway along and pick the travel direction
+            // from it, which is the one guess this app must never make on a blind walker's behalf;
+            // reading only the list's vertices would instead leave a recorded trail with no Follow
+            // at all. Both are answered by asking the geometry, which every trail has.
+            val vertices = namedWaypoints.filterNot { it.isAnnotation }.map { it.waypoint }
+            val start = ends?.start
+            val end = ends?.end
             val distStart = currentLocation?.let { loc -> start?.let { haversineDistanceMeters(loc, LatLng(it.lat, it.lon)) } }
             val distEnd = currentLocation?.let { loc -> end?.let { haversineDistanceMeters(loc, LatLng(it.lat, it.lon)) } }
             val nearStart = distStart != null && distStart <= END_PROXIMITY_M
@@ -378,14 +407,14 @@ private fun TrailItem(
                         } else {
                             add(
                                 CustomAccessibilityAction("Navigate to start") {
-                                    onNavigateToWaypoint(start.id, start.name)
+                                    onNavigateToWaypoint(start.id, endLabel(start, "start", trail.name))
                                     true
                                 },
                             )
                             if (end != null && end.id != start.id) {
                                 add(
                                     CustomAccessibilityAction("Navigate to end") {
-                                        onNavigateToWaypoint(end.id, end.name)
+                                        onNavigateToWaypoint(end.id, endLabel(end, "end", trail.name))
                                         true
                                     },
                                 )
@@ -477,23 +506,32 @@ private fun TrailItem(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 } else {
-                    namedWaypoints.forEachIndexed { idx, wp ->
+                    namedWaypoints.forEachIndexed { idx, point ->
+                        val wp = point.waypoint
                         // Name-only row = a single focus stop. Reorder/detach are TalkBack custom
                         // actions, gated so the first/last items omit the impossible move.
+                        //
+                        // Reorder is a geometry operation and an annotation has no geometry to
+                        // reorder: `setPosition` finds no vertex row and returns having done
+                        // nothing, so offering the action would report a success that never
+                        // happened — worse than not offering it, because there is no other way to
+                        // tell. Its position along the trail is derived from where it actually is;
+                        // to move it, move the waypoint. Detach still applies to both kinds.
+                        val vertexIdx = if (point.isAnnotation) -1 else vertices.indexOfFirst { it.id == wp.id }
                         val wpActions =
                             buildList {
-                                if (idx > 0) {
+                                if (vertexIdx > 0) {
                                     add(
                                         CustomAccessibilityAction("Move up") {
-                                            onMoveUp(idx, wp.id)
+                                            onMoveUp(vertexIdx, wp.id)
                                             true
                                         },
                                     )
                                 }
-                                if (idx < namedWaypoints.size - 1) {
+                                if (vertexIdx >= 0 && vertexIdx < vertices.size - 1) {
                                     add(
                                         CustomAccessibilityAction("Move down") {
-                                            onMoveDown(idx, wp.id)
+                                            onMoveDown(vertexIdx, wp.id)
                                             true
                                         },
                                     )

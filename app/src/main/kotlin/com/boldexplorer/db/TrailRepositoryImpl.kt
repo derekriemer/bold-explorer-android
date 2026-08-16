@@ -4,6 +4,7 @@ import app.cash.sqldelight.coroutines.asFlow
 import app.cash.sqldelight.coroutines.mapToList
 import app.cash.sqldelight.coroutines.mapToOne
 import com.boldexplorer.shared.model.Trail
+import com.boldexplorer.shared.model.TrailNamedPoint
 import com.boldexplorer.shared.model.TrailWaypoint
 import com.boldexplorer.shared.model.Waypoint
 import com.boldexplorer.shared.repository.TrailRepository
@@ -31,12 +32,12 @@ class TrailRepositoryImpl
                 .mapToList(Dispatchers.IO)
                 .map { list -> list.map { it.toModel() } }
 
-        override fun observeNamedWaypointsForTrail(trailId: Long): Flow<List<Waypoint>> =
+        override fun observeNamedWaypointsForTrail(trailId: Long): Flow<List<TrailNamedPoint>> =
             db.waypointQueries
                 .namedWaypointsForTrail(trailId)
                 .asFlow()
                 .mapToList(Dispatchers.IO)
-                .map { list -> list.map { it.toModel() } }
+                .map { list -> list.map { it.toNamedPoint() } }
 
         override fun observeTrackPointCountForTrail(trailId: Long): Flow<Long> =
             db.waypointQueries
@@ -97,6 +98,10 @@ class TrailRepositoryImpl
                 db.trailWaypointQueries.deleteForTrail(id)
                 db.collectionTrailQueries.deleteForTrail(id)
                 db.autoWaypointQueries.removeForTrail(id)
+                // An annotation belongs to the trail, not to the waypoint it names: the waypoint
+                // outlives the trail, the link does not. Left behind it is a row referencing a
+                // trail that is gone.
+                db.trailAnnotationQueries.removeForTrail(id)
                 db.trailQueries.remove(id)
             }
         }
@@ -134,6 +139,23 @@ private fun com.boldexplorer.db.Waypoint.toModel() =
         createdAt = created_at,
         kind = kind,
         tentative = tentative != 0L,
+    )
+
+private fun NamedWaypointsForTrail.toNamedPoint() =
+    TrailNamedPoint(
+        waypoint =
+            Waypoint(
+                id = id,
+                name = name,
+                lat = lat,
+                lon = lon,
+                elevM = elev_m,
+                description = description,
+                createdAt = created_at,
+                kind = kind,
+                tentative = tentative != 0L,
+            ),
+        isAnnotation = is_annotation != 0L,
     )
 
 private fun com.boldexplorer.db.Trail_waypoint.toModel() =

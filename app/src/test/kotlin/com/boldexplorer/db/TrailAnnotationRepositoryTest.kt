@@ -75,8 +75,108 @@ class TrailAnnotationRepositoryTest {
             val fix = assertNotNull(annotations.annotate(trailId, strayId))
 
             // 1200 m north of the start on a trail that ends at 200 m: 1000 m past the end.
-            assertTrue(abs(fix.crossTrackM - 1000.0) < 5.0, "reported ${fix.crossTrackM} m off the trail")
+            assertTrue(abs(fix.distanceFromTrailM - 1000.0) < 5.0, "reported ${fix.distanceFromTrailM} m off the trail")
             assertEquals(1, annotations.forTrail(trailId).size, "the attachment still happened")
+        }
+
+    @Test
+    fun aDistantAnnotationIsReportedOnEitherSideOfTheTrail() =
+        runTest {
+            // `TrailPolyline.project` returns cross-track *signed*, so that a follower can be told
+            // to bear left. A distance that inherits the sign is a trap: a point a kilometre to the
+            // west reads as −1000 m, which is under every threshold and prints as a negative number
+            // of metres. Same point, mirrored, must read the same.
+            val db = createTestDatabase()
+            val waypoints = WaypointRepositoryImpl(db)
+            val annotations = TrailAnnotationRepositoryImpl(db)
+            val cid = db.defaultCollection()
+            val trailId = northTrail(db, cid)
+
+            val eastId = waypoints.create(cid, "East", latFor(100.0), latFor(1000.0), null, null)
+            val westId = waypoints.create(cid, "West", latFor(100.0), -latFor(1000.0), null, null)
+            val east = assertNotNull(annotations.annotate(trailId, eastId))
+            val west = assertNotNull(annotations.annotate(trailId, westId))
+
+            assertTrue(west.distanceFromTrailM > 0.0, "a westward distance came back as ${west.distanceFromTrailM}")
+            assertEquals(east.distanceFromTrailM, west.distanceFromTrailM, 1.0, "the same distance, mirrored")
+            assertTrue(east.farFromTrail, "1 km east is far from the trail")
+            assertTrue(west.farFromTrail, "1 km west is just as far, and was silently accepted before")
+        }
+
+    @Test
+    fun editingAWaypointsCoordinatesReprojectsIt() =
+        runTest {
+            // Where an annotation sits along a trail is derived from where it is. Edit the
+            // coordinates through the ordinary waypoint path — the same one "fix this point" uses —
+            // and the derived position has to follow, or the editor lists it in the wrong place
+            // while showing its new position.
+            val db = createTestDatabase()
+            val waypoints = WaypointRepositoryImpl(db)
+            val annotations = TrailAnnotationRepositoryImpl(db)
+            val cid = db.defaultCollection()
+            val trailId = northTrail(db, cid)
+
+            val benchId = waypoints.create(cid, "Bench", latFor(30.0), 0.0, null, null)
+            waypoints.attach(trailId, benchId)
+            assertEquals(1, annotations.forTrail(trailId).single().segmentIndex, "30 m along, 20 m spacing")
+
+            waypoints.update(benchId, name = null, lat = latFor(150.0), lon = null, elevM = null, description = null)
+
+            assertEquals(7, annotations.forTrail(trailId).single().segmentIndex, "the projection stayed at 30 m")
+        }
+
+    @Test
+    fun movingAVertexReprojectsWhatWasProjectedOntoIt() =
+        runTest {
+            // The other way one waypoint invalidates a projection: it is a vertex, so editing it
+            // moves the polyline the annotation was projected onto. Fixing a bad GPS fix does
+            // exactly this.
+            val db = createTestDatabase()
+            val trails = TrailRepositoryImpl(db)
+            val waypoints = WaypointRepositoryImpl(db)
+            val annotations = TrailAnnotationRepositoryImpl(db)
+            val cid = db.defaultCollection()
+
+            // A hand-built two-vertex route, 200 m due north, and a bench 30 m along it.
+            val trailId = trails.create(cid, "Route", null)
+            val startId = waypoints.create(cid, "Start", 0.0, 0.0, null, null)
+            val endId = waypoints.create(cid, "End", latFor(200.0), 0.0, null, null)
+            waypoints.attach(trailId, startId)
+            waypoints.attach(trailId, endId)
+            val benchId = waypoints.create(cid, "Bench", latFor(30.0), latFor(5.0), null, null)
+            assertNotNull(annotations.annotate(trailId, benchId))
+            assertTrue(abs(annotations.forTrail(trailId).single().offsetM - 30.0) < 1.0)
+
+            // The route's start was recorded 20 m short; correct it. The bench has not moved, but
+            // the segment it sits on now begins 20 m further along, so its offset must fall to 10 m.
+            waypoints.update(startId, name = null, lat = latFor(20.0), lon = null, elevM = null, description = null)
+
+            val offset = annotations.forTrail(trailId).single().offsetM
+            assertTrue(abs(offset - 10.0) < 1.0, "offset was $offset; the geometry moved and the projection did not")
+        }
+
+    @Test
+    fun deletingATrailTakesItsAnnotationsWithIt() =
+        runTest {
+            // An annotation belongs to the trail, not to the waypoint it names. The waypoint
+            // outlives the trail; the link must not.
+            val db = createTestDatabase()
+            val trails = TrailRepositoryImpl(db)
+            val waypoints = WaypointRepositoryImpl(db)
+            val cid = db.defaultCollection()
+            val trailId = northTrail(db, cid)
+
+            val benchId = waypoints.create(cid, "Bench", latFor(90.0), latFor(10.0), null, null)
+            waypoints.attach(trailId, benchId)
+
+            trails.remove(trailId)
+
+            assertEquals(
+                emptyList(),
+                db.trailAnnotationQueries.rowsForTrail(trailId).executeAsList(),
+                "annotation rows outlived the trail they point at",
+            )
+            assertNotNull(waypoints.getById(benchId), "the waypoint itself should survive its trail")
         }
 
     @Test
@@ -94,7 +194,7 @@ class TrailAnnotationRepositoryTest {
 
             assertEquals(4, fix.segmentIndex, "80 m in on a 20 m spacing is segment 4")
             assertTrue(abs(fix.offsetM - 10.0) < 1.0, "offset within the segment was ${fix.offsetM}")
-            assertTrue(abs(fix.crossTrackM - 10.0) < 1.0, "cross-track was ${fix.crossTrackM}")
+            assertTrue(abs(fix.distanceFromTrailM - 10.0) < 1.0, "distance from the trail was ${fix.distanceFromTrailM}")
         }
 
     @Test

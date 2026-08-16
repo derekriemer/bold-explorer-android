@@ -127,14 +127,22 @@ class WaypointRepositoryImpl
             description: String?,
         ) {
             val current = db.waypointQueries.getById(id).executeAsOneOrNull() ?: return
+            val newLat = lat ?: current.lat
+            val newLon = lon ?: current.lon
             db.waypointQueries.updateFull(
                 name = name ?: current.name,
-                lat = lat ?: current.lat,
-                lon = lon ?: current.lon,
+                lat = newLat,
+                lon = newLon,
                 elevM = elevM ?: current.elev_m,
                 description = description ?: current.description,
                 id = id,
             )
+            // A projection is derived from coordinates, so an edit to them invalidates it — whether
+            // this point is the annotation that moved or a vertex of the trail one was projected
+            // onto. Renames and description edits change neither, and skip the work.
+            if (newLat != current.lat || newLon != current.lon) {
+                annotations.reprojectForWaypoint(id)
+            }
         }
 
         override suspend fun remove(id: Long) {

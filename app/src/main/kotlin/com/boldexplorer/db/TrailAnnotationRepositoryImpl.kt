@@ -7,6 +7,7 @@ import com.boldexplorer.shared.navigation.TrailPolyline
 import com.boldexplorer.shared.repository.TrailAnnotationFix
 import com.boldexplorer.shared.repository.TrailAnnotationRepository
 import javax.inject.Inject
+import kotlin.math.abs
 
 /**
  * Annotations are stored, but where they sit along a trail is never stored *by a caller* — it is
@@ -79,6 +80,12 @@ class TrailAnnotationRepositoryImpl
             }
         }
 
+        override suspend fun reprojectForWaypoint(waypointId: Long) {
+            val annotated = db.trailAnnotationQueries.trailsForWaypoint(waypointId).executeAsList()
+            val vertexOf = db.trailWaypointQueries.trailsForWaypoint(waypointId).executeAsList()
+            (annotated + vertexOf).distinct().forEach { reproject(it) }
+        }
+
         override suspend fun remove(
             trailId: Long,
             waypointId: Long,
@@ -100,7 +107,7 @@ class TrailAnnotationRepositoryImpl
             return TrailAnnotationFix(
                 segmentIndex = position.segmentIndex,
                 offsetM = polyline.offsetInSegmentM(position),
-                crossTrackM = position.crossTrackM,
+                distanceFromTrailM = abs(position.crossTrackM),
             )
         }
 

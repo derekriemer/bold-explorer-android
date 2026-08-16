@@ -30,6 +30,11 @@ ORDER BY a.segment_index, a.offset_m;
 rowsForTrail:
 SELECT * FROM trail_annotation WHERE trail_id = :trailId;
 
+-- Trails this waypoint annotates. Moving the waypoint moves the thing that was projected, so every
+-- trail here has to re-project it — the stored position is derived from coordinates that changed.
+trailsForWaypoint:
+SELECT trail_id FROM trail_annotation WHERE waypoint_id = :waypointId;
+
 insert:
 INSERT INTO trail_annotation (trail_id, waypoint_id, segment_index, offset_m, created_at)
 VALUES (:trailId, :waypointId, :segmentIndex, :offsetM, :createdAt);

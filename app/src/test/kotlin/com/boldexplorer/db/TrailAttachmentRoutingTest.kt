@@ -1,6 +1,7 @@
 package com.boldexplorer.db
 
 import com.boldexplorer.shared.repository.TrailAttachment
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlin.math.abs
 import kotlin.test.Test
@@ -190,6 +191,60 @@ class TrailAttachmentRoutingTest {
                     .executeAsList()
                     .map { it.name },
             )
+        }
+
+    @Test
+    fun theListSaysWhichRowsAreGeometryAndWhichAreNot() =
+        runTest {
+            // One list to the user, two kinds underneath, and the difference is not cosmetic: only
+            // a vertex can be reordered, so the editor offers "Move up"/"Move down" for vertices
+            // alone — `setPosition` finds no row for an annotation and returns having done nothing,
+            // which a TalkBack user would hear as a success that never happened.
+            //
+            // It is also why the trail's ends cannot come from this list at all: as the last
+            // assertion shows, a recorded trail has *no* named vertices, so there is nothing here
+            // to read them from. They come from the geometry (`trailEndsForCollection`).
+            val db = createTestDatabase()
+            val waypoints = WaypointRepositoryImpl(db)
+            val cid = db.defaultCollection()
+            val trailId = recordedTrail(db, cid)
+
+            waypoints.attach(trailId, waypoints.create(cid, "Bench", latFor(90.0), 0.0, null, null))
+
+            val rows = TrailRepositoryImpl(db).observeNamedWaypointsForTrail(trailId).first()
+
+            assertEquals(listOf("Bench"), rows.map { it.waypoint.name })
+            assertTrue(rows.single().isAnnotation, "an annotation was presented as geometry")
+            assertEquals(emptyList(), rows.filterNot { it.isAnnotation }, "a recorded trail has no named vertices here")
+        }
+
+    @Test
+    fun aWaypointOnlyLoopKeepsBothOfItsEnds() =
+        runTest {
+            // A hand-built loop — "test loop" — is geometry all the way through: no track points,
+            // so nothing about it is ever an annotation, and both of its ends stay real vertices.
+            // Its two ends sit at the same place, which is what makes it a loop, but they are
+            // distinct waypoints (`uq_trail_waypoint_pair` forbids attaching one point twice), so
+            // the screen still offers Follow and Reverse rather than collapsing them into one.
+            val db = createTestDatabase()
+            val trails = TrailRepositoryImpl(db)
+            val waypoints = WaypointRepositoryImpl(db)
+            val cid = db.defaultCollection()
+            val trailId = trails.create(cid, "test loop", null)
+
+            val names = listOf("Gate out" to 0.0, "North corner" to 100.0, "East corner" to 60.0, "Gate back" to 0.0)
+            names.forEach { (name, m) ->
+                val outcome = waypoints.attach(trailId, waypoints.create(cid, name, latFor(m), 0.0, null, null))
+                assertIs<TrailAttachment.Vertex>(outcome, "$name should be geometry on a hand-built loop")
+            }
+
+            val rows = trails.observeNamedWaypointsForTrail(trailId).first()
+            val vertices = rows.filterNot { it.isAnnotation }.map { it.waypoint }
+
+            assertEquals(names.map { it.first }, vertices.map { it.name }, "vertices in the order they were built")
+            assertEquals("Gate out", vertices.first().name)
+            assertEquals("Gate back", vertices.last().name)
+            assertTrue(vertices.first().id != vertices.last().id, "two ends, so Follow and Reverse are both offered")
         }
 
     @Test

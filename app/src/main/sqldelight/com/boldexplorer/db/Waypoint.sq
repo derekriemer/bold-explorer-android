@@ -52,14 +52,18 @@ ORDER BY tw.position;
 -- mid-walk). The user made one gesture for both and should see one list, so this unions them and
 -- orders both by where they fall along the trail. A vertex at `position` is polyline vertex
 -- `position - 1`, which is what makes the two sort keys comparable.
+--
+-- `is_annotation` says which kind each row is, and is not decoration: a vertex can be reordered and
+-- bounds the trail, an annotation can do neither. A caller that means *geometry* — the trail's ends,
+-- a reorder — has to filter on it rather than take the first and last of this list.
 namedWaypointsForTrail:
-SELECT w.*
+SELECT w.*, ord.is_annotation
 FROM waypoint AS w
 INNER JOIN (
-    SELECT waypoint_id AS wid, (position - 1) * 1.0 AS along_seg, 0.0 AS along_off
+    SELECT waypoint_id AS wid, (position - 1) * 1.0 AS along_seg, 0.0 AS along_off, 0 AS is_annotation
     FROM trail_waypoint WHERE trail_id = :trailId
     UNION ALL
-    SELECT waypoint_id AS wid, segment_index * 1.0 AS along_seg, offset_m AS along_off
+    SELECT waypoint_id AS wid, segment_index * 1.0 AS along_seg, offset_m AS along_off, 1 AS is_annotation
     FROM trail_annotation WHERE trail_id = :trailId
 ) AS ord ON ord.wid = w.id
 WHERE w.kind = 'waypoint'

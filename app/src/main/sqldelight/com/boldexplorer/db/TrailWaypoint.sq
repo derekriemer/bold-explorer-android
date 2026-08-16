@@ -20,6 +20,11 @@ getPosition:
 SELECT position FROM trail_waypoint
 WHERE trail_id = :trailId AND waypoint_id = :waypointId;
 
+-- Trails this waypoint is a vertex of. Moving it moves their geometry, so anything projected onto
+-- them — an annotation's segment and offset — was derived from a polyline that no longer exists.
+trailsForWaypoint:
+SELECT DISTINCT trail_id FROM trail_waypoint WHERE waypoint_id = :waypointId;
+
 nextPosition:
 SELECT COALESCE(MAX(position), 0) + 1 AS next_pos FROM trail_waypoint WHERE trail_id = :trailId;
 

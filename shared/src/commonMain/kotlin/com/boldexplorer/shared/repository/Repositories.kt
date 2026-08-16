@@ -96,8 +96,13 @@ interface TrailRepository {
     /** All points (waypoints + track points) in order — used for trail following. */
     fun observeWaypointsForTrail(trailId: Long): Flow<List<Waypoint>>
 
-    /** Named waypoints only (kind=waypoint) — used for trail editor UI. */
-    fun observeNamedWaypointsForTrail(trailId: Long): Flow<List<Waypoint>>
+    /**
+     * Named waypoints only (kind=waypoint) — used for trail editor UI.
+     *
+     * Both kinds of attachment, in along-trail order, each saying which it is. Not a geometry read:
+     * see [TrailNamedPoint.isAnnotation] before treating any of these as part of the trail's shape.
+     */
+    fun observeNamedWaypointsForTrail(trailId: Long): Flow<List<TrailNamedPoint>>
 
     /** Count of track points — cheap summary query. */
     fun observeTrackPointCountForTrail(trailId: Long): Flow<Long>
@@ -248,6 +253,15 @@ interface TrailAnnotationRepository {
     /** Re-project every annotation of [trailId] after its geometry changed. */
     suspend fun reproject(trailId: Long)
 
+    /**
+     * Re-project everything a move of [waypointId] invalidated.
+     *
+     * Two ways one waypoint can invalidate a projection: it *is* an annotation whose coordinates
+     * moved, or it is a vertex of a trail whose shape those coordinates define. Editing a point, or
+     * fixing a bad GPS fix, does one or both, and the caller cannot be expected to know which.
+     */
+    suspend fun reprojectForWaypoint(waypointId: Long)
+
     suspend fun remove(
         trailId: Long,
         waypointId: Long,
@@ -275,17 +289,22 @@ sealed interface TrailAttachment {
 /**
  * Where an annotation landed when it was projected onto its trail.
  *
- * @property crossTrackM how far the waypoint is from the trail. Reported so the app can say so out
- *   loud — "attached, but it is 1.0 km from the trail" — rather than quietly placing it. Since an
- *   annotation is no longer geometry, a distant one is merely odd, not corrupting.
+ * @property distanceFromTrailM how far the waypoint is from the trail. Reported so the app can say
+ *   so out loud — "attached, but it is 1.0 km from the trail" — rather than quietly placing it.
+ *   Since an annotation is no longer geometry, a distant one is merely odd, not corrupting.
+ *
+ *   A magnitude, deliberately not the signed `crossTrackM` it is derived from. Side is meaningful
+ *   to a follower being told to bear left; to "how far off is this?" it is only a way to compare
+ *   the wrong number — a point a kilometre to the *left* reads as −1000 m, which is below every
+ *   threshold and prints as a negative distance.
  */
 data class TrailAnnotationFix(
     val segmentIndex: Int,
     val offsetM: Double,
-    val crossTrackM: Double,
+    val distanceFromTrailM: Double,
 ) {
     /** Far enough off the trail that the app should say so rather than attach it quietly. */
-    val farFromTrail: Boolean get() = crossTrackM > FAR_FROM_TRAIL_M
+    val farFromTrail: Boolean get() = distanceFromTrailM > FAR_FROM_TRAIL_M
 
     companion object {
         /**
