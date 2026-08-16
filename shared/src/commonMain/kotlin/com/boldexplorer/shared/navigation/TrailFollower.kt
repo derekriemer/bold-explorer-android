@@ -159,6 +159,7 @@ class TrailFollower(
         bearingDeg: Float? = null,
         smoothedBearingDeg: Float? = null,
         accuracyM: Double? = null,
+        reachedEnd: Boolean = false,
     ): TrailFollowerEvent? {
         val current = _state.value as? TrailFollowerState.Active ?: return null
         val target = current.waypoints[current.currentIndex]
@@ -179,7 +180,20 @@ class TrailFollower(
             if (haversineDistanceMeters(location, last) < NavigationPolicy.MIN_MOVEMENT_SINCE_ADVANCE_M) return null
         }
 
-        // 0. Endpoint completion is a policy of its own, not a side effect of advancing off the
+        // 0a. Completion by geometry. The matcher says the user has reached or walked past the far
+        //     end, which is a stronger claim than anything the index knows: `currentIndex` only
+        //     advances when a waypoint check fires, so a walker who passed several checkpoints
+        //     without tripping one can be standing beyond the end with the index well short of it.
+        //     The radial branch below cannot see that case at all, because it only runs when the
+        //     index *is* at the last waypoint — which is how a walk could finish with the follow
+        //     still running and guidance still pointing at a waypoint behind the user.
+        if (reachedEnd) {
+            val atEnd = current.copy(currentIndex = current.waypoints.size - 1)
+            _state.value = atEnd
+            return fireAdvance(atEnd, location, altitudeM, mechanism = "endpoint_alongtrack", accuracyM = accuracyM)
+        }
+
+        // 0b. Endpoint completion is a policy of its own, not a side effect of advancing off the
         //    last waypoint. The projection branch is deliberately NOT consulted here: it needs only
         //    t >= 0.9 along the final leg, so on a 300 m final segment it completed the trail 30 m
         //    out (the ~65 ft field report). Completion instead uses a radius that tightens with

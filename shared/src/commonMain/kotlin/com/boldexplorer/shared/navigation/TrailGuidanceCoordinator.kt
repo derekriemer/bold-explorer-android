@@ -27,6 +27,8 @@ import kotlinx.coroutines.flow.stateIn
  * The [TrailFollower] itself stays in the ViewModel (it is driven by many follow-start paths); this
  * coordinator only consumes the follower's [TrailFollowerState] as an input.
  */
+private const val END_EPSILON_M = 0.5
+
 class TrailGuidanceCoordinator(
     scope: CoroutineScope,
 ) {
@@ -163,6 +165,37 @@ class TrailGuidanceCoordinator(
         prevDistToTargetM = null
         prevAlongTrackM = null
         backtrackAlertFiredAt = 0L
+    }
+
+    /**
+     * Whether the matcher says the user has walked to or past the far end of the trail.
+     *
+     * Completion asks geometry, not `currentIndex`. The index only advances when a waypoint check
+     * fires, so a user who passed several checkpoints without tripping one can reach the end with
+     * the index still well short of it — and the endpoint branch that owns completion today only
+     * runs when the index *is* at the last waypoint.
+     *
+     * "Past the end" shows up as an [ProjectionKind.EndpointClamped] projection, because
+     * `alongTrackM` is clamped to the polyline and so can never exceed its length. Which end counts
+     * depends on the declared direction: a reverse walk finishes at 0.
+     *
+     * Gated on confirmed travel. A loop's start is also its end and a follow may begin standing
+     * there, so being at the end is not by itself evidence of having walked the trail.
+     */
+    fun hasReachedTheEnd(): Boolean {
+        val followSession = session ?: return false
+        val match = followSession.lastMatch ?: return false
+        if (match.state != MatchState.Matched) return false
+        val position = match.position ?: return false
+        if (position.kind != ProjectionKind.EndpointClamped) return false
+
+        val totalLengthM = followSession.polyline.totalLengthM
+        val atFarEnd =
+            when (followSession.direction) {
+                TravelDirection.Forward -> position.alongTrackM >= totalLengthM - END_EPSILON_M
+                TravelDirection.Reverse -> position.alongTrackM <= END_EPSILON_M
+            }
+        return atFarEnd && match.travelledM >= NavigationPolicy.completionTravelGuardM(totalLengthM)
     }
 
     /** Recompute and publish guidance for [sample] against [followState]; returns the new value. */
