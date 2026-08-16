@@ -11,10 +11,17 @@ import com.boldexplorer.shared.gpx.GpxExporter
 import com.boldexplorer.shared.location.LocationProvider
 import com.boldexplorer.shared.model.Collection
 import com.boldexplorer.shared.model.Trail
+import com.boldexplorer.shared.model.TrailNamedPoint
 import com.boldexplorer.shared.model.Waypoint
+import com.boldexplorer.shared.navigation.BearingComputer
 import com.boldexplorer.shared.repository.CollectionRepository
+import com.boldexplorer.shared.repository.NavPointsRepository
+import com.boldexplorer.shared.repository.SettingsRepository
+import com.boldexplorer.shared.repository.TrailAnnotationRepository
+import com.boldexplorer.shared.repository.TrailAttachment
 import com.boldexplorer.shared.repository.TrailRepository
 import com.boldexplorer.shared.repository.WaypointRepository
+import com.boldexplorer.shared.settings.AppSettings
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -39,10 +46,19 @@ class TrailsViewModel
         private val trailRepo: TrailRepository,
         private val waypointRepo: WaypointRepository,
         private val collectionRepo: CollectionRepository,
+        private val annotationRepo: TrailAnnotationRepository,
+        private val navPointsRepo: NavPointsRepository,
         private val targetingStateHolder: TargetingStateHolder,
         private val selectedCollectionHolder: SelectedCollectionHolder,
+        settingsRepo: SettingsRepository,
         locationProvider: LocationProvider,
     ) : ViewModel() {
+        /** Units for the distances this screen reports; see [attachExisting]. */
+        val settings: StateFlow<AppSettings> =
+            settingsRepo
+                .observeSettings()
+                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), AppSettings())
+
         // Current fix, used to decide which trail end is nearest for the end-proximity actions.
         val currentLocation: StateFlow<LatLng?> =
             locationProvider.locationFlow
@@ -76,6 +92,30 @@ class TrailsViewModel
                 .observeAll()
                 .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
+        // Where each trail actually begins and ends, from its geometry (ADR 0001, S5b).
+        //
+        // The same lean per-collection query the GPS screen follows from — ≤2 rows per trail, no
+        // track-point body, live as recording extends a trail. Deliberately not the editor's
+        // named-waypoint list: that list is what the user should *see*, and since S5b it can be
+        // entirely annotations, which are named things beside the trail rather than its ends.
+        //
+        // Per collection rather than per expanded card, because the collapsed card offers Follow as
+        // a TalkBack action and the card is the whole control for a blind user; making the ends
+        // arrive only after a card had been expanded once would hide it exactly when it is wanted.
+        val trailEnds: StateFlow<Map<Long, TrailEnds>> =
+            selectedCollectionHolder.selectedCollectionId
+                .flatMapLatest { id ->
+                    if (id == null) flowOf(emptyList()) else navPointsRepo.observeTrailEndsForCollection(id)
+                }.map { rows ->
+                    rows
+                        .groupBy { it.trail.id }
+                        .mapNotNull { (trailId, ends) ->
+                            val start = ends.firstOrNull { it.isStart }?.waypoint ?: return@mapNotNull null
+                            // A one-point trail reports a single row, and it is both ends at once.
+                            trailId to TrailEnds(start = start, end = ends.lastOrNull { !it.isStart }?.waypoint ?: start)
+                        }.toMap()
+                }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyMap())
+
         // Trail IDs whose named waypoints + track point count have ever been requested (the
         // screen only asks once a card is expanded); grows only, mirrors CollectionsViewModel's
         // loadContents/_loadedCollectionIds — expand/collapse itself is UI-local state.
@@ -85,7 +125,7 @@ class TrailsViewModel
         private val _loadedTrackPointIds = MutableStateFlow<Set<Long>>(emptySet())
 
         // Named waypoints (kind='waypoint') per loaded trail. Reactive.
-        val namedWaypoints: StateFlow<Map<Long, List<Waypoint>>> =
+        val namedWaypoints: StateFlow<Map<Long, List<TrailNamedPoint>>> =
             _loadedTrailIds
                 .flatMapLatest { ids ->
                     if (ids.isEmpty()) {
@@ -248,8 +288,27 @@ class TrailsViewModel
             waypointIds: Set<Long>,
         ) {
             viewModelScope.launch {
-                waypointIds.forEach { waypointRepo.attach(trailId, it) }
-                _toast.value = "${waypointIds.size} waypoint${if (waypointIds.size == 1) "" else "s"} attached"
+                val distant =
+                    waypointIds.mapNotNull { id ->
+                        val outcome = waypointRepo.attach(trailId, id)
+                        // Attaching to a recorded trail annotates it; one that lands far off the
+                        // trail is worth naming, since only the user can say whether it belongs.
+                        (outcome as? TrailAttachment.Annotation)
+                            ?.takeIf { it.fix.farFromTrail }
+                            ?.let { waypointRepo.getById(id)?.name to it.fix.distanceFromTrailM }
+                    }
+                val attached = "${waypointIds.size} waypoint${if (waypointIds.size == 1) "" else "s"} attached"
+                _toast.value =
+                    if (distant.isEmpty()) {
+                        attached
+                    } else {
+                        val units = settings.value.units
+                        val far =
+                            distant.joinToString("; ") { (name, m) ->
+                                "${name ?: "one"} is ${BearingComputer.formatDistance(m, units)} from the trail"
+                            }
+                        "$attached — $far"
+                    }
             }
         }
 
@@ -295,9 +354,12 @@ class TrailsViewModel
             viewModelScope.launch {
                 val trail = trailRepo.getById(trailId) ?: return@launch
                 val waypoints = trailRepo.waypointsForTrail(trailId)
+                // Annotations are not geometry, so they are not in `waypointsForTrail` — but they
+                // are things the user marked, and an export that dropped them would lose them.
+                val annotated = annotationRepo.forTrail(trailId).map { it.waypoint }
                 val filename = "trail-${trail.id}.gpx"
                 GpxFileWriter
-                    .writeToDownloads(context, filename, GpxExporter.exportTrail(trail.name, waypoints))
+                    .writeToDownloads(context, filename, GpxExporter.exportTrail(trail.name, waypoints, annotated))
                     .onSuccess { _exportStatus.value = "Exported ${trail.name} to Downloads/$filename" }
                     .onFailure { _exportStatus.value = "Export failed: ${it.message}" }
             }
@@ -307,3 +369,19 @@ class TrailsViewModel
             _exportStatus.value = null
         }
     }
+
+/**
+ * Where a trail begins and ends, taken from its geometry (ADR 0001, S5b).
+ *
+ * Not the first and last of the editor's named-waypoint list. That list is the union of vertices and
+ * annotations, and on a recorded trail every named point in it is an annotation — a bench beside the
+ * path, not an end of it. Reading it for ends would offer "Follow from this end" while standing
+ * halfway along, and choose the travel direction from whichever annotation happened to be nearest.
+ *
+ * [start] and [end] are the same waypoint on a one-point trail, which is how the screen knows not to
+ * offer a reverse of it.
+ */
+data class TrailEnds(
+    val start: Waypoint,
+    val end: Waypoint,
+)

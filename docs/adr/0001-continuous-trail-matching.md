@@ -825,6 +825,141 @@ Note the direction. Everywhere else in this document a poor fix must *shrink* an
 "may I act on this fix?" but "may I call this fix impossible?", and the cost of being wrong is a hole
 in someone's recorded walk.
 
+**Design, decided with the owner 2026-08-16.** Three questions the decision above left open, answered
+before any of it was built.
+
+*An annotation is a link, not a copy.* `auto_waypoint` gains a nullable `waypoint_id`; the `waypoint`
+row stays the single truth for name, position, description, elevation, `tentative` and collection
+membership. A null `waypoint_id` is an app-generated anchor — the bend anchors the table was
+reserved for — and a set one is an annotation for a user's waypoint. Copying name and lat/lon into
+the annotation instead would fork the truth on the first rename: the waypoint would move and the
+trail's copy would not, which is the same class of silent divergence this step exists to remove.
+
+*The trail decides which path a point takes, not the user.* Restating the invariant in terms the data
+can answer:
+
+> A trail's geometry is the points it was **built from**, in order. Anything attached to it
+> **afterwards** is an annotation.
+
+For a recorded trail "built from" means its track points; for a hand-built route — a trail with no
+track points at all, assembled out of existing waypoints — the attached waypoints *are* the geometry,
+and those are legitimate vertices. So the operational rule is: **a trail that already has track points
+is a recorded trail, and anything attached to it later is an annotation.** That is precisely the `dos`
+case, and it also settles the one the original text called harmless only by luck — a waypoint marked
+*during* a walk becomes an annotation too, because the track already passes through where the user was
+standing. No new question is put to the user at attach time, which matters: the answer is a property of
+the trail, and a blind user should not have to arbitrate a data-model distinction mid-walk.
+
+*The derived values are recomputed by the operations that invalidate them, not cached and hoped over.*
+`segment_index` and `offset_m` are written at attach time and re-projected by every repository
+operation that changes a trail's geometry — recording stopping, a vertex attached, detached or
+reordered, a GPX import. Putting the re-projection inside those methods is what stops it being
+forgotten; annotations per trail are few and a projection is cheap, so there is nothing to optimise
+here yet.
+
+Two consequences worth stating. A trail with fewer than two points has no geometry to project onto, so
+an attach there is a vertex whatever else is true — which also covers a waypoint marked in the seconds
+after recording starts. And once an annotation is not a vertex, a `dos` can no longer fabricate
+geometry *at all*: the attach-time check stops being a guard against corruption and becomes an honest
+report — "attached, but it is 1.0 km from the trail" — because the corruption it guarded against is
+now structurally impossible.
+
+**Built 2026-08-16.** Three things the design above did not say, found while doing it.
+
+*It is not `auto_waypoint` after all.* This document named that dormant table as the home for
+annotations, on the grounds that it already stores lat/lon as truth with along-track derived. It
+cannot be. A waypoint-backed row must not carry its own copy of the name and position — that is the
+fork the whole step exists to prevent — so it would have to leave `name`, `lat` and `lon` null, and
+those three columns are exactly what an app-generated bend anchor uses them for. One table would then
+be three nullable columns and a tag: a union pretending to be a row. Annotations get
+`trail_annotation(trail_id, waypoint_id, segment_index, offset_m, created_at)`, every column NOT NULL,
+and `auto_waypoint` is left to the anchors it was reserved for. The invariant the ADR actually cared
+about — lat/lon is the truth, along-track is derived — is stronger here, because the truth is a
+foreign key to the row that already holds it rather than a copy of two of its fields.
+
+*The re-projection has to be owned, not remembered.* `segment_index` and `offset_m` are stale the
+moment the geometry moves under them, so every repository operation that changes a trail's geometry
+re-projects: attaching a vertex, detaching, reordering, and each recorded track point. The last of
+those sounds expensive and is not — it returns on an empty-annotations check, which is every trail
+during an ordinary recording. The case it exists for is real: an annotation past the old end clamps
+to it, and the trail keeps growing.
+
+*Two reads had to learn about annotations, or the change would have lost the user's data in plain
+sight.* Both are the same mistake in different clothes — code that asked "what is attached to this
+trail?" and got the answer from the geometry table.
+
+- The trail editor's named-waypoint list now unions vertices and annotations, ordered by where each
+  falls along the trail. Without it, the waypoint someone marks mid-walk would attach correctly and
+  then vanish from the trail they marked it on. A vertex at `position` is polyline vertex
+  `position - 1`, which is what makes the two sort keys comparable.
+- `GpxExporter.exportTrail` takes annotations and writes them as `<wpt>`, never as `<trkpt>` — which
+  is what those two tags mean in GPX anyway. An export that dropped them would lose every point the
+  user had marked on a recorded trail.
+
+**Review found the list itself had become a geometry read** (PR bot, 2026-08-16). Unioning
+annotations into the editor's named-waypoint list fixed the disappearance and created a subtler
+version of the same mistake one layer up: the trails screen took the **first and last entries of
+that list** as the trail's ends, and chose the direction for "Follow from this end" by which was
+nearer. Before S5b those entries really were vertices; after it, a bench annotated halfway along a
+recorded trail could be the only named row, so standing beside it presented as standing at an end —
+and picked a travel direction from it. That is the one guess this app must never make on a blind
+walker's behalf, and it came in through a read that was never re-examined after its meaning changed.
+
+The first fix was to filter the list to its vertices, and it was wrong — caught by the owner asking
+whether the geometry version should have been taken instead. A recorded trail's vertices are track
+points, and this list is `kind='waypoint'` only, so **a recorded trail has no named vertices at all**:
+filtering leaves it empty, `start` null, and the card's Follow and Reverse gone. That trades "starts
+you in the wrong direction sometimes" for "the button is missing", which is not an improvement. Both
+failures come from the same source — asking a *display* list a question about **shape**.
+
+So the ends come from the geometry, which every trail has: `observeTrailEndsForCollection`, the same
+lean per-collection query the GPS screen already follows from (≤2 rows per trail, no track-point
+body, live as recording extends a trail), surfaced as `TrailEnds`. No new SQL. It is read per
+collection rather than per expanded card on purpose: the collapsed card carries Follow as a TalkBack
+action and is the whole control for a blind user, and the named-waypoint flow it used to share only
+loads once a card has been expanded, so the action was absent until then.
+
+Two consequences. A recorded trail's ends are track points, named for the clock — "Track 14:32:05" —
+so "Navigate to start" names them for the trail they end (`endLabel`) and leaves a hand-built route's
+ends the names the user chose. And the list still has to say which kind each row is (`is_annotation`,
+surfaced as `TrailNamedPoint`), for the other half of the finding: reorder is offered for vertices
+only, because `setPosition` finds no `trail_waypoint` row for an annotation and returns having done
+nothing, so a TalkBack "Move up" on one reported a success that never happened — worse than the
+action's absence, because nothing else would have told the user. An annotation's position along the
+trail is derived from where it actually is; to move it, move the waypoint.
+
+**The scope worth naming:** following a trail was never broken by any of this. Follow runs from the
+GPS screen, off `trailEndsForCollection` and `NearbyTrailResolver` — geometry both, indifferent to
+named waypoints. Everything above is the trails-screen card, which is a second way in.
+
+Two more from the same review, both narrower:
+
+- *Deleting a trail left its annotations behind.* `TrailRepositoryImpl.remove` cleared every other
+  trail-owned table and not this one. The annotation belongs to the trail, not to the waypoint it
+  names — the waypoint outlives the trail, the link must not.
+- *Ownership of re-projection had a gap on the other side.* Every operation that moved the
+  **geometry** re-projected; none that moved the **waypoint** did. Editing a point's coordinates —
+  or fixing a bad GPS fix, which is the same call — left the derived position pointing where the
+  waypoint used to be, in both directions: the edited point may be the annotation that moved, or a
+  vertex of the trail one was projected onto. `reprojectForWaypoint` covers both, and a rename or a
+  description edit does no work.
+
+One more, cosmetic in code and not in what it says out loud: `TrailPolyline.project` returns
+cross-track **signed**, so a waypoint a kilometre to the *left* of a trail reported −1000 m, passed
+under the "far from trail" threshold, and would have printed as a negative number of metres. The fix
+carries a magnitude and is named for it (`distanceFromTrailM`); side is meaningful to a follower
+being told to bear left, and meaningless to "how far off is this?".
+
+**Fixing `dos` needs no migration at all**, which is the last thing building this settled. The two
+gestures the app already has do it: **detach, then attach again.** Detaching removes the vertex and
+collapses the position gap; attaching lands on the annotate path, because the trail has track points.
+Nothing is moved, projected or deleted — the point keeps the coordinates it was recorded at and stops
+being geometry, which is exactly what the owner asked for. Trail 12 returns to 1492 m because a
+vertex became an annotation, not because anything was corrected. Covered by
+`detachAndReattachDemotesAnExistingStrayPoint`, which asserts the phantom kilometre is present first,
+so it cannot pass vacuously. A migration that did this automatically would still be wrong for the
+reason already given: it cannot know which strays were mistakes.
+
 **S6 — stop firing `WaypointReached` per trackpoint.** Replace with `NamedWaypointPassed` /
 `TrailComplete` / `MatchLost` / `MatchReacquired`. **Critical:** `resetThrottle` has exactly one
 production caller — `GpsViewModel.kt:1207`, inside the `WaypointReached` handler. It re-arms both
@@ -1371,7 +1506,13 @@ specified.)*
     one, and a session cannot be half-initialised.
   - Density equivalence now covers guidance decisions, not only geometry — the executable form of
     #35, and the half of it that only became assertable at S5.
-- **S5b is open** — the geometry/annotation split. Blocks S6, and #69 is its attach-time guard.
+- **S5b is built** (2026-08-16) — the geometry/annotation split. `trail_annotation` exists, attaching
+  to a recorded trail annotates rather than appends, the derived position is re-projected by every
+  operation that invalidates it, and the two reads that would otherwise have lost marked waypoints
+  know about it. See the S5b section for the three things building it changed, and for the fourth
+  read review caught — the editor's list being taken for the trail's ends. **Not field-verified,
+  and no existing data has been touched** — demoting `dos` is still a deliberate act for the owner,
+  on a backed-up database. S6 is unblocked.
 - **`ProgressTracker.acquire()` still uses the plain match gate** (raised by S4c, undecided). A follow
   started while standing in an apex wedge can commit to a degenerate first position. Applying the
   vertex accept radius there would mean silence at follow-start, which is its own harm for a blind

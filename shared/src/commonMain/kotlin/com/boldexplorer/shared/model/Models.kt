@@ -44,6 +44,36 @@ data class AutoWaypoint(
     val createdAt: Long,
 )
 
+/**
+ * A waypoint attached to a trail without being part of its geometry (ADR 0001, S5b).
+ *
+ * The [waypoint] is the truth for name, position and description; [segmentIndex] and [offsetM] are
+ * derived by projecting it onto the trail and are re-derived whenever that geometry changes. A
+ * `TrailWaypoint` by contrast *is* geometry — a vertex of the polyline.
+ */
+data class TrailAnnotation(
+    val id: Long,
+    val trailId: Long,
+    val waypoint: Waypoint,
+    val segmentIndex: Int,
+    val offsetM: Double,
+    val createdAt: Long,
+)
+
+/**
+ * A named point the trail editor lists against a trail, and how it is attached (ADR 0001, S5b).
+ *
+ * One gesture — "attach this to that trail" — produces either kind, and the user sees one list, so
+ * the distinction is carried here rather than hidden. It is not cosmetic: a vertex *is* geometry, so
+ * it can be reordered and it bounds the trail; an annotation is projected onto geometry and can do
+ * neither. Anything that means the trail's shape must filter on [isAnnotation] instead of reading
+ * the ends of this list, which are the first and last *named* things along the trail, not its ends.
+ */
+data class TrailNamedPoint(
+    val waypoint: Waypoint,
+    val isAnnotation: Boolean,
+)
+
 data class Collection(
     val id: Long,
     val name: String,

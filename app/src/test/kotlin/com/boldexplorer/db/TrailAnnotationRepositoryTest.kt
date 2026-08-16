@@ -1,0 +1,255 @@
+package com.boldexplorer.db
+
+import kotlinx.coroutines.test.runTest
+import kotlin.math.abs
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+/**
+ * An annotation is a point attached to a trail that is not part of its geometry (ADR 0001, S5b).
+ *
+ * The defect this closes, observed rather than hypothesised: waypoint `dos` was attached to trail 12
+ * 78 minutes after its last track point and appended at position 139, 1031 m from position 138. The
+ * app then believed that trail was 2523 m long and ended 50 m from its own start. Nothing flagged
+ * it, because `trail_waypoint.position` means both "vertex order" and "which checkpoint is this",
+ * and a point attached after recording has no legitimate answer for the first.
+ *
+ * Stored here, the same attachment cannot move the trail's end by a millimetre.
+ */
+class TrailAnnotationRepositoryTest {
+    /** ~111.19 m per 0.001° of latitude, so a metre count converts to a due-north offset. */
+    private fun latFor(m: Double) = m / 111_194.9
+
+    /** A 200 m due-north trail of track points, 20 m apart. */
+    private suspend fun northTrail(
+        db: BoldExplorerDatabase,
+        collectionId: Long,
+    ): Long {
+        val trails = TrailRepositoryImpl(db)
+        val waypoints = WaypointRepositoryImpl(db)
+        val trailId = trails.create(collectionId, "North", null)
+        var m = 0.0
+        while (m <= 200.0) {
+            waypoints.createTrackPoint(trailId, "tp$m", latFor(m), 0.0, null)
+            m += 20.0
+        }
+        return trailId
+    }
+
+    @Test
+    fun annotatingDoesNotTouchTheTrailsGeometry() =
+        runTest {
+            val db = createTestDatabase()
+            val waypoints = WaypointRepositoryImpl(db)
+            val annotations = TrailAnnotationRepositoryImpl(db)
+            val cid = db.defaultCollection()
+            val trailId = northTrail(db, cid)
+            val pointsBefore = waypoints.forTrail(trailId)
+
+            // The `dos` case: a kilometre off the end of the trail.
+            val strayId = waypoints.create(cid, "dos", latFor(1200.0), 0.0, null, null)
+            val fix = annotations.annotate(trailId, strayId)
+
+            assertNotNull(fix, "a trail with geometry can be annotated")
+            assertEquals(
+                pointsBefore.map { it.id },
+                waypoints.forTrail(trailId).map { it.id },
+                "annotating changed the trail's geometry",
+            )
+            assertEquals(listOf("dos"), annotations.forTrail(trailId).map { it.waypoint.name })
+        }
+
+    @Test
+    fun aDistantAnnotationIsReportedNotRefused() =
+        runTest {
+            val db = createTestDatabase()
+            val waypoints = WaypointRepositoryImpl(db)
+            val annotations = TrailAnnotationRepositoryImpl(db)
+            val cid = db.defaultCollection()
+            val trailId = northTrail(db, cid)
+
+            val strayId = waypoints.create(cid, "dos", latFor(1200.0), 0.0, null, null)
+            val fix = assertNotNull(annotations.annotate(trailId, strayId))
+
+            // 1200 m north of the start on a trail that ends at 200 m: 1000 m past the end.
+            assertTrue(abs(fix.distanceFromTrailM - 1000.0) < 5.0, "reported ${fix.distanceFromTrailM} m off the trail")
+            assertEquals(1, annotations.forTrail(trailId).size, "the attachment still happened")
+        }
+
+    @Test
+    fun aDistantAnnotationIsReportedOnEitherSideOfTheTrail() =
+        runTest {
+            // `TrailPolyline.project` returns cross-track *signed*, so that a follower can be told
+            // to bear left. A distance that inherits the sign is a trap: a point a kilometre to the
+            // west reads as −1000 m, which is under every threshold and prints as a negative number
+            // of metres. Same point, mirrored, must read the same.
+            val db = createTestDatabase()
+            val waypoints = WaypointRepositoryImpl(db)
+            val annotations = TrailAnnotationRepositoryImpl(db)
+            val cid = db.defaultCollection()
+            val trailId = northTrail(db, cid)
+
+            val eastId = waypoints.create(cid, "East", latFor(100.0), latFor(1000.0), null, null)
+            val westId = waypoints.create(cid, "West", latFor(100.0), -latFor(1000.0), null, null)
+            val east = assertNotNull(annotations.annotate(trailId, eastId))
+            val west = assertNotNull(annotations.annotate(trailId, westId))
+
+            assertTrue(west.distanceFromTrailM > 0.0, "a westward distance came back as ${west.distanceFromTrailM}")
+            assertEquals(east.distanceFromTrailM, west.distanceFromTrailM, 1.0, "the same distance, mirrored")
+            assertTrue(east.farFromTrail, "1 km east is far from the trail")
+            assertTrue(west.farFromTrail, "1 km west is just as far, and was silently accepted before")
+        }
+
+    @Test
+    fun editingAWaypointsCoordinatesReprojectsIt() =
+        runTest {
+            // Where an annotation sits along a trail is derived from where it is. Edit the
+            // coordinates through the ordinary waypoint path — the same one "fix this point" uses —
+            // and the derived position has to follow, or the editor lists it in the wrong place
+            // while showing its new position.
+            val db = createTestDatabase()
+            val waypoints = WaypointRepositoryImpl(db)
+            val annotations = TrailAnnotationRepositoryImpl(db)
+            val cid = db.defaultCollection()
+            val trailId = northTrail(db, cid)
+
+            val benchId = waypoints.create(cid, "Bench", latFor(30.0), 0.0, null, null)
+            waypoints.attach(trailId, benchId)
+            assertEquals(1, annotations.forTrail(trailId).single().segmentIndex, "30 m along, 20 m spacing")
+
+            waypoints.update(benchId, name = null, lat = latFor(150.0), lon = null, elevM = null, description = null)
+
+            assertEquals(7, annotations.forTrail(trailId).single().segmentIndex, "the projection stayed at 30 m")
+        }
+
+    @Test
+    fun movingAVertexReprojectsWhatWasProjectedOntoIt() =
+        runTest {
+            // The other way one waypoint invalidates a projection: it is a vertex, so editing it
+            // moves the polyline the annotation was projected onto. Fixing a bad GPS fix does
+            // exactly this.
+            val db = createTestDatabase()
+            val trails = TrailRepositoryImpl(db)
+            val waypoints = WaypointRepositoryImpl(db)
+            val annotations = TrailAnnotationRepositoryImpl(db)
+            val cid = db.defaultCollection()
+
+            // A hand-built two-vertex route, 200 m due north, and a bench 30 m along it.
+            val trailId = trails.create(cid, "Route", null)
+            val startId = waypoints.create(cid, "Start", 0.0, 0.0, null, null)
+            val endId = waypoints.create(cid, "End", latFor(200.0), 0.0, null, null)
+            waypoints.attach(trailId, startId)
+            waypoints.attach(trailId, endId)
+            val benchId = waypoints.create(cid, "Bench", latFor(30.0), latFor(5.0), null, null)
+            assertNotNull(annotations.annotate(trailId, benchId))
+            assertTrue(abs(annotations.forTrail(trailId).single().offsetM - 30.0) < 1.0)
+
+            // The route's start was recorded 20 m short; correct it. The bench has not moved, but
+            // the segment it sits on now begins 20 m further along, so its offset must fall to 10 m.
+            waypoints.update(startId, name = null, lat = latFor(20.0), lon = null, elevM = null, description = null)
+
+            val offset = annotations.forTrail(trailId).single().offsetM
+            assertTrue(abs(offset - 10.0) < 1.0, "offset was $offset; the geometry moved and the projection did not")
+        }
+
+    @Test
+    fun deletingATrailTakesItsAnnotationsWithIt() =
+        runTest {
+            // An annotation belongs to the trail, not to the waypoint it names. The waypoint
+            // outlives the trail; the link must not.
+            val db = createTestDatabase()
+            val trails = TrailRepositoryImpl(db)
+            val waypoints = WaypointRepositoryImpl(db)
+            val cid = db.defaultCollection()
+            val trailId = northTrail(db, cid)
+
+            val benchId = waypoints.create(cid, "Bench", latFor(90.0), latFor(10.0), null, null)
+            waypoints.attach(trailId, benchId)
+
+            trails.remove(trailId)
+
+            assertEquals(
+                emptyList(),
+                db.trailAnnotationQueries.rowsForTrail(trailId).executeAsList(),
+                "annotation rows outlived the trail they point at",
+            )
+            assertNotNull(waypoints.getById(benchId), "the waypoint itself should survive its trail")
+        }
+
+    @Test
+    fun theProjectionLandsWhereTheWaypointIs() =
+        runTest {
+            val db = createTestDatabase()
+            val waypoints = WaypointRepositoryImpl(db)
+            val annotations = TrailAnnotationRepositoryImpl(db)
+            val cid = db.defaultCollection()
+            val trailId = northTrail(db, cid)
+
+            // 10 m east of the trail, 90 m along it: halfway through the segment 80 m → 100 m.
+            val benchId = waypoints.create(cid, "Bench", latFor(90.0), latFor(10.0), null, null)
+            val fix = assertNotNull(annotations.annotate(trailId, benchId))
+
+            assertEquals(4, fix.segmentIndex, "80 m in on a 20 m spacing is segment 4")
+            assertTrue(abs(fix.offsetM - 10.0) < 1.0, "offset within the segment was ${fix.offsetM}")
+            assertTrue(abs(fix.distanceFromTrailM - 10.0) < 1.0, "distance from the trail was ${fix.distanceFromTrailM}")
+        }
+
+    @Test
+    fun aTrailWithoutGeometryCannotBeAnnotated() =
+        runTest {
+            val db = createTestDatabase()
+            val trails = TrailRepositoryImpl(db)
+            val waypoints = WaypointRepositoryImpl(db)
+            val annotations = TrailAnnotationRepositoryImpl(db)
+            val cid = db.defaultCollection()
+
+            // A trail whose recording has only just begun: one point is a position, not a path.
+            val trailId = trails.create(cid, "Fresh", null)
+            waypoints.createTrackPoint(trailId, "tp0", 0.0, 0.0, null)
+            val wpId = waypoints.create(cid, "Marked", latFor(5.0), 0.0, null, null)
+
+            assertNull(annotations.annotate(trailId, wpId), "nothing to project onto yet")
+            assertEquals(emptyList(), annotations.forTrail(trailId))
+        }
+
+    @Test
+    fun reprojectFollowsTheWaypointWhenItMoves() =
+        runTest {
+            val db = createTestDatabase()
+            val waypoints = WaypointRepositoryImpl(db)
+            val annotations = TrailAnnotationRepositoryImpl(db)
+            val cid = db.defaultCollection()
+            val trailId = northTrail(db, cid)
+
+            val benchId = waypoints.create(cid, "Bench", latFor(30.0), 0.0, null, null)
+            annotations.annotate(trailId, benchId)
+            assertEquals(1, annotations.forTrail(trailId).first().segmentIndex)
+
+            // The waypoint row is the truth, so correcting it moves the annotation with it.
+            waypoints.update(benchId, lat = latFor(150.0), lon = 0.0)
+            annotations.reproject(trailId)
+
+            assertEquals(7, annotations.forTrail(trailId).first().segmentIndex, "150 m along, on a 20 m spacing")
+            assertEquals("Bench", annotations.forTrail(trailId).first().waypoint.name)
+        }
+
+    @Test
+    fun theWaypointRowStaysTheTruthForItsName() =
+        runTest {
+            val db = createTestDatabase()
+            val waypoints = WaypointRepositoryImpl(db)
+            val annotations = TrailAnnotationRepositoryImpl(db)
+            val cid = db.defaultCollection()
+            val trailId = northTrail(db, cid)
+
+            val id = waypoints.create(cid, "Gate", latFor(60.0), 0.0, null, null)
+            annotations.annotate(trailId, id)
+            waypoints.update(id, name = "North gate")
+
+            // A copy would still say "Gate" here. This is why the annotation is a link.
+            assertEquals("North gate", annotations.forTrail(trailId).single().waypoint.name)
+        }
+}

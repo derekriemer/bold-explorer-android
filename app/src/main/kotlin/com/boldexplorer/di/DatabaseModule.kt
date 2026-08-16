@@ -6,11 +6,13 @@ import com.boldexplorer.db.AutoWaypointRepositoryImpl
 import com.boldexplorer.db.BoldExplorerDatabase
 import com.boldexplorer.db.CollectionRepositoryImpl
 import com.boldexplorer.db.NavPointsRepositoryImpl
+import com.boldexplorer.db.TrailAnnotationRepositoryImpl
 import com.boldexplorer.db.TrailRepositoryImpl
 import com.boldexplorer.db.WaypointRepositoryImpl
 import com.boldexplorer.shared.repository.AutoWaypointRepository
 import com.boldexplorer.shared.repository.CollectionRepository
 import com.boldexplorer.shared.repository.NavPointsRepository
+import com.boldexplorer.shared.repository.TrailAnnotationRepository
 import com.boldexplorer.shared.repository.TrailRepository
 import com.boldexplorer.shared.repository.WaypointRepository
 import dagger.Binds
@@ -56,4 +58,8 @@ abstract class RepositoryModule {
     @Binds
     @Singleton
     abstract fun bindNavPointsRepository(impl: NavPointsRepositoryImpl): NavPointsRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindTrailAnnotationRepository(impl: TrailAnnotationRepositoryImpl): TrailAnnotationRepository
 }

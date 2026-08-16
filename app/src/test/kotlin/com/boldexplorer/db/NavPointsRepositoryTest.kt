@@ -69,6 +69,35 @@ class NavPointsRepositoryTest {
         }
 
     @Test
+    fun trailEndsForCollection_annotationIsNeverAnEnd() =
+        runTest {
+            // The trails screen takes its ends from here (ADR 0001, S5b) rather than from the
+            // editor's named-waypoint list, because on a recorded trail that list is entirely
+            // annotations — a bench beside the path, which is not an end of it and must never be
+            // read as one, since "Follow from this end" picks a travel direction from whichever end
+            // the walker is standing at.
+            val db = createTestDatabase()
+            val trails = TrailRepositoryImpl(db)
+            val waypoints = WaypointRepositoryImpl(db)
+            val navPoints = NavPointsRepositoryImpl(db)
+            val cid = db.defaultCollection()
+            val trailId = trails.create(cid, "Path", null)
+            waypoints.createTrackPoint(trailId, "first", 1.0, 1.0, null, null)
+            waypoints.createTrackPoint(trailId, "mid", 2.0, 2.0, null, null)
+            waypoints.createTrackPoint(trailId, "last", 3.0, 3.0, null, null)
+
+            // Marked beside the middle of the trail: an annotation, since the trail is recorded.
+            val benchId = waypoints.create(cid, "Bench", 2.0, 1.999, null, null)
+            waypoints.attach(trailId, benchId)
+
+            val ends = navPoints.observeTrailEndsForCollection(cid).first()
+
+            assertEquals(2, ends.size, "a trail has two ends however many things are attached to it")
+            assertEquals(listOf("first", "last"), ends.sortedBy { !it.isStart }.map { it.waypoint.name })
+            assertTrue(ends.none { it.waypoint.id == benchId }, "an annotation was reported as an end")
+        }
+
+    @Test
     fun trailEndsForCollection_scopedToCollection() =
         runTest {
             val db = createTestDatabase()

@@ -9,8 +9,10 @@ import com.boldexplorer.shared.geo.haversineDistanceMeters
 import com.boldexplorer.shared.location.LocationProvider
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.Waypoint
+import com.boldexplorer.shared.navigation.BearingComputer
 import com.boldexplorer.shared.repository.CollectionRepository
 import com.boldexplorer.shared.repository.SettingsRepository
+import com.boldexplorer.shared.repository.TrailAttachment
 import com.boldexplorer.shared.repository.TrailRepository
 import com.boldexplorer.shared.repository.WaypointRepository
 import com.boldexplorer.shared.settings.AppSettings
@@ -294,8 +296,19 @@ class WaypointsViewModel
             trailId: Long,
         ) {
             viewModelScope.launch {
-                waypointRepo.attach(trailId, waypointId)
-                _toast.value = "Attached to trail"
+                val outcome = waypointRepo.attach(trailId, waypointId)
+                // A point attached to a recorded trail annotates it rather than becoming part of it,
+                // and one that lands a long way off is said out loud rather than placed quietly —
+                // the distance is the useful fact, and the user is the only one who can judge it.
+                _toast.value =
+                    when {
+                        outcome is TrailAttachment.Annotation && outcome.fix.farFromTrail ->
+                            "Attached, but it is ${
+                                BearingComputer.formatDistance(outcome.fix.distanceFromTrailM, settings.value.units)
+                            } from the trail"
+
+                        else -> "Attached to trail"
+                    }
             }
         }
 
