@@ -95,6 +95,20 @@ class TrailGuidanceCoordinator(
      */
     private var session: FollowSession? = null
 
+    /**
+     * The active follow's session, read-only, or null when no follow is active.
+     *
+     * `session` itself stays private — [startFollow]/[adopt] remain the only way to create or
+     * replace one, which is the whole point of owning it here rather than in the ViewModel (see
+     * the doc on [session]). But S6's cue producers need [FollowSession.polyline],
+     * [FollowSession.direction], [FollowSession.speedMps] and [FollowSession.remainingM] directly,
+     * and none of those are per-fix decisions this coordinator makes on their behalf — reconstructing
+     * an equivalent [TrailPolyline] from the same points a second time is exactly the kind of drift
+     * risk [OffTrailDetectorState]'s doc warns about, just one call away from here instead of inside
+     * it. Exposing the session read-only is cheaper than duplicating it.
+     */
+    val followSession: FollowSession? get() = session
+
     private val followDirection: TravelDirection
         get() = session?.direction ?: TravelDirection.Forward
 
@@ -338,6 +352,11 @@ class TrailGuidanceCoordinator(
      * Inside the grace window the evaluation still runs and [OffTrailEvaluation.suppressedByGrace]
      * is set, but `fired` stays false unless [shadowAlertsAudible] overrides it (ADR 0001, S6) — see
      * the field comment on `shadowAlertsAudible`.
+     *
+     * On a hand-built route (`session?.isRecorded == false`, ADR 0001, Task 10) this returns a
+     * genuine early exit instead — `disposition = "bail:hand_built_route"`, `fired = false`, and
+     * neither the grace nor the shadow tracks advance — because the route's polyline is invented and
+     * cross-track from it is not evidence the walker left the path.
      */
     fun evaluateOffTrail(
         followState: TrailFollowerState,

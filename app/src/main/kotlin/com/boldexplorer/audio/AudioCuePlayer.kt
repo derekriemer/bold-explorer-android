@@ -29,8 +29,8 @@ import javax.inject.Singleton
  * Bridges [AudioCueScheduler] (pure scheduling) to Android playback.
  *
  * - [AudioCueEvent.DirectionalBeacon] / [AudioCueEvent.AccuracyBeacon] / [AudioCueEvent.AlignmentPing]
- *   → [AudioEngine] streaming tone
- * - [AudioCueEvent.WaypointApproach] / [AudioCueEvent.TrailComplete] → [TtsEngine]
+ *   / [AudioCueEvent.Progress] → [AudioEngine] streaming tone
+ * - [AudioCueEvent.TrailComplete] → [TtsEngine]
  *
  * Audio focus is requested per-tone only when [AppSettings.duckAudioEnabled] is true,
  * so music is not held ducked between beacons. When duck is off, tones mix transparently.
@@ -239,20 +239,22 @@ class AudioCuePlayer
                     }
                 }
 
-                is AudioCueEvent.WaypointApproach -> {
-                    val spoke = !silenced && !appForegroundState.isInForeground.value
-                    if (spoke) {
-                        scope.launch { ttsEngine.speak("Next waypoint: ${event.waypointName}") }
-                    }
+                is AudioCueEvent.Progress -> {
+                    if (!silenced) audioEngine.playProgress(event.lost)
                     scope.launch {
                         audioEventLog.append(
                             AudioLogEntry(
                                 timestampMs = nowMs,
-                                kind = AudioLogEntry.Kind.WAYPOINT_APPROACH,
-                                trigger = "Waypoint reached",
-                                inputs = "waypointName=\"${event.waypointName}\"",
-                                outputs = "",
-                                played = dispositionOf(spoke, silenced).playedLabel("Next waypoint: ${event.waypointName}"),
+                                kind = AudioLogEntry.Kind.PROGRESS,
+                                trigger = "Progress beep",
+                                inputs = "lost=${event.lost}",
+                                outputs = if (event.lost) "double tick @ 330 Hz" else "tone @ 523 Hz",
+                                played =
+                                    if (silenced) {
+                                        "Suppressed (silence mode): progress beep (lost=${event.lost})"
+                                    } else {
+                                        "Progress beep (lost=${event.lost})"
+                                    },
                             ),
                         )
                     }
