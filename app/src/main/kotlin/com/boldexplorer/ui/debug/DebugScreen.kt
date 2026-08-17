@@ -59,6 +59,7 @@ fun DebugScreen(
     val exportStatus by viewModel.exportStatus.collectAsStateWithLifecycle()
     val accuracyBeaconEnabled by viewModel.accuracyBeaconEnabled.collectAsStateWithLifecycle()
     val useGnss by viewModel.useGnss.collectAsStateWithLifecycle()
+    var showNewLogDialog by remember { mutableStateOf(false) }
     val logEntries by viewModel.logEntries.collectAsStateWithLifecycle()
     val logStatus by viewModel.logStatus.collectAsStateWithLifecycle()
     val showMarkerDialog by viewModel.showMarkerDialog.collectAsStateWithLifecycle()
@@ -319,7 +320,6 @@ fun DebugScreen(
                     Text("Travelled: ${"%.0f m".format(match.travelledM)}", style = MaterialTheme.typography.bodyMedium)
                     Text("Reason: ${match.disposition}", style = MaterialTheme.typography.bodySmall)
                 }
-
             }
         }
 
@@ -423,10 +423,34 @@ fun DebugScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Button(
-                        onClick = { viewModel.newLog() },
+                        onClick = { showNewLogDialog = true },
                         modifier = Modifier.weight(1f),
                     ) {
                         Text("New Log")
+                    }
+                    if (showNewLogDialog) {
+                        AlertDialog(
+                            onDismissRequest = { showNewLogDialog = false },
+                            title = { Text("Start new log?") },
+                            text = { Text("This will clear the current log.") },
+                            confirmButton = {
+                                TextButton(
+                                    onClick = {
+                                        viewModel.newLog()
+                                        showNewLogDialog = false
+                                    },
+                                ) {
+                                    Text("New Log")
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(
+                                    onClick = { showNewLogDialog = false },
+                                ) {
+                                    Text("Cancel")
+                                }
+                            },
+                        )
                     }
                     Button(
                         onClick = { viewModel.exportLog() },
