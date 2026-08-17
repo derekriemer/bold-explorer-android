@@ -30,7 +30,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -182,27 +181,6 @@ class TrailsViewModel
         private val _exportStatus = MutableStateFlow<String?>(null)
         val exportStatus: StateFlow<String?> = _exportStatus.asStateFlow()
 
-        init {
-            // Report what actually happened to a target this screen asked for. The outcome channel
-            // is shared with the Waypoints screen, so a null pending label means the request was
-            // not ours and the outcome is someone else's to announce.
-            viewModelScope.launch {
-                targetingStateHolder.targetApplied.filterNotNull().collect { applied ->
-                    val label = pendingTargetLabel ?: return@collect
-                    pendingTargetLabel = null
-                    _toast.value =
-                        if (applied) {
-                            "Navigating to $label"
-                        } else {
-                            // Names the reason, because "it didn't work" leaves nothing to act on.
-                            // Selecting the collection is the user's remedy.
-                            "Could not navigate to $label — its collection is not loaded"
-                        }
-                    targetingStateHolder.clearTargetApplied()
-                }
-            }
-        }
-
         /** Request named waypoints + track point count for [trailId] (called when its card expands). */
         fun loadNamedWaypoints(trailId: Long) {
             _loadedTrailIds.value = _loadedTrailIds.value + trailId
@@ -283,9 +261,6 @@ class TrailsViewModel
             _toast.value = "Recording trail"
         }
 
-        // Label of the target being applied, held so the outcome can name it. Cleared when reported.
-        private var pendingTargetLabel: String? = null
-
         /**
          * Set one end of [trailId] as the GPS target (point navigation, not a trail follow).
          *
@@ -298,8 +273,7 @@ class TrailsViewModel
             isStart: Boolean,
             label: String,
         ) {
-            pendingTargetLabel = label
-            targetingStateHolder.requestTrailEndTarget(trailId, isStart)
+            targetingStateHolder.requestTrailEndTarget(trailId, isStart, label)
         }
 
         fun addWaypointToTrail(

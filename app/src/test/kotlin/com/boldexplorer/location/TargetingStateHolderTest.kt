@@ -3,75 +3,72 @@ package com.boldexplorer.location
 import com.boldexplorer.shared.navigation.ExternalTargetRequest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 
-/**
- * The cross-screen targeting channel, and specifically the outcome half of it (issue #78).
- *
- * The outcome exists because the request crosses ViewModels: the screen that raised it cannot see
- * whether the GPS screen honoured it, and used to announce success at the moment of asking. For a
- * blind user that is unfalsifiable — there is no screen to glance at and no target to hear.
- */
+/** Tests the persistent, correlated cross-screen targeting channel (issue #78). */
 class TargetingStateHolderTest {
     @Test
-    fun aTrailEndRequestCarriesWhichEnd() {
+    fun aTrailEndRequestCarriesItsIdentityEndAndMessages() {
         val holder = TargetingStateHolder()
 
-        holder.requestTrailEndTarget(trailId = 7L, isStart = false)
+        holder.requestTrailEndTarget(trailId = 7L, isStart = false, label = "the end of Loop")
 
-        assertEquals(ExternalTargetRequest.TrailEnd(7L, isStart = false), holder.externalTarget.value)
-    }
-
-    @Test
-    fun aNewRequestClearsThePreviousOutcome() {
-        // The hazard this guards: the outcome is a StateFlow, so a stale `true` left over from the
-        // last request would be delivered to the observer the instant it subscribes — and the
-        // screen would announce success for a request that has not been answered yet. Worse than
-        // the bug being fixed, because it would be right often enough to look reliable.
-        val holder = TargetingStateHolder()
-        holder.requestWaypointTarget(1L)
-        holder.reportTargetApplied(true)
-        assertEquals(true, holder.targetApplied.value)
-
-        holder.requestTrailEndTarget(trailId = 7L, isStart = true)
-
-        assertNull(holder.targetApplied.value, "a fresh request must have no answer yet")
-    }
-
-    @Test
-    fun anUnappliedRequestIsReportedRatherThanLeftSilent() {
-        val holder = TargetingStateHolder()
-        holder.requestTrailEndTarget(trailId = 7L, isStart = true)
-
-        holder.reportTargetApplied(false)
-
-        assertEquals(false, holder.targetApplied.value, "failure has to be sayable, not absent")
-    }
-
-    @Test
-    fun consumingARequestDoesNotDiscardItsOutcome() {
-        // The bridge clears the request as soon as it has handled it, which must not take the
-        // answer with it — the raising screen may not have read it yet.
-        val holder = TargetingStateHolder()
-        holder.requestTrailEndTarget(trailId = 7L, isStart = true)
-        holder.reportTargetApplied(false)
-
-        holder.clear()
-
-        assertNull(holder.externalTarget.value)
-        assertEquals(false, holder.targetApplied.value)
+        val command = requireNotNull(holder.externalTarget.value)
+        assertEquals(ExternalTargetRequest.TrailEnd(7L, isStart = false), command.request)
+        assertEquals("Navigating to the end of Loop", command.successMessage)
+        assertEquals(
+            "Could not navigate to the end of Loop — its collection is not loaded",
+            command.failureMessage,
+        )
     }
 
     @Test
     fun waypointAndTrailEndRequestsAreDistinguishable() {
-        // They share one channel, so the consumer must be able to tell them apart without
-        // inferring from an id — the inference that broke trail endpoints in the first place.
         val holder = TargetingStateHolder()
 
-        holder.requestWaypointTarget(42L)
-        assertEquals(ExternalTargetRequest.Waypoint(42L), holder.externalTarget.value)
+        holder.requestWaypointTarget(42L, "Gate")
+        assertEquals(ExternalTargetRequest.Waypoint(42L), holder.externalTarget.value?.request)
 
-        holder.requestTrailEndTarget(trailId = 42L, isStart = true)
-        assertEquals(ExternalTargetRequest.TrailEnd(42L, isStart = true), holder.externalTarget.value)
+        holder.requestTrailEndTarget(trailId = 42L, isStart = true, label = "the start of Loop")
+        assertEquals(
+            ExternalTargetRequest.TrailEnd(42L, isStart = true),
+            holder.externalTarget.value?.request,
+        )
+    }
+
+    @Test
+    fun aNewRequestGetsANewCorrelationIdentity() {
+        val holder = TargetingStateHolder()
+        holder.requestWaypointTarget(1L, "First")
+        val first = requireNotNull(holder.externalTarget.value)
+
+        holder.requestWaypointTarget(2L, "Second")
+
+        assertNotEquals(first.id, holder.externalTarget.value?.id)
+    }
+
+    @Test
+    fun completingAnOlderRequestDoesNotClearItsReplacement() {
+        val holder = TargetingStateHolder()
+        holder.requestWaypointTarget(1L, "First")
+        val first = requireNotNull(holder.externalTarget.value)
+        holder.requestWaypointTarget(2L, "Second")
+        val second = requireNotNull(holder.externalTarget.value)
+
+        holder.clear(first)
+
+        assertEquals(second, holder.externalTarget.value)
+    }
+
+    @Test
+    fun completingTheCurrentRequestClearsIt() {
+        val holder = TargetingStateHolder()
+        holder.requestWaypointTarget(1L, "First")
+        val command = requireNotNull(holder.externalTarget.value)
+
+        holder.clear(command)
+
+        assertNull(holder.externalTarget.value)
     }
 }

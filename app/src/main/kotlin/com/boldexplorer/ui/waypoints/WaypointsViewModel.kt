@@ -23,7 +23,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -175,24 +174,6 @@ class WaypointsViewModel
         private val _toast = MutableStateFlow<String?>(null)
         val toast: StateFlow<String?> = _toast.asStateFlow()
 
-        init {
-            // Say what happened to a target this screen asked for, rather than assuming. Shared
-            // channel with the Trails screen, so no pending label means the outcome is not ours.
-            viewModelScope.launch {
-                targetingStateHolder.targetApplied.filterNotNull().collect { applied ->
-                    val label = pendingTargetLabel ?: return@collect
-                    pendingTargetLabel = null
-                    _toast.value =
-                        if (applied) {
-                            "$label set as GPS target"
-                        } else {
-                            "Could not target $label — its collection is not loaded"
-                        }
-                    targetingStateHolder.clearTargetApplied()
-                }
-            }
-        }
-
         fun setQuery(q: String) {
             _query.value = q
         }
@@ -275,12 +256,9 @@ class WaypointsViewModel
          * to the shared [TargetingStateHolder]; the GPS ViewModel observes it and re-points the explorer.
          */
         fun setAsTarget(id: Long) {
-            pendingTargetLabel = _allWaypoints.value.firstOrNull { it.id == id }?.name ?: "waypoint"
-            targetingStateHolder.requestWaypointTarget(id)
+            val label = _allWaypoints.value.firstOrNull { it.id == id }?.name ?: "waypoint"
+            targetingStateHolder.requestWaypointTarget(id, label)
         }
-
-        // Label of the target being applied, held so the outcome can name it. Cleared when reported.
-        private var pendingTargetLabel: String? = null
 
         /**
          * Move a waypoint out of the currently-viewed collection and into [targetCollectionId]. A no-op

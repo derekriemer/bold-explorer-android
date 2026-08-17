@@ -742,8 +742,14 @@ class GpsViewModel
             // user can re-point navigation without leaving the screen they are on.
             viewModelScope.launch {
                 targetingStateHolder.externalTarget.filterNotNull().collect { request ->
-                    targetingStateHolder.reportTargetApplied(applyExternalTarget(request))
-                    targetingStateHolder.clear()
+                    val applied = applyExternalTarget(request.request)
+                    announce(
+                        text = if (applied) request.successMessage else request.failureMessage,
+                        kind = OutputKind.GPS_TARGET_RESULT,
+                        category = OutputCategory.NAVIGATION,
+                        origin = OutputOrigin.USER_REQUESTED,
+                    )
+                    targetingStateHolder.clear(request)
                 }
             }
             viewModelScope.launch {

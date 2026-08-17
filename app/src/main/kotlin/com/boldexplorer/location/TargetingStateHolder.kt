@@ -7,6 +7,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import javax.inject.Inject
 import javax.inject.Singleton
 
+data class ExternalTargetCommand(
+    val id: Long,
+    val request: ExternalTargetRequest,
+    val successMessage: String,
+    val failureMessage: String,
+)
+
 /**
  * A trail-navigation request raised from a screen other than the GPS screen (the Trails screen).
  * [GpsViewModel] observes it and starts the corresponding follow / record session.
@@ -40,28 +47,24 @@ sealed interface TrailTargetRequest {
 class TargetingStateHolder
     @Inject
     constructor() {
-        private val _externalTarget = MutableStateFlow<ExternalTargetRequest?>(null)
-        val externalTarget: StateFlow<ExternalTargetRequest?> = _externalTarget.asStateFlow()
-
-        private val _targetApplied = MutableStateFlow<Boolean?>(null)
-
-        /**
-         * Whether the last target request actually took effect — `null` until one is answered.
-         *
-         * Exists because the request crosses ViewModels: the screen that raised it cannot otherwise
-         * know, and used to announce success the instant it asked. For a blind user that is the
-         * worst failure mode available, since there is no screen to glance at and no target to
-         * hear; see issue #78.
-         */
-        val targetApplied: StateFlow<Boolean?> = _targetApplied.asStateFlow()
+        private val _externalTarget = MutableStateFlow<ExternalTargetCommand?>(null)
+        val externalTarget: StateFlow<ExternalTargetCommand?> = _externalTarget.asStateFlow()
+        private var nextTargetId = 0L
 
         private val _trailRequest = MutableStateFlow<TrailTargetRequest?>(null)
         val trailRequest: StateFlow<TrailTargetRequest?> = _trailRequest.asStateFlow()
 
         /** Request that [waypointId] become the GPS target. */
-        fun requestWaypointTarget(waypointId: Long) {
-            _targetApplied.value = null
-            _externalTarget.value = ExternalTargetRequest.Waypoint(waypointId)
+        fun requestWaypointTarget(
+            waypointId: Long,
+            label: String,
+        ) {
+            _externalTarget.value =
+                command(
+                    request = ExternalTargetRequest.Waypoint(waypointId),
+                    successMessage = "$label set as GPS target",
+                    failureMessage = "Could not target $label — its collection is not loaded",
+                )
         }
 
         /**
@@ -73,24 +76,25 @@ class TargetingStateHolder
         fun requestTrailEndTarget(
             trailId: Long,
             isStart: Boolean,
+            label: String,
         ) {
-            _targetApplied.value = null
-            _externalTarget.value = ExternalTargetRequest.TrailEnd(trailId, isStart)
+            _externalTarget.value =
+                command(
+                    request = ExternalTargetRequest.TrailEnd(trailId, isStart),
+                    successMessage = "Navigating to $label",
+                    failureMessage = "Could not navigate to $label — its collection is not loaded",
+                )
         }
 
-        /** Report whether the request could be applied, for the screen that raised it. */
-        fun reportTargetApplied(applied: Boolean) {
-            _targetApplied.value = applied
-        }
+        private fun command(
+            request: ExternalTargetRequest,
+            successMessage: String,
+            failureMessage: String,
+        ) = ExternalTargetCommand(++nextTargetId, request, successMessage, failureMessage)
 
-        /** Acknowledge consumption so the same request is not re-applied on the next observation. */
-        fun clear() {
-            _externalTarget.value = null
-        }
-
-        /** Acknowledge that the raising screen has surfaced the outcome. */
-        fun clearTargetApplied() {
-            _targetApplied.value = null
+        /** Consume [command] only if a newer request has not replaced it while it was applied. */
+        fun clear(command: ExternalTargetCommand) {
+            _externalTarget.compareAndSet(command, null)
         }
 
         /** Request following [trailId], from its end when [reversed]. */
