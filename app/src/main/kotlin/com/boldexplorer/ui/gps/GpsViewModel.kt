@@ -64,6 +64,7 @@ import com.boldexplorer.shared.navigation.TrailRecordingMachine
 import com.boldexplorer.shared.navigation.TrailRecordingState
 import com.boldexplorer.shared.navigation.collectionNavPoints
 import com.boldexplorer.shared.navigation.displayName
+import com.boldexplorer.shared.navigation.formatSpokenDistance
 import com.boldexplorer.shared.output.OutputCategory
 import com.boldexplorer.shared.output.OutputEvent
 import com.boldexplorer.shared.output.OutputKind
@@ -75,7 +76,6 @@ import com.boldexplorer.shared.repository.SettingsRepository
 import com.boldexplorer.shared.repository.TrailRepository
 import com.boldexplorer.shared.repository.WaypointRepository
 import com.boldexplorer.shared.settings.AppSettings
-import com.boldexplorer.shared.settings.Units
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -101,7 +101,6 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import javax.inject.Inject
-import kotlin.math.roundToInt
 
 data class GpsUiState(
     val location: LocationSample? = null,
@@ -866,7 +865,7 @@ class GpsViewModel
                     val loc = location.value?.let { LatLng(it.lat, it.lon) }
                     val distanceText =
                         loc?.let {
-                            formatDistanceM(
+                            formatSpokenDistance(
                                 haversineDistanceMeters(it, LatLng(next.waypoint.lat, next.waypoint.lon)),
                                 settings.value.units,
                             )
@@ -1005,7 +1004,7 @@ class GpsViewModel
                 append("$prefix. Checkpoint $checkpointN of $total.")
                 if (firstWp != null && loc != null) {
                     val dist = haversineDistanceMeters(loc, LatLng(firstWp.lat, firstWp.lon))
-                    val distLabel = formatDistanceM(dist, settings.value.units)
+                    val distLabel = formatSpokenDistance(dist, settings.value.units)
                     val relDir = guidance?.relativeDeg?.let { directionHint(it) }
                     if (relDir != null) {
                         append(" $distLabel, $relDir.")
@@ -1327,7 +1326,7 @@ class GpsViewModel
         ): String {
             val oneBasedN = event.index + 1
             val distance = guidance?.distanceToTargetM ?: event.distanceToNextM
-            val distLabel = formatDistanceM(distance, settings.value.units)
+            val distLabel = formatSpokenDistance(distance, settings.value.units)
             val relDir = guidance?.relativeDeg?.let { directionHint(it) }
 
             return if (event.kind == Waypoint.KIND_TRACK_POINT) {
@@ -1355,7 +1354,7 @@ class GpsViewModel
             guidance: TrailGuidanceState?,
         ) {
             val decision = guidanceCoordinator.evaluateOrdinaryGuidance(followState, sample, guidance) ?: return
-            val distLabel = formatDistanceM(decision.distanceToTargetM, settings.value.units)
+            val distLabel = formatSpokenDistance(decision.distanceToTargetM, settings.value.units)
             announce(
                 "Checkpoint ${decision.checkpointN} of ${decision.total}. $distLabel, ${directionHint(decision.relativeDeg)}.",
                 kind = OutputKind.ORDINARY_GUIDANCE,
@@ -1504,7 +1503,7 @@ class GpsViewModel
                     val onRecordingTrail = (event.point as? CollectionPoint.TrailEnd)?.trail?.id == recordingTrailId
                     if (onRecordingTrail) return
 
-                    val dist = formatDistanceM(event.distanceM, settings.value.units)
+                    val dist = formatSpokenDistance(event.distanceM, settings.value.units)
                     announce(
                         "Nearby: ${event.point.displayName()}, $dist",
                         kind = OutputKind.NEARBY_POINT,
@@ -1854,25 +1853,6 @@ class GpsViewModel
         private fun directionHint(relativeDeg: Double): String =
             com.boldexplorer.shared.navigation.BearingComputer
                 .toRelative(relativeDeg)
-
-        private fun formatDistanceM(
-            meters: Double,
-            units: Units,
-        ): String =
-            if (units == Units.METRIC) {
-                if (meters < 1000) {
-                    "${meters.roundToInt()} meters"
-                } else {
-                    "${"%.1f".format(meters / 1000)} km"
-                }
-            } else {
-                val feet = meters * 3.28084
-                if (feet < 1000) {
-                    "${feet.roundToInt()} feet"
-                } else {
-                    "${"%.1f".format(feet / 5280)} miles"
-                }
-            }
 
         override fun onCleared() {
             super.onCleared()
