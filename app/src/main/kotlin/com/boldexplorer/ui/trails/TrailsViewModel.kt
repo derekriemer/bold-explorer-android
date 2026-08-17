@@ -261,13 +261,19 @@ class TrailsViewModel
             _toast.value = "Recording trail"
         }
 
-        /** Set an endpoint waypoint as the GPS target (point navigation, not trail follow). */
-        fun navigateToWaypoint(
-            waypointId: Long,
+        /**
+         * Set one end of [trailId] as the GPS target (point navigation, not a trail follow).
+         *
+         * The toast waits for the outcome rather than announcing at the moment of asking. It used to
+         * announce immediately, which meant "Navigating to the start of X" was said whether or not
+         * anything happened — and for a recorded trail nothing did (issue #78).
+         */
+        fun navigateToTrailEnd(
+            trailId: Long,
+            isStart: Boolean,
             label: String,
         ) {
-            targetingStateHolder.requestWaypointTarget(waypointId)
-            _toast.value = "Navigating to $label"
+            targetingStateHolder.requestTrailEndTarget(trailId, isStart, label)
         }
 
         fun addWaypointToTrail(

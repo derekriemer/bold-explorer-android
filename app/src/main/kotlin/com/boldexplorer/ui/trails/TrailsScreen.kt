@@ -201,7 +201,7 @@ fun TrailsScreen(
                             onMoveDown = { idx, wpId -> viewModel.moveDown(trail.id, wpId, idx, vertexCount) },
                             onFollow = { reversed -> viewModel.followTrail(trail.id, reversed) },
                             onRecord = { viewModel.recordTrail(trail.id) },
-                            onNavigateToWaypoint = { wpId, label -> viewModel.navigateToWaypoint(wpId, label) },
+                            onNavigateToEnd = { isStart, label -> viewModel.navigateToTrailEnd(trail.id, isStart, label) },
                         )
                     }
 
@@ -349,7 +349,7 @@ private fun TrailItem(
     onMoveDown: (index: Int, waypointId: Long) -> Unit,
     onFollow: (reversed: Boolean) -> Unit,
     onRecord: () -> Unit,
-    onNavigateToWaypoint: (waypointId: Long, label: String) -> Unit,
+    onNavigateToEnd: (isStart: Boolean, label: String) -> Unit,
 ) {
     Card(
         modifier =
@@ -407,14 +407,14 @@ private fun TrailItem(
                         } else {
                             add(
                                 CustomAccessibilityAction("Navigate to start") {
-                                    onNavigateToWaypoint(start.id, endLabel(start, "start", trail.name))
+                                    onNavigateToEnd(true, endLabel(start, "start", trail.name))
                                     true
                                 },
                             )
                             if (end != null && end.id != start.id) {
                                 add(
                                     CustomAccessibilityAction("Navigate to end") {
-                                        onNavigateToWaypoint(end.id, endLabel(end, "end", trail.name))
+                                        onNavigateToEnd(false, endLabel(end, "end", trail.name))
                                         true
                                     },
                                 )

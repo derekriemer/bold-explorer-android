@@ -256,9 +256,8 @@ class WaypointsViewModel
          * to the shared [TargetingStateHolder]; the GPS ViewModel observes it and re-points the explorer.
          */
         fun setAsTarget(id: Long) {
-            val name = _allWaypoints.value.firstOrNull { it.id == id }?.name
-            targetingStateHolder.requestWaypointTarget(id)
-            _toast.value = name?.let { "$it set as GPS target" } ?: "Set as GPS target"
+            val label = _allWaypoints.value.firstOrNull { it.id == id }?.name ?: "waypoint"
+            targetingStateHolder.requestWaypointTarget(id, label)
         }
 
         /**

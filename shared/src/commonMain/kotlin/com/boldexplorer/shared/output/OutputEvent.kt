@@ -40,6 +40,7 @@ enum class OutputKind {
     COPY_COORDINATES,
     WAYPOINT_MARKED,
     TRAIL_CREATED,
+    GPS_TARGET_RESULT,
 }
 
 /**
