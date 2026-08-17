@@ -930,6 +930,11 @@ class GpsViewModel
                 val wps = trailRepo.waypointsForTrail(trailId)
                 val ordered = if (reversed) wps.reversed() else wps
                 if (ordered.isEmpty()) return@launch
+                // Same predicate `WaypointRepositoryImpl.attach` uses for vertex-vs-annotation (ADR
+                // 0001, S5b): a trail with track points of its own was walked, so its polyline is the
+                // path. One with none is hand-built from waypoints, and its straight-line segments are
+                // invented — the off-trail detector must not treat departing from them as evidence.
+                val isRecorded = trailRepo.observeTrackPointCountForTrail(trailId).first() > 0L
                 val name = trailRepo.getById(trailId)?.name ?: "trail"
                 val points = ordered.map { TrailPoint(it.id, it.name, it.lat, it.lon, elevationM = it.elevM, kind = it.kind) }
                 val loc = location.value?.let { LatLng(it.lat, it.lon) }
@@ -946,6 +951,7 @@ class GpsViewModel
                 guidanceCoordinator.startFollow(
                     points = wps.map { LatLng(it.lat, it.lon) },
                     direction = if (reversed) TravelDirection.Reverse else TravelDirection.Forward,
+                    isRecorded = isRecorded,
                 )
                 if (loc != null) trailFollower.startNearest(points, loc, bearing) else trailFollower.start(points)
                 refreshTrailGuidanceFromLatestLocation(resetOrdinaryThrottle = true)
