@@ -6,12 +6,12 @@ import androidx.lifecycle.viewModelScope
 import com.boldexplorer.audio.AudioEngine
 import com.boldexplorer.audio.AudioEventLog
 import com.boldexplorer.audio.AudioLogEntry
+import com.boldexplorer.audio.MarkerSpanRecorder
 import com.boldexplorer.audio.ShadowMatchMonitor
 import com.boldexplorer.audio.ShadowMatchSnapshot
 import com.boldexplorer.compass.SensorCompassProvider
 import com.boldexplorer.gpx.GpxFileWriter
 import com.boldexplorer.location.AccuracyHapticMonitor
-import com.boldexplorer.audio.MarkerSpanRecorder
 import com.boldexplorer.location.LocationDegradationController
 import com.boldexplorer.location.LocationProviderRouter
 import com.boldexplorer.location.RawFixEvent
@@ -184,7 +184,9 @@ class DebugViewModel
         }
 
         fun testAccuracyBeacon() {
-            audioEngine.playAccuracyBeacon(location.value?.accuracy ?: 15.0)
+            viewModelScope.launch {
+                audioEngine.playAccuracyBeacon(location.value?.accuracy ?: 15.0)
+            }
         }
 
         fun exportAllWaypoints() {

@@ -1,16 +1,17 @@
 package com.boldexplorer.audio
 
-import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.PI
@@ -39,15 +40,14 @@ class AudioEngine
         private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         private val toneMutex = Mutex()
 
+        @Volatile
         private var track: AudioTrack? = null
         private var keepaliveJob: Job? = null
+        private var samplesWritten = 0L
+        private var playbackHeadWrapOffset = 0L
+        private var lastPlaybackHeadRaw = 0L
 
-        private val audioAttributes =
-            AudioAttributes
-                .Builder()
-                .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build()
+        private val audioAttributes = beaconAudioAttributes()
 
         private val audioFormat =
             AudioFormat
@@ -82,13 +82,16 @@ class AudioEngine
                     .build()
             newTrack.play()
             track = newTrack
+            samplesWritten = 0L
+            playbackHeadWrapOffset = 0L
+            lastPlaybackHeadRaw = 0L
 
             keepaliveJob =
                 scope.launch {
                     while (isActive) {
                         // Yield to tone writes via the mutex; write silence otherwise.
                         toneMutex.withLock {
-                            newTrack.write(silenceChunk, 0, silenceChunk.size, AudioTrack.WRITE_BLOCKING)
+                            writeFully(newTrack, silenceChunk)
                         }
                     }
                 }
@@ -97,41 +100,41 @@ class AudioEngine
         fun stop() {
             keepaliveJob?.cancel()
             keepaliveJob = null
-            track?.stop()
-            track?.release()
+            val oldTrack = track
             track = null
+            oldTrack?.stop()
+            oldTrack?.release()
         }
 
-        fun playDirectionalBeacon(
+        suspend fun playDirectionalBeacon(
             pan: Float,
             pitchHz: Double,
         ) {
             val left = (1f - pan).coerceIn(0f, 1f)
             val right = (1f + pan).coerceIn(0f, 1f)
-            scope.launch { playTone(pitchHz, durationMs = 100, leftVol = left, rightVol = right) }
+            playCue(Tone(pitchHz, durationMs = 100, leftVol = left, rightVol = right))
         }
 
-        fun playAccuracyBeacon(accuracyM: Double) {
+        suspend fun playAccuracyBeacon(accuracyM: Double) {
             val freq = mapAccuracyToFrequency(accuracyM)
-            scope.launch { playTone(freq, durationMs = 100, leftVol = 0.7f, rightVol = 0.7f) }
+            playCue(Tone(freq, durationMs = 100, leftVol = 0.7f, rightVol = 0.7f))
         }
 
-        fun playAlignmentPing(
+        suspend fun playAlignmentPing(
             pan: Float,
             pitchHz: Double,
         ) {
             val left = (1f - pan).coerceIn(0f, 1f)
             val right = (1f + pan).coerceIn(0f, 1f)
-            scope.launch { playTone(pitchHz, durationMs = 80, leftVol = left, rightVol = right) }
+            playCue(Tone(pitchHz, durationMs = 80, leftVol = left, rightVol = right))
         }
 
         /** Two descending tones (660 → 440 Hz) centered in both ears — "wrong direction" earcon. */
-        fun playWrongVector() {
-            scope.launch {
-                playTone(660.0, durationMs = 120, leftVol = 0.7f, rightVol = 0.7f)
-                playTone(440.0, durationMs = 120, leftVol = 0.7f, rightVol = 0.7f)
-            }
-        }
+        suspend fun playWrongVector() =
+            playCue(
+                Tone(660.0, durationMs = 120, leftVol = 0.7f, rightVol = 0.7f),
+                Tone(440.0, durationMs = 120, leftVol = 0.7f, rightVol = 0.7f),
+            )
 
         // 0 m (perfect fix) → 880 Hz; 30 m (degraded) → 220 Hz; clamped outside that range.
         private fun mapAccuracyToFrequency(accuracyM: Double): Double {
@@ -139,18 +142,76 @@ class AudioEngine
             return 880.0 - (880.0 - 220.0) * (clamped / 30.0)
         }
 
-        private suspend fun playTone(
-            frequencyHz: Double,
-            durationMs: Int,
-            leftVol: Float,
-            rightVol: Float,
-        ) {
-            val t = track ?: return
-            val samples = generateStereoSine(frequencyHz, durationMs, leftVol, rightVol)
-            toneMutex.withLock {
-                t.write(samples, 0, samples.size, AudioTrack.WRITE_BLOCKING)
+        /**
+         * Queues one complete earcon and returns only after its final audible frame is rendered.
+         *
+         * A blocking [AudioTrack.write] only proves that PCM reached the track's buffer; it may
+         * return before the device renders that PCM. Tracking written frames against
+         * [AudioTrack.getPlaybackHeadPosition] gives [AudioCuePlayer] a real completion boundary
+         * for its transient audio-focus lease. One silence chunk is queued after the cue so the
+         * keepalive has time to resume without creating a Bluetooth underrun.
+         */
+        private suspend fun playCue(vararg tones: Tone) =
+            withContext(Dispatchers.IO) {
+                val currentTrack = track ?: return@withContext
+                val rendered =
+                    tones.map { tone ->
+                        generateStereoSine(tone.frequencyHz, tone.durationMs, tone.leftVol, tone.rightVol)
+                    }
+                toneMutex.withLock {
+                    if (track !== currentTrack) return@withLock
+                    for (samples in rendered) {
+                        if (!writeFully(currentTrack, samples)) return@withLock
+                    }
+                    val cueEndFrame = samplesWritten / 2L
+                    if (!writeFully(currentTrack, silenceChunk)) return@withLock
+                    while (track === currentTrack) {
+                        val playedFrames = playbackFramePosition(currentTrack) ?: break
+                        if (playedFrames >= cueEndFrame) break
+                        delay(5L)
+                    }
+                }
             }
+
+        /** Must be called while [toneMutex] is held. */
+        private fun writeFully(
+            currentTrack: AudioTrack,
+            samples: FloatArray,
+        ): Boolean {
+            var offset = 0
+            while (offset < samples.size && track === currentTrack) {
+                val count =
+                    runCatching {
+                        currentTrack.write(
+                            samples,
+                            offset,
+                            samples.size - offset,
+                            AudioTrack.WRITE_BLOCKING,
+                        )
+                    }.getOrElse { return false }
+                if (count <= 0) return false
+                offset += count
+                samplesWritten += count
+            }
+            return offset == samples.size
         }
+
+        /** Expands AudioTrack's wrapping unsigned 32-bit counter into this track's frame count. */
+        private fun playbackFramePosition(currentTrack: AudioTrack): Long? {
+            val raw =
+                runCatching { currentTrack.playbackHeadPosition.toLong() and 0xffff_ffffL }
+                    .getOrNull() ?: return null
+            if (raw < lastPlaybackHeadRaw) playbackHeadWrapOffset += 1L shl 32
+            lastPlaybackHeadRaw = raw
+            return playbackHeadWrapOffset + raw
+        }
+
+        private data class Tone(
+            val frequencyHz: Double,
+            val durationMs: Int,
+            val leftVol: Float,
+            val rightVol: Float,
+        )
 
         /**
          * Generates a stereo-interleaved float PCM sine wave with linear fade-in/out

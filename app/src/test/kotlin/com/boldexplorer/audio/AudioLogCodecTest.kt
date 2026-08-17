@@ -130,4 +130,11 @@ class AudioLogCodecTest {
 
         assertEquals(AudioLogEntry.Kind.TRAIL_MATCH, parsed.kind, "shadow matching has its own kind")
     }
+
+    @Test
+    fun audioFocusIsALoggableKind() {
+        val parsed = assertNotNull(AudioLogCodec.parse(AudioLogCodec.format(entry(kind = AudioLogEntry.Kind.AUDIO_FOCUS))))
+
+        assertEquals(AudioLogEntry.Kind.AUDIO_FOCUS, parsed.kind, "focus transitions survive export and restart")
+    }
 }

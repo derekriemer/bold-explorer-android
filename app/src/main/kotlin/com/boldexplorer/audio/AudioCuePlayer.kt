@@ -1,9 +1,5 @@
 package com.boldexplorer.audio
 
-import android.content.Context
-import android.media.AudioAttributes
-import android.media.AudioFocusRequest
-import android.media.AudioManager
 import com.boldexplorer.BuildConfig
 import com.boldexplorer.shared.audio.AudioCueEvent
 import com.boldexplorer.shared.audio.AudioCueScheduler
@@ -12,16 +8,17 @@ import com.boldexplorer.shared.model.LocationSample
 import com.boldexplorer.shared.navigation.SmoothedHeading
 import com.boldexplorer.shared.navigation.TrailGuidanceState
 import com.boldexplorer.shared.repository.SettingsRepository
-import dagger.hilt.android.qualifiers.ApplicationContext
+import com.boldexplorer.shared.settings.AppSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -32,11 +29,13 @@ import javax.inject.Singleton
  *   → [AudioEngine] streaming tone
  * - [AudioCueEvent.TrailComplete] → [TtsEngine]
  *
- * Audio focus is requested per-tone only when [AppSettings.duckAudioEnabled] is true,
- * so music is not held ducked between beacons. When duck is off, tones mix transparently.
+ * [AppSettings.duckAudioEnabled] selects between two explicit modes: transient-may-duck focus for
+ * exactly the audible cue, or transparent mixing with other media. A denied focus request falls
+ * back to mixing so an accessibility cue is never lost solely because focus was unavailable.
  *
- * [AudioEngine.start] keeps the Bluetooth A2DP stream alive via a silence keepalive loop,
- * preventing BT headphone dropout on the first frame of each tone.
+ * [AudioEngine.start] currently keeps the Bluetooth A2DP stream alive via a silence keepalive loop.
+ * That output-stream lifetime is issue #53 and is intentionally separate from the per-cue focus
+ * lifetime fixed in issue #41.
  *
  * Every dispatched event is appended to [AudioEventLog] for post-session debugging.
  */
@@ -45,16 +44,17 @@ class AudioCuePlayer
     @Inject
     constructor(
         private val audioEngine: AudioEngine,
+        private val audioFocusController: AudioFocusController,
         private val ttsEngine: TtsEngine,
         private val scheduler: AudioCueScheduler,
         private val settingsRepo: SettingsRepository,
         private val appForegroundState: AppForegroundState,
         private val audioEventLog: AudioEventLog,
-        @ApplicationContext private val context: Context,
     ) {
         private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         private var playerJob: Job? = null
-        private var focusRequest: AudioFocusRequest? = null
+        private val settings: StateFlow<AppSettings> =
+            settingsRepo.observeSettings().stateIn(scope, SharingStarted.Eagerly, AppSettings())
 
         // Stored from start() so dispatch() can snapshot current values for logging.
         private var accuracyMFlow: StateFlow<Double?>? = null
@@ -62,14 +62,6 @@ class AudioCuePlayer
         private var locationFlow: StateFlow<LocationSample?>? = null
         private var trailGuidanceFlow: StateFlow<TrailGuidanceState?>? = null
         private var smoothedHeadingFlow: StateFlow<SmoothedHeading?>? = null
-
-        private val audioManager = context.getSystemService(AudioManager::class.java)
-        private val focusAttributes =
-            AudioAttributes
-                .Builder()
-                .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build()
 
         fun start(
             accuracyM: StateFlow<Double?>,
@@ -110,13 +102,12 @@ class AudioCuePlayer
             trailGuidanceFlow = null
             smoothedHeadingFlow = null
             audioEngine.stop()
-            abandonAudioFocus()
+            audioFocusController.abandonForStop()
         }
 
-        private fun dispatch(event: AudioCueEvent) {
-            val settings = runBlocking { settingsRepo.load() }
-            val duck = settings.duckAudioEnabled
-            if (duck) requestAudioFocus()
+        private suspend fun dispatch(event: AudioCueEvent) {
+            val currentSettings = settings.value
+            val duck = currentSettings.duckAudioEnabled
 
             // STOPGAP for #14 (absolute silence mode): earcons don't route through
             // OutputManager/OutputPolicy yet — that unification is tracked in #22. Until then,
@@ -124,7 +115,7 @@ class AudioCuePlayer
             // below), so "no automatic audio output whatsoever" is actually true. History still
             // gets recorded below regardless of `silenced` — only the play calls are gated.
             // Replace with real OutputPolicy routing once #22 lands.
-            val silenced = settings.absoluteSilenceEnabled
+            val silenced = currentSettings.absoluteSilenceEnabled
 
             val nowMs = System.currentTimeMillis()
             val relDeg = relativeDegFlow?.value
@@ -141,7 +132,14 @@ class AudioCuePlayer
                     // false impression of live tracking. Go silent instead of playing a
                     // confidently-wrong tone.
                     val stale = isLocationStale(nowMs, loc?.timestamp)
-                    if (!silenced && !stale) audioEngine.playDirectionalBeacon(event.pan, event.pitchHz)
+                    val audioMode =
+                        if (!silenced && !stale) {
+                            audioFocusController.play(duck, "DirectionalBeacon") {
+                                audioEngine.playDirectionalBeacon(event.pan, event.pitchHz)
+                            }
+                        } else {
+                            CueAudioMode.SUPPRESSED
+                        }
                     scope.launch {
                         val courseIsSmoothed = guidance?.courseIsSmoothed ?: false
                         val extra =
@@ -174,11 +172,15 @@ class AudioCuePlayer
                                 kind = AudioLogEntry.Kind.DIRECTIONAL_BEACON,
                                 trigger = "5s timer",
                                 inputs =
-                                    buildString {
-                                        if (relDeg != null) append("relativeDeg=${"%.1f".format(relDeg)}°")
-                                        if (accM != null) append(", accuracy=${"%.1f".format(accM)}m")
-                                        if (courseIsSmoothed) append(", smoothed=true")
-                                    }.trimStart(',', ' '),
+                                    cueInputs(
+                                        buildString {
+                                            if (relDeg != null) append("relativeDeg=${"%.1f".format(relDeg)}°")
+                                            if (accM != null) append(", accuracy=${"%.1f".format(accM)}m")
+                                            if (courseIsSmoothed) append(", smoothed=true")
+                                        }.trimStart(',', ' '),
+                                        duck,
+                                        audioMode,
+                                    ),
                                 outputs = "pan=${"%.3f".format(event.pan)}, pitchHz=${"%.0f".format(event.pitchHz)} Hz",
                                 played =
                                     when {
@@ -187,8 +189,14 @@ class AudioCuePlayer
                                             "Suppressed (stale GPS fix${ageMs?.let { ", ${it}ms old" } ?: ""}): " +
                                                 "tone @ ${"%.0f".format(event.pitchHz)} Hz"
                                         }
-                                        silenced -> "Suppressed (silence mode): tone @ ${"%.0f".format(event.pitchHz)} Hz"
-                                        else -> "Tone @ ${"%.0f".format(event.pitchHz)} Hz"
+
+                                        silenced -> {
+                                            "Suppressed (silence mode): tone @ ${"%.0f".format(event.pitchHz)} Hz"
+                                        }
+
+                                        else -> {
+                                            "Tone @ ${"%.0f".format(event.pitchHz)} Hz"
+                                        }
                                     },
                                 extra = extra,
                             ),
@@ -197,7 +205,14 @@ class AudioCuePlayer
                 }
 
                 is AudioCueEvent.AccuracyBeacon -> {
-                    if (!silenced) audioEngine.playAccuracyBeacon(event.accuracyM)
+                    val audioMode =
+                        if (!silenced) {
+                            audioFocusController.play(duck, "AccuracyBeacon") {
+                                audioEngine.playAccuracyBeacon(event.accuracyM)
+                            }
+                        } else {
+                            CueAudioMode.SUPPRESSED
+                        }
                     val mappedHz = 880.0 - (880.0 - 220.0) * (event.accuracyM.coerceIn(0.0, 30.0) / 30.0)
                     scope.launch {
                         audioEventLog.append(
@@ -205,7 +220,7 @@ class AudioCuePlayer
                                 timestampMs = nowMs,
                                 kind = AudioLogEntry.Kind.ACCURACY_BEACON,
                                 trigger = "GPS update",
-                                inputs = "accuracy=${"%.1f".format(event.accuracyM)}m",
+                                inputs = cueInputs("accuracy=${"%.1f".format(event.accuracyM)}m", duck, audioMode),
                                 outputs = "pitchHz=${"%.0f".format(mappedHz)} Hz",
                                 played =
                                     if (silenced) {
@@ -219,14 +234,26 @@ class AudioCuePlayer
                 }
 
                 is AudioCueEvent.AlignmentPing -> {
-                    if (!silenced) audioEngine.playAlignmentPing(event.pan, event.pitchHz)
+                    val audioMode =
+                        if (!silenced) {
+                            audioFocusController.play(duck, "AlignmentPing") {
+                                audioEngine.playAlignmentPing(event.pan, event.pitchHz)
+                            }
+                        } else {
+                            CueAudioMode.SUPPRESSED
+                        }
                     scope.launch {
                         audioEventLog.append(
                             AudioLogEntry(
                                 timestampMs = nowMs,
                                 kind = AudioLogEntry.Kind.ALIGNMENT_PING,
                                 trigger = "Alignment ping",
-                                inputs = relDeg?.let { "relativeDeg=${"%.1f".format(it)}°" } ?: "",
+                                inputs =
+                                    cueInputs(
+                                        relDeg?.let { "relativeDeg=${"%.1f".format(it)}°" } ?: "",
+                                        duck,
+                                        audioMode,
+                                    ),
                                 outputs = "pan=${"%.3f".format(event.pan)}, pitchHz=${"%.0f".format(event.pitchHz)} Hz",
                                 played =
                                     if (silenced) {
@@ -259,14 +286,26 @@ class AudioCuePlayer
                 }
 
                 is AudioCueEvent.WrongVector -> {
-                    if (!silenced) audioEngine.playWrongVector()
+                    val audioMode =
+                        if (!silenced) {
+                            audioFocusController.play(duck, "WrongVector") {
+                                audioEngine.playWrongVector()
+                            }
+                        } else {
+                            CueAudioMode.SUPPRESSED
+                        }
                     scope.launch {
                         audioEventLog.append(
                             AudioLogEntry(
                                 timestampMs = nowMs,
                                 kind = AudioLogEntry.Kind.DIRECTIONAL_BEACON,
                                 trigger = "WrongVector",
-                                inputs = relDeg?.let { "relativeDeg=${"%.1f".format(it)}°" } ?: "",
+                                inputs =
+                                    cueInputs(
+                                        relDeg?.let { "relativeDeg=${"%.1f".format(it)}°" } ?: "",
+                                        duck,
+                                        audioMode,
+                                    ),
                                 outputs = "660 Hz → 440 Hz descending",
                                 played = if (silenced) "Suppressed (silence mode): wrong-vector earcon" else "Wrong-vector earcon",
                             ),
@@ -274,29 +313,19 @@ class AudioCuePlayer
                     }
                 }
             }
-
-            // Abandon focus immediately after tone dispatch so music unducks per-beep.
-            // TTS manages its own focus internally; we abandon ours regardless.
-            if (duck) abandonAudioFocus()
-        }
-
-        private fun requestAudioFocus() {
-            val request =
-                AudioFocusRequest
-                    .Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
-                    .setAudioAttributes(focusAttributes)
-                    .setAcceptsDelayedFocusGain(false)
-                    .setOnAudioFocusChangeListener { /* duck handled by system volume */ }
-                    .build()
-            audioManager.requestAudioFocus(request)
-            focusRequest = request
-        }
-
-        private fun abandonAudioFocus() {
-            focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
-            focusRequest = null
         }
     }
+
+private fun cueInputs(
+    inputs: String,
+    duckAudioEnabled: Boolean,
+    audioMode: CueAudioMode,
+): String =
+    listOf(
+        inputs.takeIf(String::isNotEmpty),
+        "duckAudioEnabled=$duckAudioEnabled",
+        "audioMode=${audioMode.logValue}",
+    ).filterNotNull().joinToString(", ")
 
 /**
  * Which channel carried a cue that [AudioCuePlayer] speaks directly.
