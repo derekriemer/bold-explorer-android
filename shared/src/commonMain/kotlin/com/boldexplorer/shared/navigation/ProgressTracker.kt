@@ -100,6 +100,14 @@ class ProgressTracker(
     private var lastConfirmedMs: Long? = null
     private var speedEmaMps: Double? = null
 
+    /**
+     * Smoothed ground speed, or null before the first fix carrying one.
+     *
+     * Exposed rather than re-derived: a second speed estimate would drift from the one dead reckoning
+     * uses, and there would be no way to tell which was wrong.
+     */
+    val speedMps: Double? get() = speedEmaMps
+
     /** Timestamp of the last global scan. A timestamp, deliberately, not a counter — see below. */
     private var lastGlobalScanMs: Long? = null
 
