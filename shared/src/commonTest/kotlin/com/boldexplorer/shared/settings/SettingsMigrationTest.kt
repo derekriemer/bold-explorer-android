@@ -72,6 +72,13 @@ class SettingsMigrationTest {
     }
 
     @Test
+    fun duckAudio_versionedTrue_survivesPersistenceRoundTrip() {
+        val stored = serializeVersioned(DuckAudioPrefSpec.currentVersion, true)
+
+        assertEquals(true, migrateStoredValue(DuckAudioPrefSpec, stored))
+    }
+
+    @Test
     fun absoluteSilence_nullReturnsDefaultFalse() {
         val result = migrateStoredValue(AbsoluteSilencePrefSpec, null)
         assertEquals(false, result)

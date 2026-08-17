@@ -290,6 +290,7 @@ Session logs are JSONL files (`bold_explorer_audio_log_<timestamp>.jsonl`), one 
 | `WAYPOINT_APPROACH` | Proximity ramp-up as user nears a waypoint |
 | `TRAIL_COMPLETE` | Trail finished event |
 | `TTS_ANNOUNCEMENT` | Any spoken text event (nav cues, alerts, collection points, recording state) |
+| `AUDIO_FOCUS` | Per-cue transient-duck focus request/abandon, platform result, and held duration |
 | `DETECTION_STATE` | Internal detector decisions: `OffTrailCheck`, `NearbyPoint`, `GpsFixRejected` (accuracy-gate drop, issue #23), etc. |
 | `USER_MARKER` | In-field note pressed by the user; `note` field contains the text |
 
