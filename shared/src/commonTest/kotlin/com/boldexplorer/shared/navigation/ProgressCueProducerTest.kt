@@ -18,9 +18,10 @@ class ProgressCueProducerTest {
         producer: ProgressCueProducer,
         nowMs: Long,
         remainingM: Double = 400.0,
+        direction: TravelDirection = TravelDirection.Forward,
         lastSpokeAtMs: Long = Long.MIN_VALUE,
     ) = producer.onFix(nowMs, straight, alongTrackM = 100.0, remainingM = remainingM,
-        units = Units.IMPERIAL, lastSpokeAtMs = lastSpokeAtMs)
+        direction = direction, units = Units.IMPERIAL, lastSpokeAtMs = lastSpokeAtMs)
 
     @Test
     fun theEarconRunsFasterThanTheSpeech() {
@@ -67,8 +68,24 @@ class ProgressCueProducerTest {
         // corner, which the strict inequality then excludes, defeating the very case this test
         // means to cover. 170 m puts the corner substantially inside [170, 210).
         val cue = producer.onFix(0L, corner, alongTrackM = 170.0, remainingM = 200.0,
-            units = Units.IMPERIAL, lastSpokeAtMs = Long.MIN_VALUE)
+            direction = TravelDirection.Forward, units = Units.IMPERIAL, lastSpokeAtMs = Long.MIN_VALUE)
 
         assertNull(cue.speech, "a corner is 30 m ahead")
+    }
+
+    @Test
+    fun aReverseFollowIsNotSilencedByACornerItHasAlreadyPassed() {
+        // Same corner trail as above: north 0..200 m, then east. At 170 m the corner (200 m) sits
+        // at a *higher* along-track reading, which is behind a reverse follow, not ahead of it — so
+        // the progress cue must not be suppressed by it.
+        val north = (0..10).map { LatLng(latFor(it * 20.0), 0.0) }
+        val east = (1..10).map { LatLng(latFor(200.0), it * 20.0 / 111_194.9) }
+        val corner = TrailPolyline(north + east)
+        val producer = ProgressCueProducer()
+
+        val cue = producer.onFix(0L, corner, alongTrackM = 170.0, remainingM = 170.0,
+            direction = TravelDirection.Reverse, units = Units.IMPERIAL, lastSpokeAtMs = Long.MIN_VALUE)
+
+        assertNotNull(cue.speech, "the corner is behind a reverse follow, not ahead")
     }
 }

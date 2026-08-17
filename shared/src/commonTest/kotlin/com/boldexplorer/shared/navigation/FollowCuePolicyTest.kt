@@ -14,7 +14,7 @@ class FollowCuePolicyTest {
     @Test
     fun aStraightStretchIsStraight() {
         val poly = TrailPolyline((0..20).map { LatLng(latFor(it * 20.0), 0.0) })
-        assertTrue(FollowCuePolicy.isStraightAhead(poly, 100.0))
+        assertTrue(FollowCuePolicy.isStraightAhead(poly, 100.0, TravelDirection.Forward))
     }
 
     @Test
@@ -25,7 +25,10 @@ class FollowCuePolicyTest {
         val east = (1..10).map { LatLng(latFor(200.0), lonFor(it * 20.0)) }
         val poly = TrailPolyline(north + east)
 
-        assertFalse(FollowCuePolicy.isStraightAhead(poly, 170.0), "a corner 30 m ahead is not straight")
+        assertFalse(
+            FollowCuePolicy.isStraightAhead(poly, 170.0, TravelDirection.Forward),
+            "a corner 30 m ahead is not straight",
+        )
     }
 
     @Test
@@ -41,8 +44,14 @@ class FollowCuePolicyTest {
         val east = (1..10).map { LatLng(latFor(200.0), lonFor(it * 20.0)) }
         val poly = TrailPolyline(north + east)
 
-        assertTrue(FollowCuePolicy.isStraightAhead(poly, 160.0), "corner exactly at the far edge")
-        assertFalse(FollowCuePolicy.isStraightAhead(poly, 165.0), "5 m past the edge, sagitta clears the threshold")
+        assertTrue(
+            FollowCuePolicy.isStraightAhead(poly, 160.0, TravelDirection.Forward),
+            "corner exactly at the far edge",
+        )
+        assertFalse(
+            FollowCuePolicy.isStraightAhead(poly, 165.0, TravelDirection.Forward),
+            "5 m past the edge, sagitta clears the threshold",
+        )
     }
 
     @Test
@@ -57,9 +66,48 @@ class FollowCuePolicyTest {
         }
 
         assertEquals(
-            FollowCuePolicy.isStraightAhead(corner(2.0), 170.0),
-            FollowCuePolicy.isStraightAhead(corner(20.0), 170.0),
+            FollowCuePolicy.isStraightAhead(corner(2.0), 170.0, TravelDirection.Forward),
+            FollowCuePolicy.isStraightAhead(corner(20.0), 170.0, TravelDirection.Forward),
             "same corner, different densities, different answers",
+        )
+    }
+
+    @Test
+    fun reverseLooksBehindNotAhead() {
+        // Same query point, opposite verdict: forward's window is [170, 210] and finds the corner
+        // at 200; reverse's window is [130, 170] — the straight approach already walked, with the
+        // corner nowhere in it. States the asymmetry explicitly rather than merely exercising it.
+        val north = (0..10).map { LatLng(latFor(it * 20.0), 0.0) }
+        val east = (1..10).map { LatLng(latFor(200.0), lonFor(it * 20.0)) }
+        val poly = TrailPolyline(north + east)
+
+        assertFalse(
+            FollowCuePolicy.isStraightAhead(poly, 170.0, TravelDirection.Forward),
+            "forward: the corner is 30 m ahead",
+        )
+        assertTrue(
+            FollowCuePolicy.isStraightAhead(poly, 170.0, TravelDirection.Reverse),
+            "reverse: the 40 m behind 170 is the straight north leg, not the corner",
+        )
+    }
+
+    @Test
+    fun reverseNearTheStartShortensTheWindowRatherThanJustClamping() {
+        // A short corner: north is a single 20 m segment (cumulative 0 -> 20), then east
+        // continues — so the corner vertex sits at cumulative 20. A reverse follow at
+        // alongTrackM = 10 is within the trail's last 40 m. Clamping the window's *start* to zero
+        // without also shortening the lookahead would still ask sagittaOver about [0, 40] — the
+        // corner at 20 is comfortably interior to that (0 < 20 < 40), which is the bug: judged by
+        // a corner it has already walked past. Shortening the lookahead to
+        // min(40, alongTrackM) = min(40, 10) = 10 gives the true window [0, 10], which the corner
+        // (at 20) sits 10 m outside of.
+        val north = (0..1).map { LatLng(latFor(it * 20.0), 0.0) }
+        val east = (1..10).map { LatLng(latFor(20.0), lonFor(it * 20.0)) }
+        val poly = TrailPolyline(north + east)
+
+        assertTrue(
+            FollowCuePolicy.isStraightAhead(poly, 10.0, TravelDirection.Reverse),
+            "the corner sits 10 m outside the shortened window, not 20 m inside an unshortened one",
         )
     }
 }

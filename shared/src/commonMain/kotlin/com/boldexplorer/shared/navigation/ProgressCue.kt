@@ -30,6 +30,7 @@ class ProgressCueProducer {
         polyline: TrailPolyline,
         alongTrackM: Double,
         remainingM: Double,
+        direction: TravelDirection,
         units: Units,
         lastSpokeAtMs: Long,
     ): ProgressCue {
@@ -40,7 +41,7 @@ class ProgressCueProducer {
         // subject to either suppression below.
         val due = elapsedSinceMs(nowMs, lastSpeechAtMs) >= NavigationPolicy.PROGRESS_SPEECH_INTERVAL_MS
         val yielding = elapsedSinceMs(nowMs, lastSpokeAtMs) < NavigationPolicy.PROGRESS_YIELD_MS
-        val straight = FollowCuePolicy.isStraightAhead(polyline, alongTrackM)
+        val straight = FollowCuePolicy.isStraightAhead(polyline, alongTrackM, direction)
         val speech =
             if (due && !yielding && straight) {
                 lastSpeechAtMs = nowMs

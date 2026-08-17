@@ -92,18 +92,21 @@ class AnnotationCueProducer(
             .map { annotation ->
                 announced += annotation.id
                 val behindM = abs(toAlongTrackM - annotation.alongTrackM)
-                val side = if (annotation.signedCrossTrackM * direction.sign >= 0.0) "right" else "left"
-                "You passed ${annotation.name}, ${formatSpokenDistance(behindM, units)} back, on your $side"
+                val distance = formatSpokenDistance(behindM, units)
+                "You passed ${annotation.name}, $distance back, on your ${side(annotation)}"
             }
     }
+
+    /** Right of recorded order is the walker's left on a reverse follow. */
+    private fun side(annotation: RouteAnnotation): String =
+        if (annotation.signedCrossTrackM * direction.sign >= 0.0) "right" else "left"
 
     private fun phrase(
         annotation: RouteAnnotation,
         units: Units,
     ): String {
         val distance = formatSpokenDistance(abs(annotation.signedCrossTrackM), units)
-        // Right of recorded order is the walker's left on a reverse follow.
-        val side = if (annotation.signedCrossTrackM * direction.sign >= 0.0) "right" else "left"
+        val side = side(annotation)
         return if (abs(annotation.signedCrossTrackM) > NavigationPolicy.ANNOTATION_ASIDE_M) {
             "Off to your $side, $distance: ${annotation.name}"
         } else {

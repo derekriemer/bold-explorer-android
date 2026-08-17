@@ -51,9 +51,19 @@ class AnnotationCueProducerTest {
     fun theLeadGrowsWithSpeedAndIsClamped() {
         // Lead time is what the walker experiences; a runner needs more warning in metres.
         assertTrue(producer(bench).onFix(70.0, speedMps = 4.0, units = Units.IMPERIAL).isNotEmpty(),
-            "at 4 m/s, 8 s of lead is past the 40 m cap, so 30 m out should fire")
+            "at 4 m/s, 8 s of lead is 32 m — inside the 10-40 m clamp — so 30 m out should fire")
         assertTrue(producer(bench).onFix(70.0, speedMps = 0.0, units = Units.IMPERIAL).isEmpty(),
             "stationary falls back to the 10 m floor, not to silence forever")
+    }
+
+    @Test
+    fun theLeadIsCappedForAFastMover() {
+        // At 10 m/s, 8 s of lead would be 80 m — well past the 40 m cap — so the lead used is the
+        // cap itself, and a mark 50 m out (beyond the cap) must not fire yet.
+        assertTrue(producer(bench).onFix(50.0, speedMps = 10.0, units = Units.IMPERIAL).isEmpty(),
+            "50 m out is beyond the 40 m cap even at this speed")
+        assertTrue(producer(bench).onFix(65.0, speedMps = 10.0, units = Units.IMPERIAL).isNotEmpty(),
+            "35 m out is inside the 40 m cap")
     }
 
     @Test
