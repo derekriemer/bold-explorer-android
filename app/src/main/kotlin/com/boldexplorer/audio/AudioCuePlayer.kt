@@ -29,7 +29,7 @@ import javax.inject.Singleton
  * Bridges [AudioCueScheduler] (pure scheduling) to Android playback.
  *
  * - [AudioCueEvent.DirectionalBeacon] / [AudioCueEvent.AccuracyBeacon] / [AudioCueEvent.AlignmentPing]
- *   / [AudioCueEvent.Progress] → [AudioEngine] streaming tone
+ *   → [AudioEngine] streaming tone
  * - [AudioCueEvent.TrailComplete] → [TtsEngine]
  *
  * Audio focus is requested per-tone only when [AppSettings.duckAudioEnabled] is true,
@@ -233,27 +233,6 @@ class AudioCuePlayer
                                         "Suppressed (silence mode): alignment ping @ ${"%.0f".format(event.pitchHz)} Hz"
                                     } else {
                                         "Alignment ping @ ${"%.0f".format(event.pitchHz)} Hz"
-                                    },
-                            ),
-                        )
-                    }
-                }
-
-                is AudioCueEvent.Progress -> {
-                    if (!silenced) audioEngine.playProgress(event.lost)
-                    scope.launch {
-                        audioEventLog.append(
-                            AudioLogEntry(
-                                timestampMs = nowMs,
-                                kind = AudioLogEntry.Kind.PROGRESS,
-                                trigger = "Progress beep",
-                                inputs = "lost=${event.lost}",
-                                outputs = if (event.lost) "double tick @ 330 Hz" else "tone @ 523 Hz",
-                                played =
-                                    if (silenced) {
-                                        "Suppressed (silence mode): progress beep (lost=${event.lost})"
-                                    } else {
-                                        "Progress beep (lost=${event.lost})"
                                     },
                             ),
                         )

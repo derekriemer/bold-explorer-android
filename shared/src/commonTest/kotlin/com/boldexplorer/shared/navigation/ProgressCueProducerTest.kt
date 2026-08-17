@@ -4,10 +4,8 @@ import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.settings.Units
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
-import kotlin.test.assertTrue
 
 class ProgressCueProducerTest {
     private fun latFor(m: Double) = m / 111_194.9
@@ -26,16 +24,11 @@ class ProgressCueProducerTest {
         direction = direction, units = Units.IMPERIAL, lastSpokeAtMs = lastSpokeAtMs, matchLost = matchLost)
 
     @Test
-    fun theEarconRunsFasterThanTheSpeech() {
+    fun theSpeechCadenceHoldsAfterTheFirstFix() {
         val producer = ProgressCueProducer()
 
-        val first = produce(producer, 0L)
-        assertTrue(first.earcon, "the first fix establishes presence")
-        assertNotNull(first.speech)
-
-        assertFalse(produce(producer, 2_000L).earcon, "inside the earcon interval")
-        assertTrue(produce(producer, 5_000L).earcon)
-        assertNull(produce(producer, 5_000L).speech, "speech is slower than the beep")
+        assertNotNull(produce(producer, 0L).speech)
+        assertNull(produce(producer, 5_000L).speech, "speech cadence is 15 s")
         assertNotNull(produce(producer, 15_000L).speech)
     }
 
@@ -53,7 +46,6 @@ class ProgressCueProducerTest {
         val cue = produce(producer, 20_000L, lastSpokeAtMs = 18_000L)
 
         assertNull(cue.speech, "something spoke 2 s ago")
-        assertTrue(cue.earcon, "the beep still carries presence — it does not collide with speech")
     }
 
     @Test
@@ -94,33 +86,21 @@ class ProgressCueProducerTest {
     }
 
     @Test
-    fun theEarconFiresBeforeTheMatchHasEverConfirmedAPosition() {
+    fun speechIsSilentBeforeTheMatchHasEverConfirmedAPosition() {
         // A follow started 200 m from the trailhead: alongTrackM is null because nothing has been
-        // confirmed yet. Silence here reads to a blind user as the app having crashed, so the
-        // earcon — presence, not position — must still fire.
+        // confirmed yet.
         val cue = produce(ProgressCueProducer(), 0L, alongTrackM = null, remainingM = null)
 
-        assertTrue(cue.earcon, "presence does not require a confirmed position")
         assertNull(cue.speech, "there is nothing to report yet")
     }
 
     @Test
-    fun theEarconFiresWhileTheMatchIsLost() {
-        // ADR 0001: "the progress earcon keeps its cadence but changes character" while lost —
-        // it must not go silent just because the match currently disagrees with itself.
-        val cue = produce(ProgressCueProducer(), 0L, matchLost = true)
-
-        assertTrue(cue.earcon, "the earcon must not go silent during a dropout")
-    }
-
-    @Test
-    fun speechIsSuppressedWhileTheMatchIsLostButTheEarconStillFires() {
+    fun speechIsSuppressedWhileTheMatchIsLost() {
         // confirmedAlongM/remainingM freeze the instant the match stops being Matched, so reading
         // them out during a dropout is reading out a stale number with full confidence.
         val cue = produce(ProgressCueProducer(), 0L, matchLost = true)
 
         assertNull(cue.speech, "a frozen distance must not be read out as if it were current")
-        assertTrue(cue.earcon, "the earcon is unaffected by the speech gate")
     }
 
     @Test

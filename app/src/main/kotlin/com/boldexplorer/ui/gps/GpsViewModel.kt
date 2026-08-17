@@ -1478,10 +1478,10 @@ class GpsViewModel
                 }
             }
 
-            // Presence, not position: the earcon has to run for the whole active follow — including
-            // before the match has ever confirmed a position, and while it is lost — so this is
-            // deliberately outside the `alongTrackM != null` check above. Only the speech half needs
-            // a confirmed position; ProgressCueProducer enforces that itself given nulls.
+            // Called on every fix while a session is active, not just once alongTrackM is confirmed —
+            // ProgressCueProducer.onFix tracks the speech cadence internally (lastSpeechAtMs), and
+            // that cadence must keep running even before the match confirms a position, or the first
+            // confirmed fix would read as "due" regardless of how long the follow had already run.
             if (session != null) {
                 val cue =
                     cues.progress.onFix(
@@ -1506,12 +1506,6 @@ class GpsViewModel
                         origin = OutputOrigin.AUTOMATIC,
                         sample = sample,
                     )
-                }
-                if (cue.earcon) {
-                    // Sustained state: flapping the earcon's character on every marginal fix would be
-                    // noise, not information — see the matching comment on ProgressCueProducer.
-                    val lost = cues.matchState.isLost
-                    viewModelScope.launch { scheduler.emitProgress(lost, beaconCuesEnabled.value) }
                 }
             }
 

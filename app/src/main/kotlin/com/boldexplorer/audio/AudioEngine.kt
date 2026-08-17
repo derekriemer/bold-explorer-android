@@ -125,25 +125,6 @@ class AudioEngine
             scope.launch { playTone(pitchHz, durationMs = 80, leftVol = left, rightVol = right) }
         }
 
-        /**
-         * The periodic "still following" beep (ADR 0001, S6).
-         *
-         * Confident case: one clean tone. [lost]: two short, lower ticks instead of one — audibly
-         * different, not just quieter, so the earcon itself never implies confidence the tracker
-         * does not have. Deliberately distinct from [playWrongVector]'s descending pair, which means
-         * "you are going the wrong way" rather than "I do not know where you are".
-         */
-        fun playProgress(lost: Boolean) {
-            if (lost) {
-                scope.launch {
-                    playTone(330.0, durationMs = 60, leftVol = 0.5f, rightVol = 0.5f)
-                    playTone(330.0, durationMs = 60, leftVol = 0.5f, rightVol = 0.5f)
-                }
-            } else {
-                scope.launch { playTone(523.0, durationMs = 90, leftVol = 0.6f, rightVol = 0.6f) }
-            }
-        }
-
         /** Two descending tones (660 → 440 Hz) centered in both ears — "wrong direction" earcon. */
         fun playWrongVector() {
             scope.launch {

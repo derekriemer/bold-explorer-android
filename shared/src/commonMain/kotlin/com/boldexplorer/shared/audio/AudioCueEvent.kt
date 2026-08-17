@@ -23,16 +23,6 @@ sealed class AudioCueEvent {
         val pitchHz: Double,
     ) : AudioCueEvent()
 
-    /**
-     * The periodic "still following" beep (ADR 0001, S6). [lost] renders it differently, so the
-     * sound never implies confidence the tracker does not have — the same failure mode a hard
-     * accuracy gate produced once before, where distance/bearing froze while this earcon kept
-     * carrying on as if nothing had changed.
-     */
-    data class Progress(
-        val lost: Boolean,
-    ) : AudioCueEvent()
-
     // TTS announcement when the trail is finished.
     object TrailComplete : AudioCueEvent()
 

@@ -1,8 +1,9 @@
 # ADR 0001 — Continuous trail matching: navigation core redesign
 
 - **Status:** Accepted; amended 2026-08-12 (Amendment 1 — vertex projections; S5a — backtrack; S5b —
-  geometry vs annotations), 2026-08-14 (Amendment 2 — accuracy-aware backtrack noise floor) and
-  2026-08-15 (Amendment 3 — off-trail under uncertainty)
+  geometry vs annotations), 2026-08-14 (Amendment 2 — accuracy-aware backtrack noise floor),
+  2026-08-15 (Amendment 3 — off-trail under uncertainty) and 2026-08-17 (Amendment 4 — progress
+  earcon retired, audio guidance to stop being a metronome)
 - **Date:** 2026-08-09
 - **Issues:** #23, #35, #55, #56, #69
 - **Supersedes:** the per-trackpoint `TrailFollower` state machine
@@ -1617,6 +1618,98 @@ of those spans — and at 01:10:40 the owner writes *"Not degrading."* Accuracy 
 25 m for exactly one span, 01:36:36–01:38:08. **Trust the accuracy values, not the marker text**, for
 where degradation was really in effect; the marker records an intent, sometimes one that was
 immediately reversed.
+
+## Amendment 4 — retire the progress earcon; audio guidance carries direction, not a metronome (2026-08-17)
+
+Proposed after the 2026-08-16 field walk on "test loop" and the follow-up design conversation
+2026-08-17. Amends S6's audio vocabulary table; touches S8 only by exclusion (see the corridor
+deadband below). **Decision item 1 (delete the earcon) is done, same day.** Items 2 and 3, and the
+corridor deadband, remain proposed — recorded so the next session has the reasoning rather than the
+memory.
+
+### What the walk found
+
+The progress earcon and the directional beacon both fired on the same 5000 ms cadence
+(`PROGRESS_EARCON_INTERVAL_MS` / `directionalBeaconIntervalMs`), unsynchronized, at different pitches,
+landing on top of each other for the whole walk. Already patched short-term:
+`AudioCueConfig.progressEarconEnabled` defaults `false` (`shared/.../audio/AudioCueConfig.kt`).
+
+But the collision was never the real defect. Even alone, the progress earcon carries no directional
+information — a flat 523 Hz / 330 Hz×2 tone with `leftVol == rightVol`, dead centre. It answers "am I
+still tracked", nothing else. The directional beacon already answers a strictly larger question on the
+same cadence: bearing, via pan and pitch, plus "still tracked" implicitly (it goes silent when
+`relativeDeg` is null). The owner's original intent for the periodic cue was that it be evidence-driven
+— *"the direction beep wouldn't be dumb, it would literally use the projected trail direction
+properly"* — which describes the **directional beacon**, not a second signal beside it. S6 built a
+second, poorer instrument doing a subset of what the first already does.
+
+### Why it happens
+
+The beacon's bearing source was never the problem — **S5** (`30fb16c`, 2026-08-15) already moved
+`desiredTrailCourseDeg` off the unwindowed `polyline.project()` onto the windowed match, and
+`GpsViewModel.kt:702` (`relativeDeg = if (trailActive) guidance?.relativeDeg else group.relativeDeg`)
+confirms `relativeDeg` is sourced from the windowed match during a follow, not raw track points. What
+is dumb is the **scheduling**: a fixed-interval `delay()` loop in `AudioCueScheduler.start()` that
+samples whatever `relativeDeg.value` happens to be at the tick, whether or not the match has produced
+anything new since the last one. The progress earcon inherited the identical shape — a second
+unrelated timer sampling a second unrelated value — because "periodic tone" got designed twice instead
+of once.
+
+### Decision
+
+1. **Delete the progress earcon — done, 2026-08-17.** Removed `AudioCueEvent.Progress`,
+   `AudioCueScheduler.emitProgress`, `AudioEngine.playProgress`, `AudioLogEntry.Kind.PROGRESS`, the
+   `earcon` field of `ProgressCue`/`ProgressCueProducer`, and the now-dead
+   `AudioCueConfig.progressEarconEnabled` flag and `PROGRESS_EARCON_INTERVAL_MS` constant along with
+   it — the flag exists nowhere to read once the emitter it gated is gone. Progress *speech* ("a
+   quarter mile to go") is unaffected: it already answers a question the beacon cannot (remaining
+   distance, in language), keeps its own 15 s cadence, and its `ProgressCueProducer.onFix` call site
+   is untouched beyond dropping the earcon branch. Match-transition speech
+   (`MatchLost`/`MatchReacquired` — "Lost the trail" / "Back on the trail") also stays; it is
+   speech-on-transition, not a periodic tone, and this amendment does not touch it. **Not yet done:**
+   items 2 and 3 below are still proposed only — deleting the earcon without either of them means the
+   beacon currently just goes silent on a lost match, same as it always has; nothing new carries that
+   state yet.
+2. **Proposed — match state moves onto the beacon, not onto a fourth signal.** While the match is
+   `Uncertain`/`Lost` past `MATCH_LOST_SUSTAIN`, the beacon's tone changes character (candidate: reuse
+   the earcon's existing 330 Hz×2 "lost" pair) instead of the beacon simply falling silent. This keeps
+   S6's "sound carries the continuous state, speech carries the change" rule intact, now carried by the
+   one instrument actually built to carry continuous state.
+3. **Proposed — replace the fixed-interval sampler with a reactive one.** `AudioCueScheduler` already has the
+   shape to copy in the same file — the accuracy beacon reads `accuracyM.filterNotNull().collect { ...
+   }` rather than polling a timer. Emit the directional beacon on fresh match evidence (a new fix
+   processed by the tracker), not on a wall clock. Needs a debounce/minimum-interval floor — candidate:
+   keep 5000 ms as a **minimum** spacing rather than a fixed cadence — since GPS fix arrival is not a
+   clean periodic signal and a burst of fixes must not machine-gun the beacon.
+
+### The corridor deadband — infrastructure gap, not yet built
+
+Separately, and needed by both speech and the beacon regardless of the above: a couple of metres of
+lateral wander within the trail's own corridor — cross-track noise on an otherwise straight stretch —
+should not visibly move the reported bearing or provoke "bear left" / "bear right" chatter. A deadband
+exists today only for **alignment mode** (`alignmentDeadbandDeg = 3.0`, `AudioCueConfig.kt`), applied
+to `AlignmentPing`. Ordinary follow guidance — `desiredTrailCourseDeg` / `relativeDeg`, which both the
+beacon and spoken bearing read — has no equivalent: it reports whatever the windowed match's chord
+bearing computes, fix to fix, with no hysteresis.
+
+This is suspected, not confirmed, as part of what made "test loop" unreadable on 2026-08-16 ("wandered
+down an arm, no idea which way was correct") — it needs a walk with logs before it is scoped as a fix
+rather than a guess. It is not S8's bend detection, which is about corners, not straight-segment noise;
+and not the match gate, which is about accepting or rejecting a position, not smoothing a bearing
+already accepted. No mechanism is designed yet. Flagged for the next design pass.
+
+### Consequences
+
+- One periodic audio instrument instead of two, so there is nothing left to keep in phase — done.
+- `PROGRESS_EARCON_INTERVAL_MS` (S6's starting-constants table) is retired — done.
+- **Once items 2 and 3 land:** the beacon's meaning grows (adds match-state) without adding a signal a
+  blind user has to learn to tell apart from another; `directionalBeaconIntervalMs` becomes the only
+  cadence constant for the periodic tone, and its meaning shifts from "fixed timer" to "minimum
+  spacing".
+- Until then, a lost match is audibly indistinguishable from a healthy one with no bearing to report —
+  both are silence on the beacon. That gap is what items 2 and 3 close; it is not new today, since the
+  progress earcon's lost-tone was the only thing carrying that distinction before this amendment and it
+  is now gone. Match-state *speech* (`MatchLost`/`MatchReacquired`) still fires regardless.
 
 ## Revisions since first draft
 

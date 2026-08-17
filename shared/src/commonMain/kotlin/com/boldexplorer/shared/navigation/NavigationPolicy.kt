@@ -440,9 +440,6 @@ object NavigationPolicy {
 
     // ── S6: follow cues ───────────────────────────────────────────────────────────────────────
 
-    /** Progress earcon cadence — frequent enough to read as continuous presence. */
-    const val PROGRESS_EARCON_INTERVAL_MS = 5_000L
-
     /** Progress speech cadence — one short fact, twice the rate of ordinary guidance. */
     const val PROGRESS_SPEECH_INTERVAL_MS = 15_000L
 
