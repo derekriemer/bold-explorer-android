@@ -66,6 +66,37 @@ class AnnotationCueProducer(
         return ahead in 0.0..leadM
     }
 
+    /**
+     * Marks crossed while the match was lost, inferred from the along-track jump at reacquisition.
+     *
+     * Hedged, because the app did not see the crossing — it is reading it off the jump. Gated on the
+     * rejoin being believable: [predictionErrorM] is non-null exactly when the reacquisition landed
+     * somewhere unpredicted, and a rejoin elsewhere on the trail would make these claims false rather
+     * than merely late.
+     */
+    fun onReacquired(
+        fromAlongTrackM: Double,
+        toAlongTrackM: Double,
+        predictionErrorM: Double?,
+        units: Units,
+    ): List<String> {
+        if (predictionErrorM != null && predictionErrorM > NavigationPolicy.REJOIN_TRUSTED_ERROR_M) {
+            return emptyList()
+        }
+        val lo = minOf(fromAlongTrackM, toAlongTrackM)
+        val hi = maxOf(fromAlongTrackM, toAlongTrackM)
+
+        return annotations
+            .filter { it.id !in announced && it.alongTrackM in lo..hi }
+            .sortedBy { aheadM(it, toAlongTrackM) }
+            .map { annotation ->
+                announced += annotation.id
+                val behindM = abs(toAlongTrackM - annotation.alongTrackM)
+                val side = if (annotation.signedCrossTrackM * direction.sign >= 0.0) "right" else "left"
+                "You passed ${annotation.name}, ${formatSpokenDistance(behindM, units)} back, on your $side"
+            }
+    }
+
     private fun phrase(
         annotation: RouteAnnotation,
         units: Units,

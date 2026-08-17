@@ -63,4 +63,38 @@ class AnnotationCueProducerTest {
         assertTrue(p.onFix(140.0, 1.3, Units.IMPERIAL).isEmpty(), "40 m before it, walking backwards")
         assertTrue(p.onFix(110.0, 1.3, Units.IMPERIAL).isNotEmpty())
     }
+
+    @Test
+    fun aMarkPassedDuringADropoutIsAnnouncedLateAndHedged() {
+        // The precedent is TrailComplete(hedged): say it, and say that you are unsure — rather than
+        // asserting, or saying nothing, which reads the same as "there was nothing there".
+        val p = producer(bench)
+
+        val cues = p.onReacquired(fromAlongTrackM = 40.0, toAlongTrackM = 180.0,
+            predictionErrorM = null, units = Units.IMPERIAL)
+
+        assertEquals(1, cues.size)
+        assertTrue(cues.single().startsWith("You passed Bench"), "got ${cues.single()}")
+        assertTrue(cues.single().contains("back"), "distance behind is the actionable part")
+    }
+
+    @Test
+    fun anUntrustworthyRejoinClaimsNothing() {
+        // A big prediction error means we may have rejoined somewhere else entirely, and "you
+        // passed the bench" may simply be false. A confident false statement about position is the
+        // worst thing this app can say.
+        val p = producer(bench)
+
+        val cues = p.onReacquired(40.0, 180.0, predictionErrorM = 120.0, units = Units.IMPERIAL)
+
+        assertTrue(cues.isEmpty())
+    }
+
+    @Test
+    fun aMarkAnnouncedNormallyIsNotAnnouncedAgainOnReacquisition() {
+        val p = producer(bench)
+        p.onFix(90.0, 1.3, Units.IMPERIAL)
+
+        assertTrue(p.onReacquired(40.0, 180.0, null, Units.IMPERIAL).isEmpty())
+    }
 }

@@ -469,4 +469,11 @@ object NavigationPolicy {
 
     /** Non-`Matched` fixes before a lost match is announced; stops flap chatter. */
     const val MATCH_LOST_SUSTAIN = 3
+
+    /**
+     * Prediction error above which a rejoin is not trusted to imply what was passed during the gap.
+     *
+     * A rejoin elsewhere on the trail makes "you passed the bench" false rather than late.
+     */
+    const val REJOIN_TRUSTED_ERROR_M = 30.0
 }
