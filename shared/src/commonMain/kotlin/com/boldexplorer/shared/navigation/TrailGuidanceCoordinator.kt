@@ -159,7 +159,8 @@ class TrailGuidanceCoordinator(
         points: List<LatLng>,
         direction: TravelDirection,
         tuning: MatchTuning = MatchTuning.DEFAULT,
-    ) = adopt(FollowSession(points, direction, tuning))
+        isRecorded: Boolean = true,
+    ) = adopt(FollowSession(points, direction, tuning, isRecorded))
 
     /** Adopt a prepared session. Test seam: production goes through [startFollow]. */
     internal fun adopt(followSession: FollowSession) {
@@ -345,6 +346,24 @@ class TrailGuidanceCoordinator(
         match: TrailMatch? = session?.lastMatch,
     ): OffTrailEvaluation? {
         if (followState !is TrailFollowerState.Active) return null
+
+        // A hand-built route's polyline is invented — straight lines between waypoints nobody
+        // walked — so cross-track from it is not evidence of leaving the path; it is evidence the
+        // path is not a line. This is a genuine early return, above the grace/shadow machinery, not
+        // another suppression flag: there is nothing meaningful to shadow here, so running the
+        // detectors would pollute the field logs the shadow exists to produce with dispositions
+        // about geometry no one ever walked. Backtrack is unaffected — going the wrong way along a
+        // hand-built route is still going the wrong way; only cross-track is meaningless.
+        if (session?.isRecorded == false) {
+            return OffTrailEvaluation(
+                relativeDeg = guidance?.relativeDeg,
+                consecutiveCount = 0,
+                sinceLastAlertMs = 0L,
+                disposition = "bail:hand_built_route",
+                fired = false,
+            )
+        }
+
         // Grace used to be a hard mute here: return null, and nothing below ever ran, so the
         // consecutive-fix counters could not advance during the window either. That is now a flag
         // instead of an early exit — the evaluator runs every fix and emits a disposition either

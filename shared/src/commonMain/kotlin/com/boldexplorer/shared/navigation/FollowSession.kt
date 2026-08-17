@@ -30,11 +30,18 @@ import com.boldexplorer.shared.model.LocationSample
  *   instead, so `alongTrackM` means the same thing for every walk of a trail.
  * @param tuning the matching constants; a parameter so a recorded walk can be replayed against
  *   candidate values offline. See [MatchTuning].
+ * @param isRecorded whether this trail has track points of its own — the same predicate
+ *   `WaypointRepositoryImpl.attach` uses to decide vertex-vs-annotation (ADR 0001, S5b). A recorded
+ *   trail's polyline *is* the walked path, so cross-track from it means what the off-trail detector
+ *   thinks. A hand-built route's polyline is invented — straight lines between waypoints nobody
+ *   walked — so departing from it is evidence the path is not a line, not that the walker left it.
+ *   Defaults true so every existing caller and test keeps today's behaviour.
  */
 class FollowSession(
     points: List<LatLng>,
     val direction: TravelDirection,
     tuning: MatchTuning = MatchTuning.DEFAULT,
+    val isRecorded: Boolean = true,
 ) {
     val polyline = TrailPolyline(points)
     private val tracker = ProgressTracker(polyline, direction, tuning)
