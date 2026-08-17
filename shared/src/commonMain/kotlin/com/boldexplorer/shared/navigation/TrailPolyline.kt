@@ -148,6 +148,19 @@ class TrailPolyline(
     fun offsetInSegmentM(position: TrailPosition): Double = position.alongTrackM - cumulativeM[position.segmentIndex]
 
     /**
+     * Along-track distance of a stored `(segmentIndex, offsetM)` pair — the inverse of
+     * [offsetInSegmentM].
+     *
+     * `trail_annotation` stores that pair, and every cue that asks "have I passed this yet" needs it as
+     * a single coordinate to compare against the match. Named rather than inlined because
+     * `cumulativeM[i] + offset` written at four call sites is four chances to forget the clamp.
+     */
+    fun alongTrackFor(
+        segmentIndex: Int,
+        offsetM: Double,
+    ): Double = (cumulativeM[segmentIndex.coerceIn(0, size - 1)] + offsetM).coerceIn(0.0, totalLengthM)
+
+    /**
      * Every position on this polyline that is a *local* minimum of distance to [point], ordered
      * nearest first.
      *

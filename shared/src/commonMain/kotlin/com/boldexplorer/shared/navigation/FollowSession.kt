@@ -53,6 +53,9 @@ class FollowSession(
     var lastEvidence: MatchEvidence? = null
         private set
 
+    /** Smoothed ground speed from the tracker, or null before the first fix carrying one. */
+    val speedMps: Double? get() = tracker.speedMps
+
     /** Matches [sample] against the trail. Never throws on trail geometry. */
     fun onFix(sample: LocationSample): TrailMatch {
         val match = tracker.onFix(sample)
@@ -60,6 +63,18 @@ class FollowSession(
         lastEvidence = evidence.observe(sample, match)
         return match
     }
+
+    /**
+     * Trail remaining ahead of [alongTrackM], toward the end being walked to.
+     *
+     * Direction-signed, so it counts down to the start on a reverse follow. Clamped at zero because
+     * overshooting the end is arrival, not negative progress.
+     */
+    fun remainingM(alongTrackM: Double): Double =
+        when (direction) {
+            TravelDirection.Forward -> polyline.totalLengthM - alongTrackM
+            TravelDirection.Reverse -> alongTrackM
+        }.coerceAtLeast(0.0)
 }
 
 /**
