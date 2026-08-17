@@ -17,11 +17,13 @@ class ProgressCueProducerTest {
     private fun produce(
         producer: ProgressCueProducer,
         nowMs: Long,
-        remainingM: Double = 400.0,
+        remainingM: Double? = 400.0,
         direction: TravelDirection = TravelDirection.Forward,
         lastSpokeAtMs: Long = Long.MIN_VALUE,
-    ) = producer.onFix(nowMs, straight, alongTrackM = 100.0, remainingM = remainingM,
-        direction = direction, units = Units.IMPERIAL, lastSpokeAtMs = lastSpokeAtMs)
+        alongTrackM: Double? = 100.0,
+        matchLost: Boolean = false,
+    ) = producer.onFix(nowMs, straight, alongTrackM = alongTrackM, remainingM = remainingM,
+        direction = direction, units = Units.IMPERIAL, lastSpokeAtMs = lastSpokeAtMs, matchLost = matchLost)
 
     @Test
     fun theEarconRunsFasterThanTheSpeech() {
@@ -68,7 +70,8 @@ class ProgressCueProducerTest {
         // corner, which the strict inequality then excludes, defeating the very case this test
         // means to cover. 170 m puts the corner substantially inside [170, 210).
         val cue = producer.onFix(0L, corner, alongTrackM = 170.0, remainingM = 200.0,
-            direction = TravelDirection.Forward, units = Units.IMPERIAL, lastSpokeAtMs = Long.MIN_VALUE)
+            direction = TravelDirection.Forward, units = Units.IMPERIAL, lastSpokeAtMs = Long.MIN_VALUE,
+            matchLost = false)
 
         assertNull(cue.speech, "a corner is 30 m ahead")
     }
@@ -84,8 +87,46 @@ class ProgressCueProducerTest {
         val producer = ProgressCueProducer()
 
         val cue = producer.onFix(0L, corner, alongTrackM = 170.0, remainingM = 170.0,
-            direction = TravelDirection.Reverse, units = Units.IMPERIAL, lastSpokeAtMs = Long.MIN_VALUE)
+            direction = TravelDirection.Reverse, units = Units.IMPERIAL, lastSpokeAtMs = Long.MIN_VALUE,
+            matchLost = false)
 
         assertNotNull(cue.speech, "the corner is behind a reverse follow, not ahead")
+    }
+
+    @Test
+    fun theEarconFiresBeforeTheMatchHasEverConfirmedAPosition() {
+        // A follow started 200 m from the trailhead: alongTrackM is null because nothing has been
+        // confirmed yet. Silence here reads to a blind user as the app having crashed, so the
+        // earcon — presence, not position — must still fire.
+        val cue = produce(ProgressCueProducer(), 0L, alongTrackM = null, remainingM = null)
+
+        assertTrue(cue.earcon, "presence does not require a confirmed position")
+        assertNull(cue.speech, "there is nothing to report yet")
+    }
+
+    @Test
+    fun theEarconFiresWhileTheMatchIsLost() {
+        // ADR 0001: "the progress earcon keeps its cadence but changes character" while lost —
+        // it must not go silent just because the match currently disagrees with itself.
+        val cue = produce(ProgressCueProducer(), 0L, matchLost = true)
+
+        assertTrue(cue.earcon, "the earcon must not go silent during a dropout")
+    }
+
+    @Test
+    fun speechIsSuppressedWhileTheMatchIsLostButTheEarconStillFires() {
+        // confirmedAlongM/remainingM freeze the instant the match stops being Matched, so reading
+        // them out during a dropout is reading out a stale number with full confidence.
+        val cue = produce(ProgressCueProducer(), 0L, matchLost = true)
+
+        assertNull(cue.speech, "a frozen distance must not be read out as if it were current")
+        assertTrue(cue.earcon, "the earcon is unaffected by the speech gate")
+    }
+
+    @Test
+    fun speechStillFiresInTheOrdinaryMatchedCase() {
+        val cue = produce(ProgressCueProducer(), 0L, matchLost = false, alongTrackM = 100.0, remainingM = 400.0)
+
+        assertNotNull(cue.speech, "matched, confirmed, and nothing else suppressing it")
     }
 }

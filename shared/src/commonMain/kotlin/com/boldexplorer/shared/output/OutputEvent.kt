@@ -40,6 +40,9 @@ enum class OutputKind {
     WAYPOINT_MARKED,
     TRAIL_CREATED,
     GPS_TARGET_RESULT,
+    PROGRESS,
+    ANNOTATION_PASSED,
+    MATCH_STATE,
 }
 
 /**

@@ -97,16 +97,20 @@ class AudioCueScheduler(
         }
     }
 
-    // No current caller: TrailFollower no longer emits a per-waypoint event to trigger this from
-    // (see S6, task 8 — track points stop announcing themselves). Left in place as a hook a future
-    // waypoint-approach earcon could still use; nothing wires it up today.
-    suspend fun emitWaypointApproach(
-        name: String,
-        spokenGuidanceEnabled: Boolean,
+    /**
+     * Emit the periodic progress beep; [lost] selects the "I do not know where you are" variant.
+     *
+     * Gated on [beaconCuesEnabled], the same switch every other periodic earcon in [start] reads
+     * (directional beacon, accuracy beacon, alignment ping). Without this, the only way to silence
+     * a beep that runs every ~5 s for the whole walk is absolute silence mode, which also mutes
+     * off-trail and backtrack alerts — turning off "beacon cues", the existing discoverable control
+     * for exactly this kind of tone, would otherwise do nothing to it.
+     */
+    suspend fun emitProgress(
+        lost: Boolean,
+        beaconCuesEnabled: Boolean,
     ) {
-        if (config.waypointApproachEnabled && spokenGuidanceEnabled) {
-            _events.emit(AudioCueEvent.WaypointApproach(name))
-        }
+        if (beaconCuesEnabled) _events.emit(AudioCueEvent.Progress(lost))
     }
 
     suspend fun emitTrailComplete(spokenGuidanceEnabled: Boolean) {

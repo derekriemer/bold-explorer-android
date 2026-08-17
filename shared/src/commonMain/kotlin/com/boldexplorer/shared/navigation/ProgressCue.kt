@@ -25,15 +25,38 @@ class ProgressCueProducer {
     private var lastEarconAtMs = Long.MIN_VALUE
     private var lastSpeechAtMs = Long.MIN_VALUE
 
+    /**
+     * @param alongTrackM null before the match has ever confirmed a position (e.g. a follow just
+     *   started, still walking to the trailhead). The earcon does not need this — it is presence,
+     *   not position — so it is the one thing here that still fires with it null.
+     * @param remainingM null under the same condition as [alongTrackM]; always non-null together
+     *   with it in practice, both kept nullable independently so a caller cannot pass one without
+     *   the other by construction.
+     * @param matchLost the **immediate** match state for this fix — `true` whenever the matcher's
+     *   `MatchState` is not `Matched` right now, not the sustained "Lost the trail" state
+     *   [MatchStateCueProducer] reports. This is a deliberately different threshold from the one the
+     *   earcon's *character* uses at the call site: `confirmedAlongM`/`remainingM` freeze the instant
+     *   the match stops being `Matched`, so the very first bad fix already makes the number stale —
+     *   speech has to gate on that immediately. The earcon's lost/normal *sound*, by contrast, is
+     *   decided by the caller from [MatchStateCueProducer.isLost] (sustained over
+     *   `MATCH_LOST_SUSTAIN` fixes), because flapping the tone on every marginal fix would be noise
+     *   rather than information. Two different questions; do not collapse them into one threshold.
+     */
     fun onFix(
         nowMs: Long,
         polyline: TrailPolyline,
-        alongTrackM: Double,
-        remainingM: Double,
+        alongTrackM: Double?,
+        remainingM: Double?,
         direction: TravelDirection,
         units: Units,
         lastSpokeAtMs: Long,
+        matchLost: Boolean,
     ): ProgressCue {
+        // Presence, not position: the earcon fires on its cadence for the whole active follow,
+        // whether or not the match has ever confirmed a position and whether or not it currently
+        // has one. ADR 0001 is explicit that silence and an unchanged sound are both wrong here —
+        // silence during, say, the 200 m walk to an unacquired trailhead reads to a blind user as
+        // indistinguishable from the app having crashed.
         val earcon = elapsedSinceMs(nowMs, lastEarconAtMs) >= NavigationPolicy.PROGRESS_EARCON_INTERVAL_MS
         if (earcon) lastEarconAtMs = nowMs
 
@@ -41,9 +64,9 @@ class ProgressCueProducer {
         // subject to either suppression below.
         val due = elapsedSinceMs(nowMs, lastSpeechAtMs) >= NavigationPolicy.PROGRESS_SPEECH_INTERVAL_MS
         val yielding = elapsedSinceMs(nowMs, lastSpokeAtMs) < NavigationPolicy.PROGRESS_YIELD_MS
-        val straight = FollowCuePolicy.isStraightAhead(polyline, alongTrackM, direction)
+        val straight = alongTrackM != null && FollowCuePolicy.isStraightAhead(polyline, alongTrackM, direction)
         val speech =
-            if (due && !yielding && straight) {
+            if (due && !yielding && !matchLost && alongTrackM != null && remainingM != null && straight) {
                 lastSpeechAtMs = nowMs
                 "${formatSpokenDistance(remainingM, units)} to go"
             } else {

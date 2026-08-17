@@ -36,7 +36,7 @@ import com.boldexplorer.shared.model.LocationSample
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.TrailEndRow
 import com.boldexplorer.shared.model.Waypoint
-import com.boldexplorer.shared.navigation.AdvancementReason
+import com.boldexplorer.shared.navigation.AnnotationCueProducer
 import com.boldexplorer.shared.navigation.CollectionExplorer
 import com.boldexplorer.shared.navigation.CollectionExplorerEvent
 import com.boldexplorer.shared.navigation.CollectionExplorerState
@@ -49,6 +49,11 @@ import com.boldexplorer.shared.navigation.ExternalTargetRequest
 import com.boldexplorer.shared.navigation.NearbyTrail
 import com.boldexplorer.shared.navigation.resolveIn
 import com.boldexplorer.shared.navigation.NearbyTrailResolver
+import com.boldexplorer.shared.navigation.MatchState
+import com.boldexplorer.shared.navigation.MatchStateCue
+import com.boldexplorer.shared.navigation.MatchStateCueProducer
+import com.boldexplorer.shared.navigation.ProgressCueProducer
+import com.boldexplorer.shared.navigation.RouteAnnotation
 import com.boldexplorer.shared.navigation.TrailFollower
 import com.boldexplorer.shared.navigation.FixOutcome
 import com.boldexplorer.audio.trailMatchLogEntry
@@ -60,6 +65,7 @@ import com.boldexplorer.shared.navigation.TrackPointGate
 import com.boldexplorer.shared.navigation.TrailGuidance
 import com.boldexplorer.shared.navigation.TrailGuidanceCoordinator
 import com.boldexplorer.shared.navigation.TrailGuidanceState
+import com.boldexplorer.shared.navigation.TrailMatch
 import com.boldexplorer.shared.navigation.TrailPoint
 import com.boldexplorer.shared.navigation.TrailRecordingMachine
 import com.boldexplorer.shared.navigation.TrailRecordingState
@@ -74,6 +80,7 @@ import com.boldexplorer.shared.output.OutputOrigin
 import com.boldexplorer.shared.repository.CollectionRepository
 import com.boldexplorer.shared.repository.NavPointsRepository
 import com.boldexplorer.shared.repository.SettingsRepository
+import com.boldexplorer.shared.repository.TrailAnnotationRepository
 import com.boldexplorer.shared.repository.TrailRepository
 import com.boldexplorer.shared.repository.WaypointRepository
 import com.boldexplorer.shared.settings.AppSettings
@@ -300,6 +307,30 @@ private data class InteractionGroup(
     val lastOutput: LastOutput? = null,
 )
 
+/**
+ * The S6 follow cue producers, held for the lifetime of one trail follow (ADR 0001, S6).
+ *
+ * [alongTrackMBeforeThisFix] trails the producers by one fix on purpose: `TrailMatch.confirmedAlongM`
+ * freezes for the whole Uncertain/Lost span (it only advances again on a fix that reconfirms), so
+ * "whatever it was on the previous fix" is exactly "where the dropout began" — right up to and
+ * including the fix that reacquires, which is the one moment [AnnotationCueProducer.onReacquired]
+ * needs that value for. Captured every fix regardless of match state so it is always one fix stale,
+ * never more.
+ *
+ * [previousMatch] is an identity marker, not a value to read: `TrailGuidanceCoordinator.onFix`
+ * returns the *same* `TrailMatch` instance unchanged when a fix was too stale to match, rather than
+ * null, so comparing by `===` is what lets `announceFollowCues` tell "a genuinely new fix" from "the
+ * same evidence delivered twice" and avoid double-counting the latter.
+ */
+private class FollowCueProducers(
+    val progress: ProgressCueProducer,
+    val annotation: AnnotationCueProducer,
+    val matchState: MatchStateCueProducer,
+) {
+    var alongTrackMBeforeThisFix: Double? = null
+    var previousMatch: TrailMatch? = null
+}
+
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class GpsViewModel
@@ -310,6 +341,7 @@ class GpsViewModel
         private val compassProvider: SensorCompassProvider,
         private val waypointRepo: WaypointRepository,
         private val trailRepo: TrailRepository,
+        private val annotationRepo: TrailAnnotationRepository,
         private val collectionRepo: CollectionRepository,
         private val navPointsRepo: NavPointsRepository,
         private val targetingStateHolder: TargetingStateHolder,
@@ -484,12 +516,24 @@ class GpsViewModel
 
         // ── Trail follower ────────────────────────────────────────────────────────────
 
-        private val trailFollower =
-            TrailFollower().also { follower ->
-                follower.onAdvancement = { reason -> lastAdvancementReason = reason }
-            }
+        private val trailFollower = TrailFollower()
         val trailFollowState: StateFlow<TrailFollowerState> = trailFollower.state
-        private var lastAdvancementReason: AdvancementReason? = null
+
+        // ── Follow cue producers (ADR 0001, S6) ──────────────────────────────────────
+        // Constructed in followTrailById when a follow starts, dropped in stopFollowTrail and on
+        // TrailComplete. Null exactly when no follow is active — same lifetime as the trail-follow
+        // session held inside guidanceCoordinator, but tracked separately because these are pure
+        // :shared decision objects driven from the fix handler, not part of the follower state
+        // machine itself.
+        private var followCues: FollowCueProducers? = null
+
+        // The last time *anything* was spoken via announce() — not scoped to the follow cues.
+        // ProgressCueProducer.onFix reads this to decide whether to yield, and the doc on
+        // ProgressCue is explicit that the progress beep/speech "must never talk over an alert";
+        // scoping this to only the S6 cues would still let the progress cue interrupt an off-trail
+        // or backtrack alert spoken the same fix. Long.MIN_VALUE is the same "nothing yet" sentinel
+        // ProgressCueProducer's own elapsedSinceMs already guards against overflowing.
+        private var lastSpokeAtMs: Long = Long.MIN_VALUE
 
         // Guidance state + the off-trail/backtrack/ordinary-guidance detection state machine live in a
         // dedicated coordinator (pure, JVM-tested in :shared). It decides *whether* to alert; this
@@ -776,7 +820,7 @@ class GpsViewModel
                     // comment here; it is now inside the coordinator, where it cannot be skipped.
                     val outcome = guidanceCoordinator.onFix(sample)
                     recordMatch(sample, outcome)
-                    announceTrailFollowerEvent(sample, outcome.smoothedHeading?.deg?.toFloat())
+                    announceTrailFollowerEvent(sample, outcome.smoothedHeading?.deg?.toFloat(), outcome.match)
                     // Drive CollectionExplorer on every fix; it is the primary navigator. When no
                     // collection is loaded its state is Idle and onLocationUpdate is a no-op.
                     val travelHeadingDeg = sample.heading?.takeIf { (sample.speed ?: 0.0) >= MIN_TRAVEL_HEADING_SPEED_MPS }
@@ -944,15 +988,47 @@ class GpsViewModel
                     }
                 _selectedTrailId.value = trailId
                 enterFollowing(trailId)
+                val direction = if (reversed) TravelDirection.Reverse else TravelDirection.Forward
+                // Drop the outgoing follow's cues before installing the new session, not after the
+                // (suspend) annotation query below. Nothing yields between here and the assignment
+                // today — TrailAnnotationRepositoryImpl.forTrail never actually suspends — but that
+                // is an implementation detail of one repository this call does not own, and the day
+                // it (or an iOS implementation) does suspend, a fix for a *different* trail landing
+                // mid-window must not be answered with a still-active previous trail's producers.
+                followCues = null
                 // RECORDED order, with the traversal direction carried separately — deliberately
                 // not `ordered`, which is reversed in place. Reversing the point list would make
                 // alongTrackM session-relative and stop two walks of the same trail being
                 // comparable in the field logs.
                 guidanceCoordinator.startFollow(
                     points = wps.map { LatLng(it.lat, it.lon) },
-                    direction = if (reversed) TravelDirection.Reverse else TravelDirection.Forward,
+                    direction = direction,
                     isRecorded = isRecorded,
                 )
+                // S6 follow cues (ADR 0001). Built from guidanceCoordinator's own polyline — just
+                // constructed by startFollow above from these same points — rather than a second
+                // TrailPolyline built here from `wps`, so an annotation's alongTrackM is guaranteed
+                // comparable with TrailMatch.confirmedAlongM instead of merely expected to match a
+                // separately-built geometry.
+                val polyline = guidanceCoordinator.followSession!!.polyline
+                val annotations =
+                    annotationRepo.forTrail(trailId).map { a ->
+                        RouteAnnotation(
+                            id = a.id,
+                            name = a.waypoint.name,
+                            alongTrackM = polyline.alongTrackFor(a.segmentIndex, a.offsetM),
+                            // project(point, window = null) always finds a position on a non-empty
+                            // polyline; the fallback exists only to satisfy the type system.
+                            signedCrossTrackM =
+                                polyline.project(LatLng(a.waypoint.lat, a.waypoint.lon))?.crossTrackM ?: 0.0,
+                        )
+                    }
+                followCues =
+                    FollowCueProducers(
+                        progress = ProgressCueProducer(),
+                        annotation = AnnotationCueProducer(annotations, direction),
+                        matchState = MatchStateCueProducer(),
+                    )
                 if (loc != null) trailFollower.startNearest(points, loc, bearing) else trailFollower.start(points)
                 refreshTrailGuidanceFromLatestLocation(resetOrdinaryThrottle = true)
                 backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, true)
@@ -1059,6 +1135,7 @@ class GpsViewModel
             trailFollower.stop()
             recordingMachine.stop()
             guidanceCoordinator.clear()
+            followCues = null
             backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, false)
             stopLocationServiceIfIdle()
             announce(
@@ -1261,6 +1338,7 @@ class GpsViewModel
         private fun announceTrailFollowerEvent(
             sample: LocationSample,
             smoothedBearingDeg: Float?,
+            match: TrailMatch?,
         ) {
             when (
                 val event =
@@ -1283,6 +1361,7 @@ class GpsViewModel
             ) {
                 is TrailFollowerEvent.TrailComplete -> {
                     guidanceCoordinator.clear()
+                    followCues = null
                     announce(
                         // Hedged when accuracy was too poor to assert arrival. Saying "trail
                         // complete" to someone who is not there is worse than saying nothing
@@ -1302,8 +1381,142 @@ class GpsViewModel
                     announceOrdinaryTrailGuidance(followState, sample, guidance)
                     announceOffTrail(followState, sample, guidance)
                     announceBacktrack(followState, sample, guidance)
+                    // Last: match-state, then annotations, then progress — see announceFollowCues.
+                    announceFollowCues(sample, match)
                 }
             }
+        }
+
+        /**
+         * Speak the S6 progress/annotation/match-state cues for this fix (ADR 0001, S6).
+         *
+         * Order is load-bearing, not cosmetic: match-state first, then annotations, then the
+         * progress cue last, so [ProgressCueProducer.onFix]'s `lastSpokeAtMs` check sees whatever
+         * the first two just said via [announce] (which stamps [lastSpokeAtMs] on every call). That
+         * ordering is the entire mechanism by which the progress cue yields instead of talking over
+         * an alert — call it in another order and the progress cue can win the race and speak first.
+         *
+         * A no-op when no follow is active ([followCues] null), when this fix produced no match at
+         * all (only possible before the very first matched fix of a follow), or when this fix's
+         * match is the literal same [TrailMatch] instance already processed on the previous fix.
+         * That last case is not "stale data, process anyway" — [TrailGuidanceCoordinator.onFix]
+         * skips matching a too-stale sample and returns the *previous* fix's match unchanged rather
+         * than null, so re-running the producers on the identical object would double-count evidence
+         * that is not new: [MatchStateCueProducer] would advance its sustain counter twice for one
+         * physical fix, and [ProgressCueProducer] would see the same `nowMs` twice.
+         */
+        private fun announceFollowCues(
+            sample: LocationSample,
+            match: TrailMatch?,
+        ) {
+            val cues = followCues ?: return
+            if (match == null || match === cues.previousMatch) return
+            val units = settings.value.units
+            val session = guidanceCoordinator.followSession
+            // A hand-built route's polyline is invented (ADR 0001, S6/Task 10), and the matcher's
+            // accept test measures cross-track against that same invented geometry — so a walker
+            // legitimately on the path can still drive MatchStateCueProducer to Lost on a wide bend.
+            // isRecorded defaults true, so a null session (should not happen while followCues is
+            // non-null) speaks as before.
+            val recorded = session?.isRecorded != false
+
+            cues.matchState.onFix(match.state)?.let { transition ->
+                // Gate only the words, not the producer: MatchStateCueProducer keeps running either
+                // way, so `isLost` (below, and read at the progress-earcon call site) stays accurate
+                // for the *sound*. The earcon's "I do not know where you are" character asserts only
+                // that the app cannot place the walker along this route, which is true even here.
+                // "Lost the trail" / "Back on the trail" assert something about the walker's actual
+                // position that invented geometry cannot support — that is Task 10's whole point,
+                // restated at a different microphone, so only the spoken half is suppressed.
+                if (recorded) {
+                    announce(
+                        when (transition) {
+                            MatchStateCue.Lost -> "Lost the trail"
+                            MatchStateCue.Reacquired -> "Back on the trail"
+                        },
+                        kind = OutputKind.MATCH_STATE,
+                        category = OutputCategory.NAVIGATION,
+                        origin = OutputOrigin.AUTOMATIC,
+                        sample = sample,
+                    )
+                }
+
+                // The gap just closed: announce, late and hedged, any marks the along-track jump
+                // shows were crossed while lost. alongTrackMBeforeThisFix is last fix's
+                // confirmedAlongM, captured below before this fix could move it — and confirmedAlongM
+                // is frozen for the whole Uncertain/Lost span, so that value is exactly where the gap
+                // began, not merely "one fix ago". (Not separately gated on `recorded`: a hand-built
+                // route's annotations are always vertices, never attached via annotationRepo, so
+                // `cues.annotation`'s list is empty there and this is a no-op by construction.)
+                val fromAlongTrackM = cues.alongTrackMBeforeThisFix
+                val toAlongTrackM = match.confirmedAlongM
+                if (transition == MatchStateCue.Reacquired && fromAlongTrackM != null && toAlongTrackM != null) {
+                    cues.annotation
+                        .onReacquired(fromAlongTrackM, toAlongTrackM, match.predictionErrorM, units)
+                        .forEach { text ->
+                            announce(
+                                text,
+                                kind = OutputKind.ANNOTATION_PASSED,
+                                category = OutputCategory.NAVIGATION,
+                                origin = OutputOrigin.AUTOMATIC,
+                                sample = sample,
+                            )
+                        }
+                }
+            }
+
+            val alongTrackM = match.confirmedAlongM
+            if (alongTrackM != null && session != null) {
+                cues.annotation.onFix(alongTrackM, session.speedMps, units).forEach { text ->
+                    announce(
+                        text,
+                        kind = OutputKind.ANNOTATION_PASSED,
+                        category = OutputCategory.NAVIGATION,
+                        origin = OutputOrigin.AUTOMATIC,
+                        sample = sample,
+                    )
+                }
+            }
+
+            // Presence, not position: the earcon has to run for the whole active follow — including
+            // before the match has ever confirmed a position, and while it is lost — so this is
+            // deliberately outside the `alongTrackM != null` check above. Only the speech half needs
+            // a confirmed position; ProgressCueProducer enforces that itself given nulls.
+            if (session != null) {
+                val cue =
+                    cues.progress.onFix(
+                        nowMs = sample.timestamp,
+                        polyline = session.polyline,
+                        alongTrackM = alongTrackM,
+                        remainingM = alongTrackM?.let { session.remainingM(it) },
+                        direction = session.direction,
+                        units = units,
+                        lastSpokeAtMs = lastSpokeAtMs,
+                        // The IMMEDIATE state, not the sustained `isLost` below — confirmedAlongM
+                        // freezes the instant the match stops being Matched, so the number is stale
+                        // from the very first bad fix, not only once a loss is confirmed. See the
+                        // param doc on ProgressCueProducer.onFix for why these are two thresholds.
+                        matchLost = match.state != MatchState.Matched,
+                    )
+                cue.speech?.let { text ->
+                    announce(
+                        text,
+                        kind = OutputKind.PROGRESS,
+                        category = OutputCategory.NAVIGATION,
+                        origin = OutputOrigin.AUTOMATIC,
+                        sample = sample,
+                    )
+                }
+                if (cue.earcon) {
+                    // Sustained state: flapping the earcon's character on every marginal fix would be
+                    // noise, not information — see the matching comment on ProgressCueProducer.
+                    val lost = cues.matchState.isLost
+                    viewModelScope.launch { scheduler.emitProgress(lost, beaconCuesEnabled.value) }
+                }
+            }
+
+            cues.alongTrackMBeforeThisFix = alongTrackM
+            cues.previousMatch = match
         }
 
         // The detection logic (counts, grace/cooldown windows, noise floor) lives in
@@ -1573,6 +1786,13 @@ class GpsViewModel
             guidance: TrailGuidanceState? = null,
             extraOverride: Map<String, Any?> = emptyMap(),
         ) {
+            // Every announce() call counts as "something just spoke" for ProgressCueProducer's
+            // yield check (ADR 0001, S6) — not only the S6 cues, so the progress beep/speech also
+            // yields to an off-trail or backtrack alert spoken the same fix. Falls back to wall
+            // clock for the many call sites with no `sample` (e.g. user-driven confirmations); the
+            // progress cue only ever compares this against a GPS fix timestamp, and the two clocks
+            // are the same domain (epoch millis).
+            lastSpokeAtMs = sample?.timestamp ?: System.currentTimeMillis()
             val context =
                 buildMap<String, Any?> {
                     putAll(extraOverride)
