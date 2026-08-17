@@ -79,8 +79,10 @@ class TrailGuidanceTest {
         follower.start(listOf(northA, northB, east), thresholdM = 15.0)
         follower.onLocationUpdate(LatLng(northA.lat, northA.lon))
 
+        // Advancing off northB is silent now (S6) — the proof it happened is the guidance below
+        // reading the new target (index 2) straight from follower.state.value, not from an event.
         val advance = follower.onLocationUpdate(LatLng(northB.lat, northB.lon))
-        assertNotNull(advance)
+        assertNull(advance, "advancing must not speak")
 
         val sample = sample(lat = northB.lat, lon = northB.lon, heading = 90.0, speed = 1.5, timestamp = 2_000)
         val course = TrailGuidance.updateTrustedCourse(null, sample)

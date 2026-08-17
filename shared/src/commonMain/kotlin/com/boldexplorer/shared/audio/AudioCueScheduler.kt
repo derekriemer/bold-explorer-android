@@ -97,7 +97,9 @@ class AudioCueScheduler(
         }
     }
 
-    // Called by GpsViewModel when TrailFollower emits a WaypointReached event.
+    // No current caller: TrailFollower no longer emits a per-waypoint event to trigger this from
+    // (see S6, task 8 — track points stop announcing themselves). Left in place as a hook a future
+    // waypoint-approach earcon could still use; nothing wires it up today.
     suspend fun emitWaypointApproach(
         name: String,
         spokenGuidanceEnabled: Boolean,
