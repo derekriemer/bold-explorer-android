@@ -14,7 +14,6 @@ data class AudioLogEntry(
         DIRECTIONAL_BEACON,
         ACCURACY_BEACON,
         ALIGNMENT_PING,
-        PROGRESS,
         TRAIL_COMPLETE,
         TTS_ANNOUNCEMENT,
         USER_MARKER,

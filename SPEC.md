@@ -66,8 +66,7 @@ GPS / Compass hardware
               │           └── AudioCueScheduler.emitTrailComplete
               ├── ProgressCueProducer / AnnotationCueProducer /  (shared)
               │   MatchStateCueProducer
-              │     └── return cues; GpsViewModel speaks them and
-              │         calls AudioCueScheduler.emitProgress
+              │     └── return cues; GpsViewModel speaks them
               ├── CollectionExplorer.onLocationUpdate() (shared)
               │     └── PointReached / NearTrailEnd
               └── BearingComputer  (shared)
@@ -75,7 +74,7 @@ GPS / Compass hardware
 
 AudioCueScheduler.events: SharedFlow<AudioCueEvent>   (shared)
   └── AudioCuePlayer  (platform)
-        ├── AudioEngine  ← DirectionalBeacon, AccuracyBeacon, AlignmentPing, Progress
+        ├── AudioEngine  ← DirectionalBeacon, AccuracyBeacon, AlignmentPing
         └── TtsEngine    ← TrailComplete
 ```
 
