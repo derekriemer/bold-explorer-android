@@ -437,4 +437,36 @@ object NavigationPolicy {
 
     /** Multiplier on reported GPS accuracy when it exceeds [EXTEND_FLOOR_M], to scale the extend threshold. */
     const val EXTEND_ACCURACY_FACTOR = 2.0
+
+    // ── S6: follow cues ───────────────────────────────────────────────────────────────────────
+
+    /** Progress earcon cadence — frequent enough to read as continuous presence. */
+    const val PROGRESS_EARCON_INTERVAL_MS = 5_000L
+
+    /** Progress speech cadence — one short fact, twice the rate of ordinary guidance. */
+    const val PROGRESS_SPEECH_INTERVAL_MS = 15_000L
+
+    /** Skip the progress cue when anything else spoke this recently. */
+    const val PROGRESS_YIELD_MS = 5_000L
+
+    /** Reaction budget for an annotation approach: hear it, decide, and stop. */
+    const val ANNOTATION_LEAD_SECONDS = 8.0
+
+    /** Floors the lead when stationary. */
+    const val ANNOTATION_LEAD_MIN_M = 10.0
+
+    /** Caps the lead when moving fast. */
+    const val ANNOTATION_LEAD_MAX_M = 40.0
+
+    /** Beyond this from the trail, an annotation is phrased as an aside rather than plainly. */
+    const val ANNOTATION_ASIDE_M = 25.0
+
+    /** Window `sagittaOver` is asked about when deciding whether the trail ahead is straight. */
+    const val STRAIGHT_LOOKAHEAD_M = 40.0
+
+    /** Bulge over that window above which the trail ahead is not called straight. */
+    const val STRAIGHT_SAGITTA_M = 4.0
+
+    /** Non-`Matched` fixes before a lost match is announced; stops flap chatter. */
+    const val MATCH_LOST_SUSTAIN = 3
 }
