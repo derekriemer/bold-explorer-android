@@ -68,6 +68,7 @@ fun DebugScreen(
     val accuracyHapticsEnabled by viewModel.accuracyHapticsEnabled.collectAsStateWithLifecycle()
     val shadowMatchEnabled by viewModel.shadowMatchEnabled.collectAsStateWithLifecycle()
     val shadowMatch by viewModel.shadowMatch.collectAsStateWithLifecycle()
+    val shadowAlertsAudible by viewModel.shadowAlertsAudible.collectAsStateWithLifecycle()
 
     // Ticks so the "Ns ago" fix-age text (below) keeps advancing even when no new fix arrives —
     // that stalling *is* the signal for issue #23, so it must be visible live, not just on the
@@ -319,6 +320,39 @@ fun DebugScreen(
                     Text("Travelled: ${"%.0f m".format(match.travelledM)}", style = MaterialTheme.typography.bodyMedium)
                     Text("Reason: ${match.disposition}", style = MaterialTheme.typography.bodySmall)
                 }
+
+                // Speak shadowed alerts (ADR 0001, S6). Off-trail and wrong-way detection now run on
+                // every fix, including inside the grace window that used to mute them outright — this
+                // switch is the only thing standing between that shadow evaluation and a spoken
+                // alert. Placed at the *end* of this card's column, after the trail-match readout
+                // above, rather than between the trail-match switch and its own readout: read
+                // linearly, a screen reader landing on "State: … / Off trail: 5.2 m / Reason: …"
+                // right after "Speak shadowed alerts" would sound like that readout belonged to this
+                // switch, and this app's user reads the screen linearly — adjacency is the only
+                // grouping cue available. Found in review, 2026-08-17.
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(12.dp))
+
+                // Same deliberate choice as the trail-match switch above: the reason is visible text,
+                // not a contentDescription, so it reaches everyone, and the switch's own state is
+                // left to be announced natively.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("Speak shadowed alerts", style = MaterialTheme.typography.titleSmall)
+                    Switch(
+                        checked = shadowAlertsAudible,
+                        onCheckedChange = { viewModel.setShadowAlertsAudible(it) },
+                    )
+                }
+                Text(
+                    "Off-trail and wrong-way alerts are currently held back by a grace window that " +
+                        "the old per-checkpoint cue kept re-arming. With this on, they are spoken " +
+                        "as they will be once that window is removed. Expect more of them.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
 

@@ -70,6 +70,11 @@ class ProgressCueProducer {
  * flips every "nothing has happened yet" case into "this just happened", which is backwards for both
  * callers here — it would suppress the very first earcon/speech and simultaneously force `yielding`
  * true forever.
+ *
+ * See also `TrailGuidanceCoordinator.lastOrdinaryGuidanceAtMs`, which hit the identical hazard from a
+ * `Long.MIN_VALUE` sentinel and was fixed with a nullable `Long?` instead of this guard — a different
+ * idiom for the same overflow, found independently. Cross-referenced so the next person who finds one
+ * of these two finds the other rather than re-deriving a third way.
  */
 private fun elapsedSinceMs(
     nowMs: Long,

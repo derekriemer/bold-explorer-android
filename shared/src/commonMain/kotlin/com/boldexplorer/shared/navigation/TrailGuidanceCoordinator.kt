@@ -49,18 +49,42 @@ class TrailGuidanceCoordinator(
 
     private var lastTrustedCourse: TrustedCourse? = null
 
+    /**
+     * Whether alerts grace would have muted are spoken anyway (debug; ADR 0001, S6).
+     *
+     * Default false, which is the strict shadow: the evaluation and its disposition are recorded, and
+     * nothing new is said. Turning it on is how the owner hears what dropping grace would sound like
+     * before the change is made for real — a count in a log does not convey whether a walk is livable.
+     * `suppressedByGrace` still reports what grace *would* have done, so the log stays readable either
+     * way.
+     */
+    var shadowAlertsAudible: Boolean = false
+
     // Ordinary-guidance throttle.
-    private var lastOrdinaryGuidanceAtMs = Long.MIN_VALUE
+    //
+    // Null means "nothing spoken yet this session" — not a sentinel timestamp. A `Long.MIN_VALUE`
+    // sentinel here overflowed: `sample.timestamp - Long.MIN_VALUE` wraps a realistic epoch-millis
+    // timestamp around to a large *negative* number, which is always less than the 30 s interval, so
+    // the throttle check always short-circuited and ordinary guidance could never fire from a cold
+    // start. This used to be masked because `resetThrottle` ran on every track-point advance, seconds
+    // into any walk — with that call gone (S6), a follow with no cached fix would keep the sentinel,
+    // and the wrapped comparison, for the entire walk. Found in review, 2026-08-17.
+    //
+    // See also `ProgressCue.elapsedSinceMs`, which hits the same `Long.MIN_VALUE` subtraction-overflow
+    // hazard and handles it with a sentinel guard instead of a nullable — a reasonable alternative,
+    // kept there rather than adopted here because it would have meant re-deriving the null-vs-sentinel
+    // choice a second way in the same codebase.
+    private var lastOrdinaryGuidanceAtMs: Long? = null
     private var lastOrdinaryGuidanceLocation: LatLng? = null
 
     // Off-trail detection.
-    private var consecutiveOffTrailCount = 0
-    private var offTrailAlertFiredAt = 0L
     private var offTrailGraceUntilMs = 0L
 
-    /** |cross-track| at the previous fix, for the divergence rate. */
-    private var prevAbsCrossTrackM: Double? = null
-    private var prevCrossTrackAtMs = 0L
+    // Two parallel copies of the same bookkeeping (count, cooldown, cross-track baseline) — see
+    // [OffTrailDetectorState]'s doc for why there are two and not one. `live` drives what the app
+    // actually says; `shadow` drives only the `shadow:` disposition and never freezes.
+    private val offTrailLive = OffTrailDetectorState()
+    private val offTrailShadow = OffTrailDetectorState()
 
     /**
      * The trail being followed and its matcher, or null when no follow is active.
@@ -75,13 +99,12 @@ class TrailGuidanceCoordinator(
         get() = session?.direction ?: TravelDirection.Forward
 
     // Backtrack detection.
-    private var consecutiveBacktrackCount = 0
     private var prevDistToTargetM: Double? = null
-
-    /** Projected along-track position at the previous fix — what wrong-way is decided on. */
-    private var prevAlongTrackM: Double? = null
-    private var backtrackAlertFiredAt = 0L
     private var backtrackGraceUntilMs = 0L
+
+    // Same live/shadow split as off-trail, same reason — see [BacktrackDetectorState].
+    private val backtrackLive = BacktrackDetectorState()
+    private val backtrackShadow = BacktrackDetectorState()
 
     /**
      * Fold a fresh sample into the trusted-course filter. Returns the confidence-gated smoothed
@@ -157,14 +180,11 @@ class TrailGuidanceCoordinator(
      * that has to refer to one trail to mean anything.
      */
     private fun resetDetectors() {
-        consecutiveOffTrailCount = 0
-        offTrailAlertFiredAt = 0L
-        prevAbsCrossTrackM = null
-        prevCrossTrackAtMs = 0L
-        consecutiveBacktrackCount = 0
+        offTrailLive.reset()
+        offTrailShadow.reset()
         prevDistToTargetM = null
-        prevAlongTrackM = null
-        backtrackAlertFiredAt = 0L
+        backtrackLive.reset()
+        backtrackShadow.reset()
     }
 
     /**
@@ -255,7 +275,7 @@ class TrailGuidanceCoordinator(
     fun clear() {
         _guidance.value = null
         session = null
-        lastOrdinaryGuidanceAtMs = Long.MIN_VALUE
+        lastOrdinaryGuidanceAtMs = null
         lastOrdinaryGuidanceLocation = null
         offTrailGraceUntilMs = 0L
         backtrackGraceUntilMs = 0L
@@ -284,7 +304,11 @@ class TrailGuidanceCoordinator(
         if (followState !is TrailFollowerState.Active) return null
         val relative = guidance?.relativeDeg ?: return null
         if (!TrailGuidance.isMajorCorrection(relative)) return null
-        if (sample.timestamp - lastOrdinaryGuidanceAtMs < NavigationPolicy.ORDINARY_GUIDANCE_INTERVAL_MS) return null
+        // Null means nothing has been spoken this session, so no throttle applies — the first
+        // qualifying fix may always speak. See the field comment on the property for why this is a
+        // nullable "unset" rather than a sentinel timestamp.
+        val lastAt = lastOrdinaryGuidanceAtMs
+        if (lastAt != null && sample.timestamp - lastAt < NavigationPolicy.ORDINARY_GUIDANCE_INTERVAL_MS) return null
 
         val current = LatLng(sample.lat, sample.lon)
         val lastLocation = lastOrdinaryGuidanceLocation
@@ -305,10 +329,14 @@ class TrailGuidanceCoordinator(
     }
 
     /**
-     * Update off-trail detection state and decide whether to alert. Returns null while inactive or
-     * inside the grace window (no diagnostic worth logging); otherwise an [OffTrailEvaluation] whose
-     * [OffTrailEvaluation.fired] tells the caller to speak "You may be off trail" + beep, and whose
-     * other fields are ready to write to the audio event log.
+     * Update off-trail detection state and decide whether to alert. Returns null only while
+     * inactive; otherwise an [OffTrailEvaluation] whose [OffTrailEvaluation.fired] tells the caller
+     * to speak "You may be off trail" + beep, and whose other fields are ready to write to the audio
+     * event log.
+     *
+     * Inside the grace window the evaluation still runs and [OffTrailEvaluation.suppressedByGrace]
+     * is set, but `fired` stays false unless [shadowAlertsAudible] overrides it (ADR 0001, S6) — see
+     * the field comment on `shadowAlertsAudible`.
      */
     fun evaluateOffTrail(
         followState: TrailFollowerState,
@@ -317,7 +345,12 @@ class TrailGuidanceCoordinator(
         match: TrailMatch? = session?.lastMatch,
     ): OffTrailEvaluation? {
         if (followState !is TrailFollowerState.Active) return null
-        if (sample.timestamp < offTrailGraceUntilMs) return null
+        // Grace used to be a hard mute here: return null, and nothing below ever ran, so the
+        // consecutive-fix counters could not advance during the window either. That is now a flag
+        // instead of an early exit — the evaluator runs every fix and emits a disposition either
+        // way, so a walk's log says what dropping grace would have done. Only the *firing* stays
+        // gated, at the very end of this function. ADR 0001, S6.
+        val suppressedByGrace = sample.timestamp < offTrailGraceUntilMs
 
         val relative = guidance?.relativeDeg
         // The candidate the matcher chose, whatever state it is in. What that candidate *means*
@@ -335,27 +368,146 @@ class TrailGuidanceCoordinator(
         // `Lost` within 90 s, where it stays. Found in review, 2026-08-15.
         val signedCrossTrackM = match?.chosen?.crossTrackM?.times(followDirection.sign)
         val absCrossTrackM = signedCrossTrackM?.let { abs(it) }
-        val rateMps = updateCrossTrackRate(absCrossTrackM, sample.timestamp)
 
         // The gate *widens* as accuracy degrades, so poor GPS yields fewer confident alerts — the
         // opposite direction from completion, where good GPS tightens the radius. Both are bounded:
         // an implausible accuracy report must not be able to switch off-trail detection off.
         val gateM = offTrailGateM(sample.accuracy)
         val overGate = absCrossTrackM != null && absCrossTrackM > gateM
+        val far = absCrossTrackM != null && absCrossTrackM > NavigationPolicy.OFF_TRAIL_FAR_M
+        val angleAgrees = relative != null && TrailGuidance.isMajorCorrection(relative)
+
+        // `shadow` always advances: it answers "what would this fix do if grace did not exist at
+        // all", so it has to see every fix, in-grace or not, to mean anything. This is the fix for
+        // the Critical the 2026-08-17 review found: a single counter set that ran unconditionally
+        // once grace stopped being an early return let evidence gathered *during* grace decide
+        // whether the *first post-grace* fix fired — a real alert, switch off, that the pre-S6 code
+        // would not have spoken. `live` below is what stops that from happening again.
+        val shadow = advanceOffTrail(offTrailShadow, absCrossTrackM, overGate, far, angleAgrees, sample.timestamp)
+
+        // `live` only *persists* what it learns outside grace — `mutate = false` during grace makes
+        // this call a read-only peek, so `offTrailLive` itself is frozen exactly as the pre-S6 early
+        // return froze it (it sat before every mutation). The peek still returns a same-shaped
+        // result — "if this one fix were folded onto whatever live had already accumulated, without
+        // saving it" — which is what lets `disposition` (below) describe something coherent even
+        // during grace, without ever letting that peek reach the two-fix-minimum required to fire:
+        // every grace window starts both tracks at 0 (`resetThrottle` always resets both), so a
+        // single un-persisted fix can only ever reach a peeked count of 1. The switch deliberately
+        // does not change this — see `fired` below for why unfreezing `live` on the switch would be
+        // wrong.
+        val live =
+            advanceOffTrail(offTrailLive, absCrossTrackM, overGate, far, angleAgrees, sample.timestamp, mutate = !suppressedByGrace)
+
+        // With the switch off, `fired` is `live`'s answer — bit-for-bit the pre-S6 behaviour, since a
+        // peeked `live` can never reach `required` on its own (see above), so `!suppressedByGrace &&`
+        // is belt-and-suspenders rather than load-bearing. With the switch on, `fired` is `shadow`'s
+        // answer instead: the switch exists so the owner can hear what removing grace would sound
+        // like, and `shadow` — which never freezes — is the only track that actually knows that.
+        val fired = if (shadowAlertsAudible) shadow.wouldFire else (!suppressedByGrace && live.wouldFire)
+
+        val xt = absCrossTrackM?.roundToInt()
+        // Two questions, two fields — deliberately not one string trying to answer both (ADR 0001,
+        // S6, spec correction found in re-review, 2026-08-17).
+        //
+        // `disposition` answers "what actually happened, and why" — built from whichever track
+        // decided `fired` (`live` with the switch off, `shadow` with it on), so it can never
+        // contradict `fired`: a spoken alert can never be logged as a cooldown bail, and a held fix
+        // can never be logged as fired. This is what "the decision, then its description" requires:
+        // the first version of this split had `disposition` always read `shadow`, which could log
+        // `bail:cooldown_30000ms` on the exact fix that spoke "You may be off trail." — a spoken
+        // alert with the *dying* shadow's cooldown attached to it, because the shadow can fire (and
+        // start cooling down) tens of seconds before `live` catches up past grace. Found in
+        // re-review.
+        //
+        // `shadowDisposition` answers the counterfactual, always from `shadow`, regardless of the
+        // switch — this is the field a walk's log is actually for: counting `fire:` + `shadow:` in
+        // `disposition` conflated "what was said" with "what removing grace would produce"; counting
+        // `shadow:would_fire` in `shadowDisposition` instead keeps the two questions apart.
+        val activeTrack = if (shadowAlertsAudible) shadow else live
+        val disposition = offTrailDisposition(activeTrack, absCrossTrackM, overGate, gateM, xt) { "fire:xt_${xt}m_${activeTrack.trend}" }
+        val shadowDisposition =
+            offTrailDisposition(shadow, absCrossTrackM, overGate, gateM, xt) { "shadow:would_fire_xt_${xt}m_${shadow.trend}" }
+
+        return OffTrailEvaluation(
+            relativeDeg = relative,
+            consecutiveCount = shadow.consecutiveCount,
+            sinceLastAlertMs = shadow.sinceLastAlertMs,
+            disposition = disposition,
+            shadowDisposition = shadowDisposition,
+            fired = fired,
+            crossTrackM = signedCrossTrackM,
+            crossTrackRateMps = shadow.rateMps,
+            gateM = gateM,
+            requiredCount = shadow.required,
+            suppressedByGrace = suppressedByGrace,
+        )
+    }
+
+    /**
+     * The shared ladder shape for both [OffTrailEvaluation.disposition] (called on whichever track
+     * decided `fired`) and [OffTrailEvaluation.shadowDisposition] (called on `shadow` always) — same
+     * bail/hold logic, only the terminal "this track would fire" spelling differs, via [onFire].
+     */
+    private fun offTrailDisposition(
+        track: OffTrailTrackResult,
+        absCrossTrackM: Double?,
+        overGate: Boolean,
+        gateM: Double,
+        xt: Int?,
+        onFire: () -> String,
+    ): String =
+        when {
+            absCrossTrackM == null -> "bail:no_window"
+            !overGate -> "bail:on_line_xt_${xt}m_gate_${gateM.roundToInt()}m"
+            track.consecutiveCount < track.required ->
+                "hold:xt_${xt}m_${track.trend}_${track.consecutiveCount}of${track.required}"
+            !track.wouldFire -> "bail:cooldown_${track.sinceLastAlertMs}ms"
+            // The decision, then its description — not the description parsed back into a decision.
+            // `fired` used to be `disposition.startsWith("fire:")`, which made a user-facing alert
+            // depend on the spelling of a log string: renaming one would have silently disabled or
+            // enabled it, with nothing failing at the edit site.
+            else -> onFire()
+        }
+
+    /**
+     * Folds one fix into [state] and decides whether *that track* would fire. Mutates [state] only
+     * when [mutate] is true; called once for `shadow` (always, `mutate = true`) and once for `live`
+     * (`mutate = true` outside grace, `mutate = false` — a read-only peek — during it). See
+     * [OffTrailDetectorState] for why there are two states.
+     */
+    private fun advanceOffTrail(
+        state: OffTrailDetectorState,
+        absCrossTrackM: Double?,
+        overGate: Boolean,
+        far: Boolean,
+        angleAgrees: Boolean,
+        nowMs: Long,
+        mutate: Boolean = true,
+    ): OffTrailTrackResult {
+        // Signed rate of change of |cross-track|, m/s. Positive means moving away from the trail.
+        // Density-independent and target-free, unlike a bearing against a possibly-stale waypoint —
+        // which is why this, not the angle, is the primary divergence signal.
+        val prevAbs = state.prevAbsCrossTrackM
+        val elapsedS = (nowMs - state.prevCrossTrackAtMs) / 1000.0
+        val rateMps =
+            if (prevAbs != null && absCrossTrackM != null && elapsedS > 0.0) {
+                (absCrossTrackM - prevAbs) / elapsedS
+            } else {
+                null
+            }
 
         // The count resets, the cooldown does not. They answer different questions: the count asks
         // "is this sustained", the cooldown asks "did we just say this". Clearing the cooldown here
         // let a single interrupting fix re-arm the alert — and this branch is taken not only when
         // the user is back on the line but whenever cross-track is unavailable at all, which under
         // degraded GPS is often. Found in review, 2026-08-15.
-        if (overGate) consecutiveOffTrailCount++ else consecutiveOffTrailCount = 0
+        val consecutiveCount = if (overGate) state.consecutiveCount + 1 else 0
 
         // Corroboration shortens the sustain window; it never gates whether a fix counts. Angle is
         // evidence here, not a veto — demoting it is the whole point, since a stale target is what
         // produced the original defect.
         val diverging = rateMps != null && rateMps > NavigationPolicy.DIVERGENCE_FLOOR_MPS
-        val far = absCrossTrackM != null && absCrossTrackM > NavigationPolicy.OFF_TRAIL_FAR_M
-        val angleAgrees = relative != null && TrailGuidance.isMajorCorrection(relative)
+        val trend = if (diverging) "diverging" else "converging"
         val required =
             if (diverging || far || angleAgrees) {
                 NavigationPolicy.OFF_TRAIL_CONSECUTIVE_FAST
@@ -363,66 +515,23 @@ class TrailGuidanceCoordinator(
                 NavigationPolicy.OFF_TRAIL_CONSECUTIVE_SLOW
             }
 
-        val sinceLastAlertMs = sample.timestamp - offTrailAlertFiredAt
-        val xt = absCrossTrackM?.roundToInt()
-        val trend = if (diverging) "diverging" else "converging"
-        // The decision, then its description — not the description parsed back into a decision.
-        // `fired` used to be `disposition.startsWith("fire:")`, which made a user-facing alert
-        // depend on the spelling of a log string: renaming one would have silently disabled or
-        // enabled it, with nothing failing at the edit site. Given how much of this file's log
-        // vocabulary has changed recently, that was a live hazard rather than a theoretical one.
-        val fired =
+        val sinceLastAlertMs = nowMs - state.alertFiredAt
+        val wouldFire =
             absCrossTrackM != null &&
                 overGate &&
-                consecutiveOffTrailCount >= required &&
+                consecutiveCount >= required &&
                 sinceLastAlertMs >= NavigationPolicy.OFF_TRAIL_ALERT_INTERVAL_MS
-        val disposition =
-            when {
-                absCrossTrackM == null -> "bail:no_window"
-                !overGate -> "bail:on_line_xt_${xt}m_gate_${gateM.roundToInt()}m"
-                consecutiveOffTrailCount < required ->
-                    "hold:xt_${xt}m_${trend}_${consecutiveOffTrailCount}of$required"
-                !fired -> "bail:cooldown_${sinceLastAlertMs}ms"
-                else -> "fire:xt_${xt}m_$trend"
-            }
-        if (fired) offTrailAlertFiredAt = sample.timestamp
 
-        return OffTrailEvaluation(
-            relativeDeg = relative,
-            consecutiveCount = consecutiveOffTrailCount,
-            sinceLastAlertMs = sinceLastAlertMs,
-            disposition = disposition,
-            fired = fired,
-            crossTrackM = signedCrossTrackM,
-            crossTrackRateMps = rateMps,
-            gateM = gateM,
-            requiredCount = required,
-        )
-    }
-
-    /**
-     * Signed rate of change of |cross-track|, in m/s. Positive means moving away from the trail.
-     *
-     * Density-independent and target-free, unlike a bearing against a possibly-stale waypoint —
-     * which is why this, not the angle, is the primary divergence signal.
-     */
-    private fun updateCrossTrackRate(
-        absCrossTrackM: Double?,
-        nowMs: Long,
-    ): Double? {
-        val prev = prevAbsCrossTrackM
-        val elapsedS = (nowMs - prevCrossTrackAtMs) / 1000.0
-        val rate =
-            if (prev != null && absCrossTrackM != null && elapsedS > 0.0) {
-                (absCrossTrackM - prev) / elapsedS
-            } else {
-                null
+        if (mutate) {
+            if (absCrossTrackM != null) {
+                state.prevAbsCrossTrackM = absCrossTrackM
+                state.prevCrossTrackAtMs = nowMs
             }
-        if (absCrossTrackM != null) {
-            prevAbsCrossTrackM = absCrossTrackM
-            prevCrossTrackAtMs = nowMs
+            state.consecutiveCount = consecutiveCount
+            if (wouldFire) state.alertFiredAt = nowMs
         }
-        return rate
+
+        return OffTrailTrackResult(consecutiveCount, required, rateMps, trend, sinceLastAlertMs, wouldFire)
     }
 
     /** Accuracy-aware off-trail gate, widening with uncertainty but hard-capped. */
@@ -435,9 +544,12 @@ class TrailGuidanceCoordinator(
         )
 
     /**
-     * Update backtrack detection state and decide whether to alert. Returns null while inactive or
-     * inside the grace window; otherwise a [BacktrackEvaluation] whose [BacktrackEvaluation.fired]
-     * tells the caller to speak "You may be going the wrong way", with diagnostics for the log.
+     * Update backtrack detection state and decide whether to alert. Returns null only while
+     * inactive; otherwise a [BacktrackEvaluation] whose [BacktrackEvaluation.fired] tells the caller
+     * to speak "You may be going the wrong way", with diagnostics for the log.
+     *
+     * Inside the grace window the evaluation still runs and [BacktrackEvaluation.suppressedByGrace]
+     * is set, but `fired` stays false unless [shadowAlertsAudible] overrides it (ADR 0001, S6).
      *
      * ## Why this reads [match] instead of projecting (ADR 0001, S5a)
      *
@@ -466,84 +578,140 @@ class TrailGuidanceCoordinator(
         match: TrailMatch? = session?.lastMatch,
     ): BacktrackEvaluation? {
         if (followState !is TrailFollowerState.Active) return null
-        if (sample.timestamp < backtrackGraceUntilMs) return null
+        // See the matching comment in evaluateOffTrail: grace is a flag now, not an early exit, so
+        // the sustain count still advances during the window and the log shows what dropping grace
+        // would have done. ADR 0001, S6.
+        val suppressedByGrace = sample.timestamp < backtrackGraceUntilMs
 
         val distM = guidance?.distanceToTargetM
         val prevDistM = prevDistToTargetM
         val alongM = match?.confirmedAlongM
-        val prev = prevAlongTrackM
-        val sinceLastAlertMs = sample.timestamp - backtrackAlertFiredAt
-
         prevDistToTargetM = distM
+
+        val contiguous = match?.state == MatchState.Matched && match.predictionErrorM == null
+        // The floor widens with reported accuracy, because what it exists to reject is the position
+        // noise the fix itself is declaring. A flat 2 m is a walking pace at 1 Hz, and a 25 m fix
+        // moves further than that standing still.
+        val noiseFloorM = backtrackNoiseFloorM(sample.accuracy)
+
+        // `shadow` always advances; `live` only *persists* what it learns outside grace (see the
+        // matching comment in evaluateOffTrail — `mutate = false` during grace makes this a
+        // read-only peek, so `backtrackLive` itself stays frozen). Critical, review 2026-08-17.
+        val shadow = advanceBacktrack(backtrackShadow, alongM, contiguous, match?.state, noiseFloorM, sample.timestamp)
+        val live =
+            advanceBacktrack(backtrackLive, alongM, contiguous, match?.state, noiseFloorM, sample.timestamp, mutate = !suppressedByGrace)
+
+        // See evaluateOffTrail for why `fired` reads `live` with the switch off and `shadow` with it
+        // on.
+        val fired = if (shadowAlertsAudible) shadow.wouldFire else (!suppressedByGrace && live.wouldFire)
+
+        // Two fields, not one — see the matching comment in evaluateOffTrail. `disposition` is built
+        // from whichever track decided `fired`, so it can never contradict it; `shadowDisposition` is
+        // always the counterfactual.
+        val activeTrack = if (shadowAlertsAudible) shadow else live
+        val disposition = backtrackDisposition(activeTrack) { "FIRING" }
+        val shadowDisposition = backtrackDisposition(shadow) { "shadow:would_fire" }
+
+        return BacktrackEvaluation(
+            alongTrackM = alongM,
+            prevAlongTrackM = shadow.prevAlongTrackM,
+            distanceToTargetM = distM,
+            prevDistanceToTargetM = prevDistM,
+            consecutiveCount = shadow.consecutiveCount,
+            sinceLastAlertMs = shadow.sinceLastAlertMs,
+            disposition = disposition,
+            shadowDisposition = shadowDisposition,
+            fired = fired,
+            matchState = match?.state,
+            noiseFloorM = noiseFloorM,
+            suppressedByGrace = suppressedByGrace,
+        )
+    }
+
+    /**
+     * The shared ladder shape for both [BacktrackEvaluation.disposition] (called on whichever track
+     * decided `fired`) and [BacktrackEvaluation.shadowDisposition] (called on `shadow` always) — same
+     * bail/hold logic, only the terminal "this track would fire" spelling differs, via [onFire].
+     */
+    private fun backtrackDisposition(
+        track: BacktrackTrackResult,
+        onFire: () -> String,
+    ): String =
+        when {
+            track.hold != null -> track.hold
+            track.consecutiveCount < NavigationPolicy.BACKTRACK_CONSECUTIVE_THRESHOLD ->
+                "bail:count_${track.consecutiveCount}_of_${NavigationPolicy.BACKTRACK_CONSECUTIVE_THRESHOLD}"
+            !track.wouldFire -> "bail:cooldown_${track.sinceLastAlertMs}ms"
+            else -> onFire()
+        }
+
+    /**
+     * Folds one fix into [state] and decides whether *that track* would fire. Mutates [state] only
+     * when [mutate] is true; same calling shape as [advanceOffTrail]. See [BacktrackDetectorState]
+     * for why there are two instances.
+     */
+    private fun advanceBacktrack(
+        state: BacktrackDetectorState,
+        alongM: Double?,
+        contiguous: Boolean,
+        matchState: MatchState?,
+        noiseFloorM: Double,
+        nowMs: Long,
+        mutate: Boolean = true,
+    ): BacktrackTrackResult {
+        val prev = state.prevAlongTrackM
 
         // Only a fresh, contiguous confirmation is evidence. A frozen value under Uncertain/Lost is
         // not movement, and the fix where geometry returns after an absence — the one carrying
         // predictionErrorM — can legitimately land far behind, because a rejoin elsewhere is not a
         // reversal. Both re-baseline instead of comparing.
-        val contiguous = match?.state == MatchState.Matched && match.predictionErrorM == null
         val progressM = if (contiguous && prev != null && alongM != null) (alongM - prev) * followDirection.sign else null
-        // The floor widens with reported accuracy, because what it exists to reject is the position
-        // noise the fix itself is declaring. A flat 2 m is a walking pace at 1 Hz, and a 25 m fix
-        // moves further than that standing still.
-        val noiseFloorM = backtrackNoiseFloorM(sample.accuracy)
         val regressed = progressM != null && progressM < -noiseFloorM
 
         // One pass: update the count and say why, instead of two `when` ladders over the same
         // predicates that had to be kept in the same order by hand. The old shape needed a
         // do-nothing branch purely to stay aligned with its twin.
+        var consecutiveCount = state.consecutiveCount
         val hold =
             when {
                 alongM == null -> {
-                    consecutiveBacktrackCount = 0
+                    consecutiveCount = 0
                     "bail:no_match"
                 }
 
                 // Holds the count rather than clearing it: a gap in corroboration is not evidence
                 // either way. Re-baselining prev is what stops the gap itself reading as movement.
                 !contiguous -> {
-                    if (match?.state == MatchState.Matched) {
+                    if (matchState == MatchState.Matched) {
                         "hold:reacquired"
                     } else {
-                        "hold:match_${match?.state?.name?.lowercase()}"
+                        "hold:match_${matchState?.name?.lowercase()}"
                     }
                 }
 
                 regressed -> {
-                    consecutiveBacktrackCount++
+                    consecutiveCount++
                     null
                 }
 
                 // As with off-trail: the count resets, the cooldown does not.
                 else -> {
-                    consecutiveBacktrackCount = 0
+                    consecutiveCount = 0
                     null
                 }
             }
-        prevAlongTrackM = alongM
 
-        val sustained = consecutiveBacktrackCount >= NavigationPolicy.BACKTRACK_CONSECUTIVE_THRESHOLD
-        val fired = hold == null && sustained && sinceLastAlertMs >= NavigationPolicy.BACKTRACK_ALERT_INTERVAL_MS
-        val disposition =
-            when {
-                hold != null -> hold
-                !sustained -> "bail:count_${consecutiveBacktrackCount}_of_${NavigationPolicy.BACKTRACK_CONSECUTIVE_THRESHOLD}"
-                !fired -> "bail:cooldown_${sinceLastAlertMs}ms"
-                else -> "FIRING"
-            }
-        if (fired) backtrackAlertFiredAt = sample.timestamp
+        val sustained = consecutiveCount >= NavigationPolicy.BACKTRACK_CONSECUTIVE_THRESHOLD
+        val sinceLastAlertMs = nowMs - state.alertFiredAt
+        val wouldFire = hold == null && sustained && sinceLastAlertMs >= NavigationPolicy.BACKTRACK_ALERT_INTERVAL_MS
 
-        return BacktrackEvaluation(
-            alongTrackM = alongM,
-            prevAlongTrackM = prev,
-            distanceToTargetM = distM,
-            prevDistanceToTargetM = prevDistM,
-            consecutiveCount = consecutiveBacktrackCount,
-            sinceLastAlertMs = sinceLastAlertMs,
-            disposition = disposition,
-            fired = fired,
-            matchState = match?.state,
-            noiseFloorM = noiseFloorM,
-        )
+        if (mutate) {
+            state.consecutiveCount = consecutiveCount
+            state.prevAlongTrackM = alongM
+            if (wouldFire) state.alertFiredAt = nowMs
+        }
+
+        return BacktrackTrackResult(consecutiveCount, prev, hold, sinceLastAlertMs, wouldFire)
     }
 
     /** Accuracy-aware backtrack noise floor, widening with uncertainty but hard-capped. */
@@ -555,6 +723,74 @@ class TrailGuidanceCoordinator(
             capM = NavigationPolicy.BACKTRACK_NOISE_FLOOR_CAP_M,
         )
 }
+
+/**
+ * Off-trail's per-fix bookkeeping — the consecutive-fix count, the cross-track rate baseline, and
+ * this track's own alert cooldown.
+ *
+ * [TrailGuidanceCoordinator] holds two instances, not one: `live`, which drives what the app
+ * actually says and freezes during grace exactly as the pre-S6 early return did (grace sat before
+ * every mutation, so nothing moved while it was armed), and `shadow`, which advances on every fix
+ * regardless of grace so it can answer "what would removing grace produce". A single shared instance
+ * was tried first — mutated on every in-grace fix per the original brief's Step 3 — and that let
+ * evidence gathered *during* grace decide whether the fix right after grace expired would fire: a
+ * real alert, switch off, that the old code would not have spoken. Found in review, 2026-08-17.
+ *
+ * Keep these as two instances of one class rather than prefixing each field `shadow` on a single
+ * one: six near-identical fields drift when only one copy gets touched by the next edit, which is
+ * exactly the class of bug this fixes.
+ */
+private class OffTrailDetectorState {
+    var consecutiveCount = 0
+    var alertFiredAt = 0L
+    var prevAbsCrossTrackM: Double? = null
+    var prevCrossTrackAtMs = 0L
+
+    fun reset() {
+        consecutiveCount = 0
+        alertFiredAt = 0L
+        prevAbsCrossTrackM = null
+        prevCrossTrackAtMs = 0L
+    }
+}
+
+/** One [OffTrailDetectorState] track's answer for one fix. */
+private data class OffTrailTrackResult(
+    val consecutiveCount: Int,
+    val required: Int,
+    val rateMps: Double?,
+    val trend: String,
+    val sinceLastAlertMs: Long,
+    val wouldFire: Boolean,
+)
+
+/**
+ * Backtrack's per-fix bookkeeping — the consecutive-regression count, the along-track baseline, and
+ * this track's own alert cooldown. Held twice on [TrailGuidanceCoordinator] for the same reason as
+ * [OffTrailDetectorState]: `live` freezes during grace exactly as the pre-S6 code did, `shadow`
+ * advances on every fix so the log can say what removing grace would have produced.
+ */
+private class BacktrackDetectorState {
+    var consecutiveCount = 0
+    var alertFiredAt = 0L
+    var prevAlongTrackM: Double? = null
+
+    fun reset() {
+        consecutiveCount = 0
+        alertFiredAt = 0L
+        prevAlongTrackM = null
+    }
+}
+
+/** One [BacktrackDetectorState] track's answer for one fix. */
+private data class BacktrackTrackResult(
+    val consecutiveCount: Int,
+    /** The along-track position [BacktrackDetectorState] held *before* this fix. */
+    val prevAlongTrackM: Double?,
+    val hold: String?,
+    val sinceLastAlertMs: Long,
+    val wouldFire: Boolean,
+)
 
 /** A routine trail-guidance cue is due; the caller formats + speaks it. */
 data class OrdinaryGuidanceDecision(
@@ -569,7 +805,15 @@ data class OffTrailEvaluation(
     val relativeDeg: Double?,
     val consecutiveCount: Int,
     val sinceLastAlertMs: Long,
+    /** What actually happened — built from whichever track decided [fired], so never contradicts it. */
     val disposition: String,
+    /**
+     * What the shadow (grace-free) track would have decided, always — regardless of [fired] or the
+     * debug switch. Counting `shadow:would_fire` here is how a walk answers "what would removing
+     * grace produce"; `disposition` answers "what did this walk actually do" (ADR 0001, S6, spec
+     * correction found in re-review, 2026-08-17).
+     */
+    val shadowDisposition: String = disposition,
     val fired: Boolean,
     /** Signed distance from the trail; positive means the user is to the right of travel. */
     val crossTrackM: Double? = null,
@@ -579,6 +823,8 @@ data class OffTrailEvaluation(
     val gateM: Double? = null,
     /** Consecutive qualifying fixes required before alerting, given the corroborating evidence. */
     val requiredCount: Int = 0,
+    /** Whether the off-trail grace window would have muted this fix (ADR 0001, S6). See [fired]. */
+    val suppressedByGrace: Boolean = false,
 )
 
 /** Backtrack detection outcome for one GPS fix; effect-free, ready for log + optional alert. */
@@ -591,10 +837,18 @@ data class BacktrackEvaluation(
     val prevDistanceToTargetM: Double?,
     val consecutiveCount: Int,
     val sinceLastAlertMs: Long,
+    /** What actually happened — built from whichever track decided [fired], so never contradicts it. */
     val disposition: String,
+    /**
+     * What the shadow (grace-free) track would have decided, always — regardless of [fired] or the
+     * debug switch. See [OffTrailEvaluation.shadowDisposition] for the full reasoning.
+     */
+    val shadowDisposition: String = disposition,
     val fired: Boolean,
     /** The ladder state that gated this decision, or `null` when there was no match at all. */
     val matchState: MatchState? = null,
     /** The accuracy-aware regression this fix had to exceed to count. */
     val noiseFloorM: Double = NavigationPolicy.BACKTRACK_NOISE_FLOOR_M,
+    /** Whether the backtrack grace window would have muted this fix (ADR 0001, S6). See [fired]. */
+    val suppressedByGrace: Boolean = false,
 )

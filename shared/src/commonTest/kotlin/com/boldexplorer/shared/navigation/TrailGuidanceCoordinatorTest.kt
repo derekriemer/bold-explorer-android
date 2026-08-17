@@ -212,11 +212,26 @@ class TrailGuidanceCoordinatorTest {
 
     @Test
     fun offTrail_suppressedDuringGraceWindow() {
+        // Grace is a flag now, not an early return (ADR 0001, S6; see GraceShadowTest for the
+        // dedicated coverage): the evaluator runs every fix so the log can say what dropping grace
+        // would have done, and only `fired` — what gets spoken — stays gated. This test now pins
+        // that user-facing contract rather than the old "returns null" mechanism.
         val c = harness()
         c.resetThrottle(offTrailSample(100_000)) // arms grace until 130_000
-        assertNull(c.evaluateOffTrail(active, offTrailSample(120_000), guidance(relativeDeg = 90.0)))
-        // After grace expires it evaluates again.
-        assertNotNull(c.evaluateOffTrail(active, offTrailSample(131_000), guidance(relativeDeg = 90.0)))
+        val duringGrace = c.evaluateOffTrail(active, offTrailSample(120_000), guidance(relativeDeg = 90.0))
+        assertNotNull(duringGrace, "the evaluator runs inside grace now — only firing is gated")
+        assertTrue(duringGrace.suppressedByGrace)
+        assertFalse(duringGrace.fired, "must not speak during grace, with the debug switch off")
+        // After grace expires it evaluates again, unsuppressed — and, critically, must not have
+        // inherited the one qualifying fix gathered above during grace. That fix plus this one would
+        // be enough to reach the two-fix fast-path threshold if the count carried over; it must not,
+        // because the pre-S6 code's first post-grace fix always started counting from zero. This is
+        // the regression test for the Critical the 2026-08-17 review found. See GraceShadowTest for
+        // the analogous backtrack coverage and a second, self-contained off-trail version.
+        val afterGrace = c.evaluateOffTrail(active, offTrailSample(131_000), guidance(relativeDeg = 90.0))
+        assertNotNull(afterGrace)
+        assertFalse(afterGrace.suppressedByGrace)
+        assertFalse(afterGrace.fired, "must not fire on carried-over in-grace evidence")
     }
 
     @Test
@@ -271,10 +286,22 @@ class TrailGuidanceCoordinatorTest {
 
     @Test
     fun backtrack_suppressedDuringGraceWindow() {
+        // Same contract change as offTrail_suppressedDuringGraceWindow above: grace is a flag, not
+        // an early return (ADR 0001, S6). See GraceShadowTest for the dedicated coverage.
         val h = harness()
         h.resetThrottle(sample(100_000)) // arms grace until 120_000
-        assertNull(h.evaluateBacktrack(active, sample(110_000), guidance(90.0, distanceToTargetM = 100.0)))
-        assertNotNull(h.evaluateBacktrack(active, sample(121_000), guidance(90.0, distanceToTargetM = 100.0)))
+        val duringGrace = h.evaluateBacktrack(active, sample(110_000), guidance(90.0, distanceToTargetM = 100.0))
+        assertNotNull(duringGrace, "the evaluator runs inside grace now — only firing is gated")
+        assertTrue(duringGrace.suppressedByGrace)
+        assertFalse(duringGrace.fired, "must not speak during grace, with the debug switch off")
+        // This fixture only has one in-grace fix, which is not enough evidence by itself to
+        // demonstrate the carry-over Critical (backtrack needs three) — but the assertion still
+        // belongs here as a floor. See GraceShadowTest.backtrackPostGraceFixDoesNotInheritInGraceEvidence
+        // for the fixture that actually reproduces it.
+        val afterGrace = h.evaluateBacktrack(active, sample(121_000), guidance(90.0, distanceToTargetM = 100.0))
+        assertNotNull(afterGrace)
+        assertFalse(afterGrace.suppressedByGrace)
+        assertFalse(afterGrace.fired, "must not fire on carried-over in-grace evidence")
     }
 
     // ── Ordinary guidance throttle ────────────────────────────────────────────────────
@@ -283,7 +310,8 @@ class TrailGuidanceCoordinatorTest {
     fun ordinaryGuidance_firesOnMajorCorrectionThenThrottles() {
         val c = coordinator()
         // resetThrottle is always called at follow-start in production; it seeds the time + location
-        // baselines (the initial Long.MIN_VALUE baseline is unusable due to subtraction overflow).
+        // baselines. (Without it, the null "nothing spoken yet" baseline lets the first qualifying
+        // fix speak immediately — see OrdinaryGuidanceThrottleTest for that path specifically.)
         c.resetThrottle(sample(100_000, lat = 0.0))
 
         // 1 s later, same spot → inside the 30 s interval, suppressed.
