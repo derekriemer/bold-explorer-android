@@ -62,8 +62,12 @@ GPS / Compass hardware
   └── LocationProvider + CompassProvider  (platform)
         └── GpsViewModel  (platform)
               ├── TrailFollower.onLocationUpdate()     (shared)
-              │     └── WaypointReached / TrailComplete
-              │           └── AudioCueScheduler.emitWaypointApproach / emitTrailComplete
+              │     └── TrailComplete
+              │           └── AudioCueScheduler.emitTrailComplete
+              ├── ProgressCueProducer / AnnotationCueProducer /  (shared)
+              │   MatchStateCueProducer
+              │     └── return cues; GpsViewModel speaks them and
+              │         calls AudioCueScheduler.emitProgress
               ├── CollectionExplorer.onLocationUpdate() (shared)
               │     └── PointReached / NearTrailEnd
               └── BearingComputer  (shared)
@@ -71,8 +75,8 @@ GPS / Compass hardware
 
 AudioCueScheduler.events: SharedFlow<AudioCueEvent>   (shared)
   └── AudioCuePlayer  (platform)
-        ├── AudioEngine  ← DirectionalBeacon, AccuracyBeacon, AlignmentPing
-        └── TtsEngine    ← WaypointApproach, TrailComplete
+        ├── AudioEngine  ← DirectionalBeacon, AccuracyBeacon, AlignmentPing, Progress
+        └── TtsEngine    ← TrailComplete
 ```
 
 ---
@@ -292,8 +296,13 @@ State machine. Tracks progress through an ordered list of waypoints.
 **States:** `Idle → Active(waypoints, currentIndex, thresholdM) → Complete`
 
 **Events emitted:**
-- `WaypointReached(index, name, kind, total, distanceToNextM, absoluteBearingDeg)`
-- `TrailComplete`
+- `TrailComplete(hedged)` — `hedged` is true when GPS accuracy was too poor to assert arrival
+  plainly, so the caller phrases it as "you should be at the end" rather than "trail complete".
+
+Passing an individual track point emits nothing. It used to emit `WaypointReached` per point, which
+made a recorded trail's utterances a function of how densely it happened to be recorded; S6 replaced
+that with the cue producers in the data-flow diagram above, which decide from along-track metres and
+elapsed time. See `docs/adr/0001-continuous-trail-matching.md`.
 
 **Advancement — 3-tier fallback:**
 

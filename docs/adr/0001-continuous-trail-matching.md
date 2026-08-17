@@ -1168,6 +1168,53 @@ every ~7–8 s, so for that alert to have fired at all the advances must already
 match was struggling before the detector said anything. Dropping the heartbeat makes it fire sooner,
 not less often. Expect to see it again, and chase it as a matching defect.
 
+**Two things the implementation settled that the design above got slightly wrong.** Both are
+harmless, but the numbers here should match what the code does or the next reader will trust the
+wrong one.
+
+*The straightness gate reaches further back than 40 m.* `sagittaOver(alongTrackM, lookaheadM)` counts
+only **strictly interior** vertices, so a corner sitting exactly at the far edge of the window is not
+in it. The progress cue therefore goes quiet from roughly **36 m** before a corner rather than 40 —
+the last few metres of the window cannot see a vertex on its own boundary. This is the correct
+behaviour for a suppression gate (erring toward calling things straight costs one skipped beep, and
+the corner is caught on the next fix anyway), but it means `STRAIGHT_LOOKAHEAD_M = 40.0` is an upper
+bound on the reach, not the reach. A test fixture placed at exactly 40 m will read "straight" and
+that is the fixture being wrong, not the code.
+
+*Announced distance is now horizontal.* The old `GpsViewModel.formatDistanceM` callers were fed a
+3D, elevation-aware distance; the S6 cues are fed along-track metres, which are horizontal by
+construction. On the terrain these walks cover the difference is well under the GPS noise floor — a
+10 % grade costs 0.5 % in distance — so this is a deliberate simplification, not an oversight. It
+would stop being acceptable on genuinely steep ground, and the fix would be to carry elevation into
+`TrailPolyline`'s cumulative lengths rather than to reinstate a second distance function.
+
+**The `isRecorded` gate had to reach a second microphone, which the design missed.** Gating
+*off-trail* on `isRecorded` removes one dishonest claim about a hand-built route and leaves an
+identical one standing next to it. The **matcher's** own accept test is the same cross-track
+measurement against the same invented polyline (capped at `MATCH_GATE_CAP_M`), so a walker correctly
+on a hand-built path that bends 60 m off the chord fails the match, and the match-state cue then says
+**"Lost the trail"** — a *less* hedged version of the sentence the gate just suppressed. Wherever a
+decision is derived from an invented polyline, gating one of its consumers gates nothing.
+
+The resolution splits by what the cue actually asserts. The **spoken** match-state cue is suppressed
+on a hand-built route; the **earcon's lost variant still fires**. The earcon claims only that the app
+cannot place the walker along the route, which is true and useful. The words claim something about
+where the walker is, which invented geometry cannot support. This is the same "sound carries the
+continuous state, speech carries the change" split the design already committed to, applied to a case
+it had not considered.
+
+Two consequences worth stating plainly. `remainingM` on a hand-built route is the sum of straight
+chords, so it **systematically understates** the distance left, by however much the real path bends.
+Kept anyway: it is the best number available and it errs toward arriving later than announced, which
+is the safe direction. And the progress *speech* is now gated on a live match — `confirmedAlongM`
+freezes through `Uncertain`/`Lost`, so without the gate a three-minute dropout speaks the same
+distance four times while the real remaining distance falls. That is the 2026-08-02 field bug
+(distance froze while the earcon kept moving) with the roles reversed, and it is worth remembering as
+a shape: **any frozen value that keeps being announced on a timer will reproduce it.** The two gates
+use deliberately different thresholds — speech uses the immediate match state, because the number is
+stale from the first bad fix; the earcon's character uses the sustained `MATCH_LOST_SUSTAIN`, because
+flapping the tone on every marginal fix is noise.
+
 **S7 — delete `currentIndex`.** Migrate `NavigationTargetResolver` to endpoint/POI targets, retire
 the "Checkpoint N of M" utterances (`GpsViewModel.kt:958,1243,1268`,
 `TrailGuidanceCoordinator.kt:156`), migrate the telemetry field set.
