@@ -2,7 +2,6 @@ package com.boldexplorer.shared.navigation
 
 import com.boldexplorer.shared.geo.LatLng
 import kotlin.math.abs
-import kotlin.math.sqrt
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -43,42 +42,35 @@ class TrailFollowerTest {
 
     @Test
     fun waypointReached_whenWithinThreshold() {
+        // The event that used to carry index/name/kind/total/distance/bearing is gone — advancing
+        // off a waypoint is now silent. The state still moves; nothing is emitted to say so.
         val f = TrailFollower()
         f.start(listOf(wp1, wp2, wp3), thresholdM = 15.0)
         // Arrive at wp1 (0, 0)
         val event = f.onLocationUpdate(LatLng(0.0, 0.0))
-        assertIs<TrailFollowerEvent.WaypointReached>(event)
-        assertEquals(1, event.index)
-        assertEquals("Middle", event.name)
-        assertEquals(com.boldexplorer.shared.model.Waypoint.KIND_WAYPOINT, event.kind)
-        assertEquals(3, event.total)
-        assert(event.distanceToNextM > 0.0)
+        assertNull(event, "advancing off a waypoint must not speak")
         val state = f.state.value as TrailFollowerState.Active
-        assertEquals(1, state.currentIndex)
+        assertEquals(1, state.currentIndex, "target still advances even though nothing is emitted")
     }
 
-    @Test
-    fun waypointReached_includesDistanceAndBearing() {
-        // wp1 is at (0, 0), wp2 is ~10m north at (0.00009, 0)
-        val f = TrailFollower()
-        f.start(listOf(wp1, wp2), thresholdM = 15.0)
-        val event = f.onLocationUpdate(LatLng(0.0, 0.0)) as TrailFollowerEvent.WaypointReached
-        // Distance from (0,0) to wp2 (0.00009, 0) is ~10 m
-        assert(event.distanceToNextM in 5.0..20.0) { "expected ~10m, got ${event.distanceToNextM}" }
-        // Bearing from (0,0) heading north to (0.00009, 0) should be near 0° (north)
-        assert(event.absoluteBearingDeg < 5.0 || event.absoluteBearingDeg > 355.0) {
-            "expected ~0° (north), got ${event.absoluteBearingDeg}"
-        }
-    }
+    // waypointReached_includesDistanceAndBearing is deleted, not rewritten: it asserted on
+    // WaypointReached.distanceToNextM/absoluteBearingDeg, fields that no longer exist because the
+    // computation that produced them (in fireAdvance, for a non-terminal advance) was deleted along
+    // with the emission site. Nothing downstream depends on a next-target distance/bearing computed
+    // *inside* TrailFollower any more — the dedicated cue producers compute their own.
 
     @Test
-    fun waypointReached_trackPointKindPropagates() {
+    fun trackPointKind_alsoAdvancesSilently() {
+        // What survives of waypointReached_trackPointKindPropagates: a track-point-kind trail point
+        // still advances the target. What's gone is the event.kind field it used to assert on —
+        // there is no event to carry it.
         val tp1 = TrailPoint(1, "Track 10:00:00", 0.0, 0.0, kind = com.boldexplorer.shared.model.Waypoint.KIND_TRACK_POINT)
         val tp2 = TrailPoint(2, "Track 10:00:10", 0.00009, 0.0, kind = com.boldexplorer.shared.model.Waypoint.KIND_TRACK_POINT)
         val f = TrailFollower()
         f.start(listOf(tp1, tp2), thresholdM = 15.0)
-        val event = f.onLocationUpdate(LatLng(0.0, 0.0)) as TrailFollowerEvent.WaypointReached
-        assertEquals(com.boldexplorer.shared.model.Waypoint.KIND_TRACK_POINT, event.kind)
+        val event = f.onLocationUpdate(LatLng(0.0, 0.0))
+        assertNull(event, "track points are silent regardless of kind")
+        assertEquals(1, (f.state.value as TrailFollowerState.Active).currentIndex)
     }
 
     /** A session that has walked far enough for a completion to be believable. */
@@ -182,8 +174,8 @@ class TrailFollowerTest {
 
         val at95pct = LatLng(0.000855, 0.0) // 95% of segment spA→spB, ~5 m from spB
         val event = f.onLocationUpdate(at95pct)
-        assertIs<TrailFollowerEvent.WaypointReached>(event)
-        assertEquals(2, event.index) // advanced past spB; new target is spC
+        assertNull(event, "advancing must not speak")
+        assertEquals(2, (f.state.value as TrailFollowerState.Active).currentIndex) // advanced past spB; new target is spC
     }
 
     @Test
@@ -233,8 +225,8 @@ class TrailFollowerTest {
         //   d to dvA ≈ 28 m → diverged 17 m ≥ 5 m ✓
         //   dNext to dvB=(lat=0, lon=0.0002) ≈ 23 m < 28 m ✓  (user is past the midpoint)
         val event = f.onLocationUpdate(LatLng(0.0002, 0.00015))
-        assertIs<TrailFollowerEvent.WaypointReached>(event)
-        assertEquals(1, event.index) // advanced past dvA; new target is dvB
+        assertNull(event, "advancing must not speak")
+        assertEquals(1, (f.state.value as TrailFollowerState.Active).currentIndex) // advanced past dvA; new target is dvB
     }
 
     @Test
@@ -331,7 +323,8 @@ class TrailFollowerTest {
 
         val at95pct = LatLng(0.000855, 0.0)
         val event = f.onLocationUpdate(at95pct, bearingDeg = null)
-        assertIs<TrailFollowerEvent.WaypointReached>(event)
+        assertNull(event, "advancing must not speak")
+        assertEquals(2, (f.state.value as TrailFollowerState.Active).currentIndex, "projection still fired")
     }
 
     @Test
@@ -343,7 +336,8 @@ class TrailFollowerTest {
 
         val at95pct = LatLng(0.000855, 0.0)
         val event = f.onLocationUpdate(at95pct, bearingDeg = 5f) // nearly north
-        assertIs<TrailFollowerEvent.WaypointReached>(event)
+        assertNull(event, "advancing must not speak")
+        assertEquals(2, (f.state.value as TrailFollowerState.Active).currentIndex, "projection still fired")
     }
 
     @Test
@@ -386,8 +380,8 @@ class TrailFollowerTest {
 
         // First fix: user is standing at denseA — legitimate "already here" advance to denseB.
         val first = f.onLocationUpdate(LatLng(denseA.lat, denseA.lon))
-        assertIs<TrailFollowerEvent.WaypointReached>(first)
-        assertEquals(1, first.index)
+        assertNull(first, "advancing must not speak")
+        assertEquals(1, (f.state.value as TrailFollowerState.Active).currentIndex)
 
         // Second fix: same physical position (no movement) — denseB is only ~5m away, well
         // within the 15m threshold, but the user hasn't actually walked anywhere. Must not cascade.
@@ -405,8 +399,8 @@ class TrailFollowerTest {
 
         // User genuinely walks to denseB (~5 m north) — a real advance should still fire.
         val event = f.onLocationUpdate(LatLng(denseB.lat, denseB.lon))
-        assertIs<TrailFollowerEvent.WaypointReached>(event)
-        assertEquals(2, event.index)
+        assertNull(event, "advancing must not speak")
+        assertEquals(2, (f.state.value as TrailFollowerState.Active).currentIndex)
     }
 
     // ── startNearest with bearing ─────────────────────────────────────────────────
@@ -473,32 +467,12 @@ class TrailFollowerTest {
 
     // ── 3D distance in fireAdvance ────────────────────────────────────────────────
 
-    @Test
-    fun fireAdvance_uses3DDistanceWhenElevationAvailable() {
-        // Next waypoint is 0m horizontal away but 30m above. 3D distance should be ~30m.
-        val base = TrailPoint(70, "Base", 0.0, 0.0, elevationM = 0.0)
-        val summit = TrailPoint(71, "Summit", 0.00009, 0.0, elevationM = 30.0)
-        val f = TrailFollower()
-        f.start(listOf(base, summit), thresholdM = 15.0)
-        // Arrive at base; altitudeM=0.0 so elevation delta to summit is 30m.
-        val event = f.onLocationUpdate(LatLng(0.0, 0.0), altitudeM = 0.0) as TrailFollowerEvent.WaypointReached
-        // Horizontal distance from (0,0) to summit ~10m; 3D = sqrt(10²+30²) ≈ 31.6m
-        val expectedMin = sqrt(5.0 * 5.0 + 30.0 * 30.0) // conservative lower bound
-        assertTrue(
-            event.distanceToNextM >= expectedMin,
-            "expected 3D distance >= $expectedMin, got ${event.distanceToNextM}",
-        )
-    }
-
-    @Test
-    fun fireAdvance_fallsBackTo2DWhenElevationMissing() {
-        // No elevationM on TrailPoint; distanceToNextM must equal haversine (2D).
-        val f = TrailFollower()
-        f.start(listOf(wp1, wp2), thresholdM = 15.0)
-        val event = f.onLocationUpdate(LatLng(0.0, 0.0), altitudeM = 100.0) as TrailFollowerEvent.WaypointReached
-        // wp2 has no elevationM — should ignore altitudeM and use haversine only (~10m)
-        assertTrue(event.distanceToNextM < 20.0, "expected 2D haversine (~10m), got ${event.distanceToNextM}")
-    }
+    // fireAdvance_uses3DDistanceWhenElevationAvailable and fireAdvance_fallsBackTo2DWhenElevationMissing
+    // are deleted, not rewritten: they tested the 3D-vs-2D distanceToNextM computation that used to
+    // run inside fireAdvance to build the WaypointReached event. That computation (nextWp/nextLL/
+    // horizDist/distToNext, and the distance3DMeters call) was deleted along with the emission site
+    // itself, not merely hidden from the event — nothing in fireAdvance computes a next-target
+    // distance any more, silent or otherwise. There is no remaining behaviour to assert on.
 
     // ── Smoothed bearing (slow-walker heading fallback) ───────────────────────
     //
@@ -515,7 +489,7 @@ class TrailFollowerTest {
         val at95pct = LatLng(0.000855, 0.0) // 95% along spA→spB
         // bearingDeg = null (slow walker), smoothedBearingDeg = 0° (North — agrees with segment)
         val event = f.onLocationUpdate(at95pct, bearingDeg = null, smoothedBearingDeg = 0f)
-        assertIs<TrailFollowerEvent.WaypointReached>(event)
+        assertNull(event, "advancing must not speak")
         assertNotNull(reason)
         assertEquals("projection", reason!!.mechanism)
         assertTrue(reason!!.smoothedBearingUsed)
@@ -546,5 +520,42 @@ class TrailFollowerTest {
         f.onLocationUpdate(at95pct, bearingDeg = 0f, smoothedBearingDeg = 0f)
         assertNotNull(reason)
         assertFalse(reason!!.smoothedBearingUsed)
+    }
+
+    // ── Silent track points (S6: the event vocabulary) ───────────────────────────
+    //
+    // Track points recorded every ~10 m used to speak "Checkpoint N of M" on every single fix that
+    // crossed one — a report of an index into a vertex array at whatever rate the trail happened to
+    // be recorded at. That firehose is gone: passing a track point now advances the target with no
+    // event at all.
+
+    private val tpA = TrailPoint(90, "Track A", 0.0, 0.0, kind = com.boldexplorer.shared.model.Waypoint.KIND_TRACK_POINT)
+    private val tpB = TrailPoint(91, "Track B", 0.00018, 0.0, kind = com.boldexplorer.shared.model.Waypoint.KIND_TRACK_POINT) // ~20 m north
+    private val tpC = TrailPoint(92, "Track C", 0.00036, 0.0, kind = com.boldexplorer.shared.model.Waypoint.KIND_TRACK_POINT) // ~40 m north
+    private val tpD = TrailPoint(93, "Track D", 0.00054, 0.0, kind = com.boldexplorer.shared.model.Waypoint.KIND_TRACK_POINT) // ~60 m north
+    private val tpE = TrailPoint(94, "Track E", 0.00072, 0.0, kind = com.boldexplorer.shared.model.Waypoint.KIND_TRACK_POINT) // ~80 m north
+
+    @Test
+    fun passingATrackPointEmitsNothing() {
+        // A ruling on the brief's original version of this test: `(0..5).mapNotNull { ... }`
+        // followed by `events.all { it is TrailComplete }` is vacuous once track points are silent
+        // — mapNotNull yields an empty list, and `all {}` over an empty list is true regardless of
+        // what actually happened. Assert the list is genuinely empty instead, and prove the follower
+        // hasn't simply gone deaf to everything by checking a real TrailComplete still fires at the
+        // trail's end.
+        val f = TrailFollower()
+        f.start(listOf(tpA, tpB, tpC, tpD, tpE), thresholdM = 15.0)
+
+        val midTrailFixes = listOf(tpA, tpB, tpC, tpD)
+        val events = midTrailFixes.mapNotNull { f.onLocationUpdate(LatLng(it.lat, it.lon)) }
+        assertTrue(events.isEmpty(), "track points must be silent, got $events")
+        assertEquals(4, (f.state.value as TrailFollowerState.Active).currentIndex, "target still advances silently")
+
+        val finalEvent =
+            f.onLocationUpdate(
+                LatLng(tpE.lat, tpE.lon),
+                completion = CompletionEvidence(pastTheEnd = false, travelled = true),
+            )
+        assertIs<TrailFollowerEvent.TrailComplete>(finalEvent, "the trail's end must still be announced")
     }
 }

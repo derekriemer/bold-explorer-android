@@ -1267,34 +1267,6 @@ class GpsViewModel
                         completion = guidanceCoordinator.completionEvidence(),
                     )
             ) {
-                is TrailFollowerEvent.WaypointReached -> {
-                    val guidance =
-                        guidanceCoordinator.computeGuidance(trailFollower.state.value, sample)
-                    val text = buildTrailAdvanceAnnouncement(event, guidance)
-                    val reason = lastAdvancementReason
-                    lastAdvancementReason = null
-                    announce(
-                        text,
-                        kind = OutputKind.WAYPOINT_REACHED,
-                        category = OutputCategory.NAVIGATION,
-                        origin = OutputOrigin.AUTOMATIC,
-                        sample = sample,
-                        guidance = guidance,
-                        extraOverride =
-                            if (reason == null) {
-                                emptyMap()
-                            } else {
-                                buildMap {
-                                    put("mechanism", reason.mechanism)
-                                    put("closestApproachM", reason.closestApproachM)
-                                    reason.headingDifferenceDeg?.let { put("headingDifferenceDeg", it) }
-                                    put("smoothedBearingUsed", reason.smoothedBearingUsed)
-                                }
-                            },
-                    )
-                    guidanceCoordinator.resetThrottle(sample)
-                }
-
                 is TrailFollowerEvent.TrailComplete -> {
                     guidanceCoordinator.clear()
                     announce(
@@ -1316,30 +1288,6 @@ class GpsViewModel
                     announceOrdinaryTrailGuidance(followState, sample, guidance)
                     announceOffTrail(followState, sample, guidance)
                     announceBacktrack(followState, sample, guidance)
-                }
-            }
-        }
-
-        private fun buildTrailAdvanceAnnouncement(
-            event: TrailFollowerEvent.WaypointReached,
-            guidance: TrailGuidanceState?,
-        ): String {
-            val oneBasedN = event.index + 1
-            val distance = guidance?.distanceToTargetM ?: event.distanceToNextM
-            val distLabel = formatSpokenDistance(distance, settings.value.units)
-            val relDir = guidance?.relativeDeg?.let { directionHint(it) }
-
-            return if (event.kind == Waypoint.KIND_TRACK_POINT) {
-                buildString {
-                    append("Checkpoint $oneBasedN of ${event.total}.")
-                    append(" $distLabel.")
-                    if (relDir != null) append(" $relDir.")
-                }
-            } else {
-                buildString {
-                    append("${event.name}.")
-                    append(" $distLabel.")
-                    if (relDir != null) append(" $relDir.")
                 }
             }
         }

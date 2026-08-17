@@ -7,7 +7,7 @@ import kotlin.test.assertTrue
 
 private fun event(origin: OutputOrigin) =
     OutputEvent(
-        kind = OutputKind.WAYPOINT_REACHED,
+        kind = OutputKind.ORDINARY_GUIDANCE,
         category = OutputCategory.NAVIGATION,
         origin = origin,
         speech = "Reached waypoint",

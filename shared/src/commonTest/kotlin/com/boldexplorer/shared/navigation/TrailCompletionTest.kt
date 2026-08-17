@@ -2,6 +2,7 @@ package com.boldexplorer.shared.navigation
 
 import com.boldexplorer.shared.geo.LatLng
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -116,8 +117,11 @@ class TrailCompletionTest {
                     fromIndex = 1,
                 )
             }
+        // Advancing off a mid-trail waypoint is silent now (S6) — the event itself is gone, so the
+        // proof that projection still fired is the index moving to the new target, not an event.
         val event = f.onLocationUpdate(LatLng(latFor(270.0), 0.0), accuracyM = 5.0, completion = walked)
-        assertIs<TrailFollowerEvent.WaypointReached>(event, "mid-trail projection must still advance")
+        assertNull(event, "advancing must not speak")
+        assertEquals(2, (f.state.value as TrailFollowerState.Active).currentIndex, "mid-trail projection must still advance")
     }
 
     @Test

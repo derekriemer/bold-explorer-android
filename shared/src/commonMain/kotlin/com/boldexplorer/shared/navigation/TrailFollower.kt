@@ -2,7 +2,6 @@ package com.boldexplorer.shared.navigation
 
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.angleDifferenceDeg
-import com.boldexplorer.shared.geo.distance3DMeters
 import com.boldexplorer.shared.geo.distanceToSegmentMeters
 import com.boldexplorer.shared.geo.haversineDistanceMeters
 import com.boldexplorer.shared.geo.initialBearingDeg
@@ -34,16 +33,6 @@ sealed class TrailFollowerState {
 }
 
 sealed class TrailFollowerEvent {
-    // Emitted when user reaches a waypoint; name/index are the NEW current target.
-    data class WaypointReached(
-        val index: Int, // 0-based index of NEW target
-        val name: String,
-        val kind: String, // "waypoint" or "track_point"
-        val total: Int, // total waypoint count
-        val distanceToNextM: Double, // distance from current loc to next wp (3D when elevation available)
-        val absoluteBearingDeg: Double, // bearing from current loc to next wp
-    ) : TrailFollowerEvent()
-
     /**
      * The trail's endpoint has been reached.
      *
@@ -273,7 +262,7 @@ class TrailFollower(
         mechanism: String = "radial",
         smoothedBearingUsed: Boolean = false,
         accuracyM: Double? = null,
-    ): TrailFollowerEvent {
+    ): TrailFollowerEvent? {
         val capturedClosest = closestApproachM
         val dToTarget =
             haversineDistanceMeters(
@@ -290,25 +279,12 @@ class TrailFollower(
 
         return if (current.currentIndex < current.waypoints.size - 1) {
             val nextIdx = current.currentIndex + 1
-            val nextWp = current.waypoints[nextIdx]
             _state.value = current.copy(currentIndex = nextIdx)
-            val nextLL = LatLng(nextWp.lat, nextWp.lon)
-            val horizDist = haversineDistanceMeters(location, nextLL)
-            val distToNext =
-                if (altitudeM != null && nextWp.elevationM != null) {
-                    distance3DMeters(horizDist, altitudeM - nextWp.elevationM)
-                } else {
-                    horizDist
-                }
             emitCallback()
-            TrailFollowerEvent.WaypointReached(
-                index = nextIdx,
-                name = nextWp.name,
-                kind = nextWp.kind,
-                total = current.waypoints.size,
-                distanceToNextM = distToNext,
-                absoluteBearingDeg = initialBearingDeg(location, nextLL),
-            )
+            // Track points advance the target silently now — the firehose of "Checkpoint N of M"
+            // every ~10 m is gone. Dedicated cue producers (progress, annotation) supply what the
+            // walker hears instead; onAdvancement above still fires for their diagnostics/telemetry.
+            null
         } else {
             emitCallback()
             _state.value = TrailFollowerState.Complete
