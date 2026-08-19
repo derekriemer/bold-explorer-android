@@ -30,9 +30,25 @@ Each cue log records `duckAudioEnabled` and the applied `audioMode`: `duck`, `mi
 abandon with the measured focus-hold duration. Together they show whether the configured mode was
 honored for a specific cue.
 
-## Output stream lifetime is separate
+## Output stream lifetime
 
-`AudioEngine.start()` still owns a session-long `AudioTrack` and writes silence between cues to
-avoid Bluetooth A2DP startup loss. That stream does not imply long-lived audio focus, and changing
-the per-cue focus lifetime does not fix its dictation or power implications. Stream ownership,
-silence mode, and dictation coexistence remain tracked by issue #53.
+The app opens an `AudioTrack` only when an earcon is about to play. It writes a 60 ms silent
+pre-roll to give a newly opened Bluetooth route a chance to warm, then the earcon, waits for its
+final audible frame, and releases the track. The pre-roll is bounded to that one cue: no digital
+silence, output stream, or audio focus remains active between cues. Device verification decides
+whether 60 ms is sufficient for a particular route.
+
+Absolute silence and stale-fix suppression create no track. Stopping navigation interrupts and
+releases the one active track, if any. `AUDIO_OUTPUT` log rows record every start, unavailable
+start, and stop alongside the `AUDIO_FOCUS` rows, so an exported session can demonstrate that idle
+navigation does not own audio output.
+
+## Device verification
+
+1. Start navigation, wait at least 30 seconds with no cue playing, then use an in-app dictation
+   field. Repeat with a Bluetooth headset. Dictation should behave as it does with navigation
+   stopped.
+2. Repeat with music playing and ducking both enabled and disabled. Confirm the cue remains intact
+   after the short Bluetooth pre-roll, and that music ducks only in the enabled pass.
+3. Export the audio log. Each audible cue should have paired `AUDIO_OUTPUT` `STARTED`/`STOPPED`
+   rows; there must be no output row covering the idle interval.

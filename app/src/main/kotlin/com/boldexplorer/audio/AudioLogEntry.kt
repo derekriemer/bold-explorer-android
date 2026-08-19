@@ -17,6 +17,7 @@ data class AudioLogEntry(
         TRAIL_COMPLETE,
         TTS_ANNOUNCEMENT,
         AUDIO_FOCUS,
+        AUDIO_OUTPUT,
         USER_MARKER,
         DETECTION_STATE,
 

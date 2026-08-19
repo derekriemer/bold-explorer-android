@@ -137,4 +137,11 @@ class AudioLogCodecTest {
 
         assertEquals(AudioLogEntry.Kind.AUDIO_FOCUS, parsed.kind, "focus transitions survive export and restart")
     }
+
+    @Test
+    fun audioOutputIsALoggableKind() {
+        val parsed = assertNotNull(AudioLogCodec.parse(AudioLogCodec.format(entry(kind = AudioLogEntry.Kind.AUDIO_OUTPUT))))
+
+        assertEquals(AudioLogEntry.Kind.AUDIO_OUTPUT, parsed.kind, "output lifetime survives export and restart")
+    }
 }
