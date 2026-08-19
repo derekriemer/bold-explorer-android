@@ -25,5 +25,18 @@ See "Accessibility constraints" in [`AGENTS.md`](AGENTS.md) — do not duplicate
 
 ## Plans and architecture.
 
-When you finish planning in plan mode, always write the final plan to docs/adr/NNNN-short-title.md in this repo (not just the scratch plan file), using the next available ADR number, before calling ExitPlanMode. This way, we track the history of projects we are working on for durability.
+Plan-mode scratch files are written into `docs/plans/` (via `plansDirectory` in
+`.claude/settings.json`), named after the session slug, so every plan lands in the repo instead of
+`~/.claude/plans/`. That file is the raw capture; before calling ExitPlanMode, route the plan to a
+durable home:
+
+- **Architectural decision** — a new subsystem, a state model, a choice later work must respect:
+  write an ADR at `docs/adr/NNNN-short-title.md` using the next available number.
+- **Big refactor or multi-phase project**: keep the plan in `docs/plans/`, and once you have exited
+  plan mode rename the scratch file to `YYYY-MM-DD-short-title.md` (renaming it during plan mode
+  breaks plan-mode re-entry, which reads the file by its original path).
+- **Small bugfix or anything short-lived**: put the plan in the GitHub issue instead, then delete the
+  scratch file. It should not sit in the repo forever.
+
+When the routing is genuinely unclear, ask rather than defaulting to an ADR.
 
