@@ -33,9 +33,8 @@ import javax.inject.Singleton
  * exactly the audible cue, or transparent mixing with other media. A denied focus request falls
  * back to mixing so an accessibility cue is never lost solely because focus was unavailable.
  *
- * [AudioEngine.start] currently keeps the Bluetooth A2DP stream alive via a silence keepalive loop.
- * That output-stream lifetime is issue #53 and is intentionally separate from the per-cue focus
- * lifetime fixed in issue #41.
+ * [AudioEngine] opens and releases its output stream for each cue. Its bounded silent pre-roll
+ * gives Bluetooth a chance to warm without retaining audio output between cues (issue #53).
  *
  * Every dispatched event is appended to [AudioEventLog] for post-session debugging.
  */
@@ -80,7 +79,6 @@ class AudioCuePlayer
             trailGuidanceFlow = trailGuidance
             smoothedHeadingFlow = smoothedHeading
 
-            audioEngine.start()
             val schedulerJob = scheduler.start(scope, accuracyM, relativeDeg, alignmentActive, beaconCuesEnabled)
             playerJob =
                 scheduler.events
