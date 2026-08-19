@@ -36,7 +36,9 @@ import com.boldexplorer.shared.model.LocationSample
 import com.boldexplorer.shared.model.Trail
 import com.boldexplorer.shared.model.TrailEndRow
 import com.boldexplorer.shared.model.Waypoint
+import com.boldexplorer.shared.navigation.AnchorOption
 import com.boldexplorer.shared.navigation.AnnotationCueProducer
+import com.boldexplorer.shared.navigation.ArmingResult
 import com.boldexplorer.shared.navigation.CollectionExplorer
 import com.boldexplorer.shared.navigation.CollectionExplorerEvent
 import com.boldexplorer.shared.navigation.CollectionExplorerState
@@ -46,6 +48,7 @@ import com.boldexplorer.shared.navigation.NavModeResolver
 import com.boldexplorer.shared.navigation.NavigationPolicy
 import com.boldexplorer.shared.navigation.NavigationTargetResolver
 import com.boldexplorer.shared.navigation.ExternalTargetRequest
+import com.boldexplorer.shared.navigation.FollowArming
 import com.boldexplorer.shared.navigation.NearbyTrail
 import com.boldexplorer.shared.navigation.resolveIn
 import com.boldexplorer.shared.navigation.NearbyTrailResolver
@@ -67,10 +70,13 @@ import com.boldexplorer.shared.navigation.TrailGuidanceCoordinator
 import com.boldexplorer.shared.navigation.TrailGuidanceState
 import com.boldexplorer.shared.navigation.TrailMatch
 import com.boldexplorer.shared.navigation.TrailPoint
+import com.boldexplorer.shared.navigation.TrailPolyline
+import com.boldexplorer.shared.navigation.TrailPosition
 import com.boldexplorer.shared.navigation.TrailRecordingMachine
 import com.boldexplorer.shared.navigation.TrailRecordingState
 import com.boldexplorer.shared.navigation.collectionNavPoints
 import com.boldexplorer.shared.navigation.displayName
+import com.boldexplorer.shared.navigation.followerIndexFor
 import com.boldexplorer.shared.navigation.formatSpokenDistance
 import com.boldexplorer.shared.output.OutputCategory
 import com.boldexplorer.shared.output.OutputEvent
@@ -140,6 +146,23 @@ data class GpsUiState(
     val navigationActive: Boolean = false,
     val recordingState: TrailRecordingState = TrailRecordingState.Idle,
     val navMode: NavMode = NavMode.NoCollection,
+)
+
+/**
+ * A follow blocked on "which pass did you mean" (ADR 0002 §2/§4) — the trail carries the walker's
+ * position more than once, and nothing starts until they pick one.
+ *
+ * Labels are whole spoken phrases, built here rather than in `:shared` so the geometric facts
+ * ([com.boldexplorer.shared.navigation.AnchorOption]) stay separate from their English phrasing —
+ * see [GpsViewModel.forkOptionLabel]. `options[i]`'s label corresponds to
+ * [GpsViewModel.resolveFollowFork]'s `optionIndex = i`.
+ */
+data class FollowForkPrompt(
+    val options: List<FollowForkOption>,
+)
+
+data class FollowForkOption(
+    val label: String,
 )
 
 sealed interface GpsAction {
@@ -430,6 +453,20 @@ class GpsViewModel
 
         private val _selectedTrailId = MutableStateFlow<Long?>(null)
         val selectedTrailId: StateFlow<Long?> = _selectedTrailId.asStateFlow()
+
+        // ── Follow arming (ADR 0002) ────────────────────────────────────────────────
+
+        private val _followPrompt = MutableStateFlow<FollowForkPrompt?>(null)
+
+        /**
+         * Non-null while a follow is blocked on "which pass did you mean" (ADR 0002 §4). Hoisted to
+         * [com.boldexplorer.ui.NavGraph] rather than owned by the GPS screen, because one entry point
+         * to [followTrailById] — the Trails-screen follow action — never navigates there.
+         */
+        val followPrompt: StateFlow<FollowForkPrompt?> = _followPrompt.asStateFlow()
+
+        /** The follow [followPrompt] is blocked on; `null` whenever [followPrompt] is. */
+        private var pendingFollow: PendingFollow? = null
 
         val selectedCollectionId: StateFlow<Long?> = selectedCollectionHolder.selectedCollectionId
 
@@ -952,11 +989,28 @@ class GpsViewModel
             }
         }
 
+        /** A follow whose anchor forked (ADR 0002 §2), waiting on [followPrompt]'s answer. */
+        private data class PendingFollow(
+            val trailId: Long,
+            val reversed: Boolean,
+            val name: String,
+            val isRecorded: Boolean,
+            val recordedPoints: List<LatLng>,
+            val points: List<TrailPoint>,
+            val direction: TravelDirection,
+            val options: List<AnchorOption>,
+            val loc: LatLng?,
+        )
+
         /**
          * Follow [trailId] from its start ([reversed] = false) or end ([reversed] = true), fetching the
          * ordered waypoints directly from the repository. Used both by the collection explore "follow from
          * end" path and by trail-follow requests raised on the Trails screen (via [TargetingStateHolder]),
          * so the caller need not have the trail selected first.
+         *
+         * Resolves the walk's anchor once, via [FollowArming], before anything starts (ADR 0002 §1). On
+         * [ArmingResult.Fork] nothing starts at all — no session, no follower, no location service —
+         * [followPrompt] is set instead, and [resolveFollowFork]/[cancelFollowFork] pick it back up.
          */
         private fun followTrailById(
             trailId: Long,
@@ -981,69 +1035,146 @@ class GpsViewModel
                 val isRecorded = trailRepo.observeTrackPointCountForTrail(trailId).first() > 0L
                 val name = trailRepo.getById(trailId)?.name ?: "trail"
                 val points = ordered.map { TrailPoint(it.id, it.name, it.lat, it.lon, elevationM = it.elevM, kind = it.kind) }
+                // RECORDED order, with the traversal direction carried separately — deliberately not
+                // `ordered`, which is reversed in place. Reversing the point list would make
+                // alongTrackM session-relative and stop two walks of the same trail being comparable
+                // in the field logs. Arming reads this same list, so its anchor is in the same frame
+                // `startFollow` below builds its polyline from.
+                val recordedPoints = wps.map { LatLng(it.lat, it.lon) }
                 val loc = location.value?.let { LatLng(it.lat, it.lon) }
-                val bearing =
-                    location.value?.let { s ->
-                        s.heading?.takeIf { (s.speed ?: 0.0) >= TrailGuidance.MIN_TRUSTED_SPEED_MPS }?.toFloat()
-                    }
-                _selectedTrailId.value = trailId
-                enterFollowing(trailId)
+                val accuracyM = location.value?.accuracy
                 val direction = if (reversed) TravelDirection.Reverse else TravelDirection.Forward
-                // Drop the outgoing follow's cues before installing the new session, not after the
-                // (suspend) annotation query below. Nothing yields between here and the assignment
-                // today — TrailAnnotationRepositoryImpl.forTrail never actually suspends — but that
-                // is an implementation detail of one repository this call does not own, and the day
-                // it (or an iOS implementation) does suspend, a fix for a *different* trail landing
-                // mid-window must not be answered with a still-active previous trail's producers.
-                followCues = null
-                // RECORDED order, with the traversal direction carried separately — deliberately
-                // not `ordered`, which is reversed in place. Reversing the point list would make
-                // alongTrackM session-relative and stop two walks of the same trail being
-                // comparable in the field logs.
-                guidanceCoordinator.startFollow(
-                    points = wps.map { LatLng(it.lat, it.lon) },
-                    direction = direction,
-                    isRecorded = isRecorded,
-                )
-                // S6 follow cues (ADR 0001). Built from guidanceCoordinator's own polyline — just
-                // constructed by startFollow above from these same points — rather than a second
-                // TrailPolyline built here from `wps`, so an annotation's alongTrackM is guaranteed
-                // comparable with TrailMatch.confirmedAlongM instead of merely expected to match a
-                // separately-built geometry.
-                val polyline = guidanceCoordinator.followSession!!.polyline
-                val annotations =
-                    annotationRepo.forTrail(trailId).map { a ->
-                        RouteAnnotation(
-                            id = a.id,
-                            name = a.waypoint.name,
-                            alongTrackM = polyline.alongTrackFor(a.segmentIndex, a.offsetM),
-                            // project(point, window = null) always finds a position on a non-empty
-                            // polyline; the fallback exists only to satisfy the type system.
-                            signedCrossTrackM =
-                                polyline.project(LatLng(a.waypoint.lat, a.waypoint.lon))?.crossTrackM ?: 0.0,
-                        )
+
+                when (val armed = FollowArming.resolve(TrailPolyline(recordedPoints), direction, loc, accuracyM)) {
+                    is ArmingResult.Fork -> {
+                        pendingFollow =
+                            PendingFollow(trailId, reversed, name, isRecorded, recordedPoints, points, direction, armed.options, loc)
+                        _followPrompt.value =
+                            FollowForkPrompt(armed.options.map { FollowForkOption(forkOptionLabel(it, direction)) })
                     }
-                followCues =
-                    FollowCueProducers(
-                        progress = ProgressCueProducer(),
-                        annotation = AnnotationCueProducer(annotations, direction),
-                        matchState = MatchStateCueProducer(),
-                    )
-                if (loc != null) trailFollower.startNearest(points, loc, bearing) else trailFollower.start(points)
-                refreshTrailGuidanceFromLatestLocation(resetOrdinaryThrottle = true)
-                backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, true)
-                startLocationService()
-                announce(
-                    buildTrailStartAnnouncement(
-                        "Following $name${if (reversed) " in reverse" else ""}",
-                        points,
-                        loc,
-                    ),
-                    kind = OutputKind.TRAIL_STARTED,
-                    category = OutputCategory.NAVIGATION,
-                    origin = OutputOrigin.INTERACTION_CONFIRMATION,
+
+                    is ArmingResult.Resolved ->
+                        beginFollow(trailId, reversed, name, isRecorded, recordedPoints, points, direction, armed.anchor, loc)
+                }
+            }
+        }
+
+        /** Answers [followPrompt] with the option at [optionIndex] and resumes the follow it forked from. */
+        fun resolveFollowFork(optionIndex: Int) {
+            val pending = pendingFollow ?: return
+            val option = pending.options.getOrNull(optionIndex) ?: return
+            pendingFollow = null
+            _followPrompt.value = null
+            viewModelScope.launch {
+                beginFollow(
+                    pending.trailId,
+                    pending.reversed,
+                    pending.name,
+                    pending.isRecorded,
+                    pending.recordedPoints,
+                    pending.points,
+                    pending.direction,
+                    option.anchor,
+                    pending.loc,
                 )
             }
+        }
+
+        /** Answers [followPrompt] by starting nothing at all. */
+        fun cancelFollowFork() {
+            pendingFollow = null
+            _followPrompt.value = null
+            announce(
+                "Follow cancelled",
+                kind = OutputKind.TRAIL_STOPPED,
+                category = OutputCategory.NAVIGATION,
+                origin = OutputOrigin.INTERACTION_CONFIRMATION,
+            )
+        }
+
+        /**
+         * A fork option's spoken label, built from its geometry (ADR 0002 §4) — `shared` never learns
+         * about phrasing. Direction is named rather than left implicit because the two options can
+         * point opposite ways along the same ground.
+         */
+        private fun forkOptionLabel(
+            option: AnchorOption,
+            direction: TravelDirection,
+        ): String {
+            val distance = formatSpokenDistance(option.remainingM, settings.value.units)
+            return when {
+                option.revisitsStartPoint -> "The loop — $distance, comes back past here"
+                direction == TravelDirection.Forward -> "On to the end — $distance"
+                else -> "Back to the start — $distance"
+            }
+        }
+
+        /** Seeds and starts both consumers from a resolved [anchor] (ADR 0002 §3), then announces the start. */
+        private suspend fun beginFollow(
+            trailId: Long,
+            reversed: Boolean,
+            name: String,
+            isRecorded: Boolean,
+            recordedPoints: List<LatLng>,
+            points: List<TrailPoint>,
+            direction: TravelDirection,
+            anchor: TrailPosition,
+            loc: LatLng?,
+        ) {
+            _selectedTrailId.value = trailId
+            enterFollowing(trailId)
+            // Drop the outgoing follow's cues before installing the new session, not after the
+            // (suspend) annotation query below. Nothing yields between here and the assignment
+            // today — TrailAnnotationRepositoryImpl.forTrail never actually suspends — but that
+            // is an implementation detail of one repository this call does not own, and the day
+            // it (or an iOS implementation) does suspend, a fix for a *different* trail landing
+            // mid-window must not be answered with a still-active previous trail's producers.
+            followCues = null
+            guidanceCoordinator.startFollow(
+                points = recordedPoints,
+                direction = direction,
+                isRecorded = isRecorded,
+                seedAlongM = anchor.alongTrackM,
+            )
+            // S6 follow cues (ADR 0001). Built from guidanceCoordinator's own polyline — just
+            // constructed by startFollow above from these same points — rather than a second
+            // TrailPolyline built here from `wps`, so an annotation's alongTrackM is guaranteed
+            // comparable with TrailMatch.confirmedAlongM instead of merely expected to match a
+            // separately-built geometry. The same polyline is what `followerIndexFor` below needs
+            // too — see its doc for why an independently-built one would misread `cumulativeM`.
+            val polyline = guidanceCoordinator.followSession!!.polyline
+            val annotations =
+                annotationRepo.forTrail(trailId).map { a ->
+                    RouteAnnotation(
+                        id = a.id,
+                        name = a.waypoint.name,
+                        alongTrackM = polyline.alongTrackFor(a.segmentIndex, a.offsetM),
+                        // project(point, window = null) always finds a position on a non-empty
+                        // polyline; the fallback exists only to satisfy the type system.
+                        signedCrossTrackM =
+                            polyline.project(LatLng(a.waypoint.lat, a.waypoint.lon))?.crossTrackM ?: 0.0,
+                    )
+                }
+            followCues =
+                FollowCueProducers(
+                    progress = ProgressCueProducer(),
+                    annotation = AnnotationCueProducer(annotations, direction),
+                    matchState = MatchStateCueProducer(),
+                )
+            trailFollower.start(points, fromIndex = followerIndexFor(polyline, anchor, direction))
+            refreshTrailGuidanceFromLatestLocation(resetOrdinaryThrottle = true)
+            backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, true)
+            startLocationService()
+            announce(
+                buildTrailStartAnnouncement(
+                    "Following $name${if (reversed) " in reverse" else ""}",
+                    points,
+                    loc,
+                ),
+                kind = OutputKind.TRAIL_STARTED,
+                category = OutputCategory.NAVIGATION,
+                origin = OutputOrigin.INTERACTION_CONFIRMATION,
+            )
         }
 
         /** Select [trailId] and begin auto-recording onto it; used by Trails-screen record requests. */

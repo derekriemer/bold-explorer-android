@@ -36,15 +36,20 @@ import com.boldexplorer.shared.model.LocationSample
  *   thinks. A hand-built route's polyline is invented — straight lines between waypoints nobody
  *   walked — so departing from it is evidence the path is not a line, not that the walker left it.
  *   Defaults true so every existing caller and test keeps today's behaviour.
+ * @param seedAlongM where the walk was armed — [FollowArming]'s chosen anchor, in recorded
+ *   along-track metres. `null` (the default) means no arming happened, so every existing caller and
+ *   test keeps today's cross-track-first acquisition without edits. See
+ *   [ProgressTracker.acquisitionPriorM].
  */
 class FollowSession(
     points: List<LatLng>,
     val direction: TravelDirection,
     tuning: MatchTuning = MatchTuning.DEFAULT,
     val isRecorded: Boolean = true,
+    seedAlongM: Double? = null,
 ) {
     val polyline = TrailPolyline(points)
-    private val tracker = ProgressTracker(polyline, direction, tuning)
+    private val tracker = ProgressTracker(polyline, direction, tuning, seedAlongM)
     private val evidence = MatchEvidenceRecorder(polyline)
 
     /** The most recent match. Null before the first fix. */

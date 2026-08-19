@@ -126,8 +126,8 @@ class TrailCompletionTest {
 
     @Test
     fun coldFollowAtTheEndDoesNotComplete() {
-        // The radius is not a second, ungated route to completion. `startNearest` picks the
-        // waypoint nearest the user, so a follow begun at a loop's trailhead — which is also its
+        // The radius is not a second, ungated route to completion. Arming (ADR 0002) can anchor at
+        // the walker's actual position, so a follow begun at a loop's trailhead — which is also its
         // final track point — starts with the index at the end and the user inside the 5–6 m
         // radius. Ungated, the first fix announces the trail complete before a step is taken.
         val f = followerAtFinalLeg()

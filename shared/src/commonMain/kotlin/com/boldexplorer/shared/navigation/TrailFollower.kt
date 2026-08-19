@@ -84,45 +84,6 @@ class TrailFollower(
         _state.value = TrailFollowerState.Active(waypoints, idx, thresholdM)
     }
 
-    /**
-     * Start from whichever waypoint is nearest to [location].
-     *
-     * When [bearingDeg] is provided, waypoints more than 90° behind the user are discarded
-     * and the winner is the lowest combined score of distance × heading penalty.
-     * If all waypoints are behind the user, falls back to nearest by distance.
-     */
-    fun startNearest(
-        waypoints: List<TrailPoint>,
-        location: LatLng,
-        bearingDeg: Float? = null,
-        thresholdM: Double = defaultThresholdM,
-    ) {
-        if (waypoints.isEmpty()) return
-        val nearestIdx =
-            if (bearingDeg == null) {
-                waypoints.indices.minByOrNull { i ->
-                    haversineDistanceMeters(location, LatLng(waypoints[i].lat, waypoints[i].lon))
-                } ?: 0
-            } else {
-                val aheadCandidates =
-                    waypoints.indices.filter { i ->
-                        val wpBearing = initialBearingDeg(location, LatLng(waypoints[i].lat, waypoints[i].lon))
-                        angleDifferenceDeg(bearingDeg.toDouble(), wpBearing) <= 90.0
-                    }
-                // Fall back to all candidates when every waypoint is behind the user.
-                val pool = aheadCandidates.ifEmpty { waypoints.indices.toList() }
-                pool.minByOrNull { i ->
-                    val dist = haversineDistanceMeters(location, LatLng(waypoints[i].lat, waypoints[i].lon))
-                    val wpBearing = initialBearingDeg(location, LatLng(waypoints[i].lat, waypoints[i].lon))
-                    val penalty = angleDifferenceDeg(bearingDeg.toDouble(), wpBearing)
-                    dist * (1.0 + penalty / 90.0)
-                } ?: 0
-            }
-        closestApproachM = Double.MAX_VALUE
-        positionAtLastAdvance = null
-        _state.value = TrailFollowerState.Active(waypoints, nearestIdx, thresholdM)
-    }
-
     fun stop() {
         closestApproachM = Double.MAX_VALUE
         positionAtLastAdvance = null
@@ -191,13 +152,13 @@ class TrailFollower(
         //    out (the ~65 ft field report). Completion instead uses a radius that tightens with
         //    good GPS and is capped so poor GPS can never widen it.
         //
-        //    Gated on the *same* travel evidence as 0a, and for the same reason. `startNearest`
-        //    picks the waypoint nearest the user, so a follow begun at a loop's trailhead — which
-        //    is also its final track point — starts with the index already at the end and the user
-        //    inside a 5–6 m radius of it. Ungated, that announces the trail complete on the first
-        //    fix, before a step has been taken.
+        //    Gated on the *same* travel evidence as 0a, and for the same reason. Arming (ADR 0002)
+        //    can anchor at the walker's actual position, so a follow begun at a loop's trailhead —
+        //    which is also its final track point — starts with the index already at the end and the
+        //    user inside a 5–6 m radius of it. Ungated, that announces the trail complete on the
+        //    first fix, before a step has been taken.
         if (current.currentIndex == current.waypoints.size - 1) {
-            return if (completion.travelled && d <= completionRadiusM(accuracyM)) {
+            return if (completion.travelled && d <= NavigationPolicy.completionRadiusM(accuracyM)) {
                 fireAdvance(current, location, altitudeM, null, null, null, "endpoint", accuracyM = accuracyM)
             } else {
                 null
@@ -292,27 +253,36 @@ class TrailFollower(
         }
     }
 
-    /**
-     * Radius around the trail's end within which completion may fire.
-     *
-     * `min(ceiling, max(floor, factor × accuracy))`. Good GPS **tightens** the radius below the
-     * default; poor GPS clamps at the ceiling and can never widen it. This is the inverse of the
-     * `max(floor, factor × accuracy)` pattern used elsewhere in the codebase, which expands the
-     * acceptance region exactly when the fix is least trustworthy.
-     *
-     * Android reports accuracy as a 68% (1σ) horizontal radius, so a factor of 2 is roughly 95%
-     * containment rather than an arbitrary multiplier. A null accuracy carries no information, so
-     * it falls back to the ceiling — the behaviour before this policy existed.
-     */
-    private fun completionRadiusM(accuracyM: Double?): Double =
-        NavigationPolicy.tightenWithAccuracy(
-            ceilingM = NavigationPolicy.COMPLETION_CEILING_M,
-            floorM = NavigationPolicy.COMPLETION_FLOOR_M,
-            factor = NavigationPolicy.COMPLETION_SIGMA_FACTOR,
-            accuracyM = accuracyM,
-        )
-
     /** Whether the fix is too uncertain to assert arrival plainly. */
     private fun shouldHedgeCompletion(accuracyM: Double?): Boolean =
         accuracyM != null && accuracyM > NavigationPolicy.COMPLETION_HEDGE_ABOVE_M
+}
+
+/**
+ * Maps [anchor] — a recorded along-track position, [FollowArming]'s chosen anchor — to the
+ * traversal-order index [TrailFollower.start] should arm from.
+ *
+ * [TrailFollower.start] takes `waypoints` in **traversal order** (recorded order for `Forward`,
+ * reversed for `Reverse`), while `anchor.alongTrackM` is always in **recorded** along-track — the
+ * same disagreement [FollowSession] exists to keep straight for the matcher. This is that
+ * conversion for the follower: find the recorded vertex the anchor sits at or just ahead of (in the
+ * requested direction), then translate that recorded index into a traversal one.
+ *
+ * ADR 0002 §3. `poly` must be the same polyline `waypoints` was built from, in the same recorded
+ * order — [FollowSession.polyline], not a second one reconstructed from `waypoints` itself, which
+ * for a reverse follow is already traversal-ordered and would misread `cumulativeM`.
+ */
+fun followerIndexFor(
+    poly: TrailPolyline,
+    anchor: TrailPosition,
+    direction: TravelDirection,
+): Int {
+    val recordedIndex =
+        when (direction) {
+            TravelDirection.Forward ->
+                (0 until poly.size).firstOrNull { poly.cumulativeM[it] >= anchor.alongTrackM } ?: poly.size - 1
+            TravelDirection.Reverse ->
+                (poly.size - 1 downTo 0).firstOrNull { poly.cumulativeM[it] <= anchor.alongTrackM } ?: 0
+        }
+    return if (direction == TravelDirection.Forward) recordedIndex else poly.size - 1 - recordedIndex
 }

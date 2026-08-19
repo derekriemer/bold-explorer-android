@@ -403,31 +403,6 @@ class TrailFollowerTest {
         assertEquals(2, (f.state.value as TrailFollowerState.Active).currentIndex)
     }
 
-    // ── startNearest with bearing ─────────────────────────────────────────────────
-
-    @Test
-    fun startNearest_bearingPrefersAheadWaypoint() {
-        // User at (0,0) heading north (bearingDeg=0). Two waypoints: ahead and behind.
-        // Ahead: (0.001,0) ~111m north. Behind: (-0.0005,0) ~55m south.
-        // Without bearing, the south (closer) waypoint wins. With bearing, north wins.
-        val ahead = TrailPoint(60, "Ahead", 0.001, 0.0)
-        val behind = TrailPoint(61, "Behind", -0.0005, 0.0)
-        val f = TrailFollower()
-        f.startNearest(listOf(ahead, behind), LatLng(0.0, 0.0), bearingDeg = 0f)
-        val state = f.state.value as TrailFollowerState.Active
-        assertEquals(0, state.currentIndex, "should select ahead waypoint when bearing is provided")
-    }
-
-    @Test
-    fun startNearest_fallsBackToNearestWhenAllBehind() {
-        // User heading north (0°); only waypoint is directly south.
-        // All candidates are > 90° off — fallback to nearest by distance, no crash.
-        val south = TrailPoint(62, "South", -0.001, 0.0)
-        val f = TrailFollower()
-        f.startNearest(listOf(south), LatLng(0.0, 0.0), bearingDeg = 0f)
-        assertIs<TrailFollowerState.Active>(f.state.value)
-    }
-
     // ── onAdvancement callback ────────────────────────────────────────────────────
 
     @Test

@@ -299,6 +299,21 @@ object NavigationPolicy {
     /** Above this accuracy the arrival announcement hedges rather than asserts. */
     const val COMPLETION_HEDGE_ABOVE_M = 10.0
 
+    /**
+     * Radius around a trail's end within which completion may fire.
+     *
+     * Lived as a private helper on [TrailFollower] until ADR 0002 gave arming a second caller: the
+     * dead-end test that refuses to anchor a follow where it would complete on its first fix. Two
+     * copies of "where does the trail end" would be two chances to disagree.
+     */
+    fun completionRadiusM(accuracyM: Double?): Double =
+        tightenWithAccuracy(
+            ceilingM = COMPLETION_CEILING_M,
+            floorM = COMPLETION_FLOOR_M,
+            factor = COMPLETION_SIGMA_FACTOR,
+            accuracyM = accuracyM,
+        )
+
     // ── Continuous matching: the reacquisition ladder (ProgressTracker) ──────────────────────
     //
     // Unlike everything above, these are NOT relocated values — they are new, and they are
@@ -405,6 +420,29 @@ object NavigationPolicy {
      * Only tied candidates are ranked by prediction. A candidate that is plainly nearer wins on
      * geometry alone — prediction ranks, it does not constrain.
      */
+    /**
+     * Arming: how far apart two strands of stored geometry can be and still be one path recorded
+     * twice. ADR 0002 §5.
+     *
+     * A **recording**-spread question, not a fix-quality one: the two passes at the measured lake
+     * loop junction are 16.6 m apart because both were recorded through GPS error, on different days
+     * and opposite traversals, and today's good fix does not shrink that. So this never narrows with
+     * a good fix — it only widens with a poor one, which is the opposite of the acceptance-gate
+     * convention above and safe for the same reason it is unsafe there: nothing is accepted here, the
+     * output is a question, and asking one option too many is cheaper than silently deleting a
+     * continuation the walker wanted.
+     *
+     * Deliberately not [NEAR_TRAIL_FLOOR_M], whose value is identical but measures the walker's
+     * distance to a trail rather than the distance between two pieces of one.
+     */
+    const val SAME_PATH_BASE_M = 20.0
+
+    /** Multiplier on accuracy when it exceeds [SAME_PATH_BASE_M]. ~95% containment on Android's 1σ figure. */
+    const val SAME_PATH_ACCURACY_FACTOR = 2.0
+
+    /** Ceiling on the same-path radius: a strand the matcher would not accept is not a continuation. */
+    const val SAME_PATH_CAP_M = MATCH_GATE_CAP_M
+
     const val CANDIDATE_TIE_M = 5.0
 
     /** Reckoned distance past which continuity is declared gone, in metres. */

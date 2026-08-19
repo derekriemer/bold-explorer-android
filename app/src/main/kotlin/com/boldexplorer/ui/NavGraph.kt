@@ -1,12 +1,15 @@
 package com.boldexplorer.ui
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -54,6 +57,7 @@ private sealed class Screen(
 fun NavGraph() {
     val gpsVm: GpsViewModel = hiltViewModel()
     val announcement by gpsVm.announcement.collectAsStateWithLifecycle()
+    val followPrompt by gpsVm.followPrompt.collectAsStateWithLifecycle()
 
     val navController = rememberNavController()
     val screens =
@@ -112,6 +116,34 @@ fun NavGraph() {
                             contentDescription = announcement.text
                         },
             )
+            // ADR 0002 §4: blocks a follow that has more than one live continuation from the
+            // walker's position, reachable from both entry points to `followTrailById` — including
+            // the Trails-screen one, which never navigates to the GPS tab. AlertDialog's own title
+            // is read automatically when TalkBack focus lands on it, so no separate announce() call
+            // is needed to speak the prompt appearing.
+            val prompt = followPrompt
+            if (prompt != null) {
+                AlertDialog(
+                    onDismissRequest = gpsVm::cancelFollowFork,
+                    title = { Text("The trail passes here more than once") },
+                    text = {
+                        Column {
+                            prompt.options.forEachIndexed { index, option ->
+                                // a11y: each option's label is the whole spoken phrase (distance and
+                                // consequence included), not a name — visible text alone is the
+                                // complete choice, so no contentDescription is needed here.
+                                TextButton(onClick = { gpsVm.resolveFollowFork(index) }) {
+                                    Text(option.label)
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {},
+                    dismissButton = {
+                        TextButton(onClick = gpsVm::cancelFollowFork) { Text("Cancel") }
+                    },
+                )
+            }
             NavHost(navController = navController, startDestination = Screen.Gps.route) {
                 composable(Screen.Gps.route) { GpsRoute(innerPadding, gpsVm) }
                 composable(Screen.Waypoints.route) { WaypointsScreen(innerPadding) }

@@ -217,20 +217,33 @@ That needs continuity or #59's graph, not an arming-time question.
 
 ### 3. The anchor seeds both consumers
 
-**`ProgressTracker` gains an acquisition prior** and loses its private tie-break:
+**`ProgressTracker` gains an acquisition prior**, nullable:
 
-- constructor takes `acquisitionPriorM: Double`, defaulted from the parameters before it —
-  `= if (travelDirection == TravelDirection.Forward) 0.0 else polyline.totalLengthM` — so a prior
-  always exists and every existing test constructs the tracker unchanged.
-- `FollowSession` takes `seedAlongM: Double? = null` and passes `seedAlongM ?: <that same default>`,
-  so existing callers and tests keep today's behaviour without edits.
-- `acquire` replaces `tieBreakByDirection(found)` with: among candidates **that pass the gate**, take
-  the one minimising `abs(alongTrackM - acquisitionPriorM)`. Not a tie-break — the selection rule.
-- `tieBreakByDirection` is deleted. It has no remaining caller, and a prior sitting at the traversal
-  start reproduces exactly what it used to do — which is test 12 below.
+- constructor takes `acquisitionPriorM: Double? = null`. **Amendment, found in implementation
+  review:** the first draft of this ADR defaulted it to the traversal start
+  (`if (travelDirection == Forward) 0.0 else polyline.totalLengthM`) rather than `null`, reasoning
+  that "a prior always exists and every existing test constructs the tracker unchanged." That claim
+  was false. `BacktrackAlongTrackTest.switchbackTeleportDoesNotClaimWrongWay` starts a follow with no
+  seed on a 12 m-gap switchback, from a fix sitting on the return arm (0 m cross-track) with the
+  outbound arm 12 m away. The traversal-start default pulled acquisition onto the outbound arm — 12 m
+  off cross-track, but nearer the placeholder `0.0` along-track — because the selection rule reads
+  only along-track distance to the prior, never cross-track, once a candidate clears the gate. A
+  caller that never armed anything was not, in fact, unchanged.
+- `null` therefore means "no arming happened" — not "prior at the traversal start" — and `acquire`
+  runs one of two rules:
+  - **prior set:** among candidates **that pass the gate**, take the one minimising
+    `abs(alongTrackM - acquisitionPriorM)`. Not a tie-break — the selection rule, for the reasoning
+    below.
+  - **prior null:** `tieBreakByDirection` — cross-track first, direction breaking only a near-tie
+    (`candidateTieM`). Exactly today's rule, kept rather than deleted, for every caller not yet wired
+    to `FollowArming`.
+- `FollowSession` takes `seedAlongM: Double? = null` and passes it straight through — no default
+  resolved on its behalf — so existing callers and tests keep today's behaviour without edits.
 - No `acquisitionTieM`. An earlier draft consulted the prior only among candidates whose cross-track
   distances were within a tolerance of each other, which needed a constant *and* left the choice to
-  geometry whenever the tolerance was exceeded.
+  geometry whenever the tolerance was exceeded. This is a different knob from the traversal-start
+  default above — it would have blended prior and geometry for a prior that *does* exist, where the
+  amendment is about what happens when one doesn't.
 
 **Why the prior binds rather than nudges.** A tie-break is weaker than what the dialog promised. If
 the walker picks pass A, then GPS wanders while they are answering — a dialog can stand open for
@@ -333,6 +346,12 @@ strand and delete the fork this ADR exists to produce.
 Step 5's dead-end test adds none: it reads the completion radius, so arming and completion cannot
 disagree about where the trail ends. Step 3's gate reads the match gate for the same reason.
 
+Note the two interact: at a good fix the match gate is 25 m and the same-path radius is 20 m, so step
+4 only decides strands in the 20–25 m band — beyond that the gate has already discarded them. The
+gate is the outer authority and this is the inner one, which is why the adversarial switchback fixture
+is 22 m rather than the 40 m an earlier draft of this table named: a 40 m arm never reaches step 4 at
+all, so it would have tested the gate while claiming to test same-ground.
+
 This is a **spatial resolution**, not a topology classifier. It answers whether two strands are close
 enough to be one path recorded twice, and answers it identically for a lollipop stick, a figure-eight
 crossing, a hairpin and a switchback. It performs no shape detection and reads no along-track
@@ -356,10 +375,10 @@ be wrong in.
 | --- | --- |
 | `shared/.../navigation/FollowArming.kt` | new — `ArmingResult`, `ArmingTuning`, §1, §2 |
 | `shared/.../navigation/NavigationPolicy.kt` | the three same-ground values (base/factor/cap), plus `completionRadiusM` promoted from `TrailFollower` |
-| `shared/.../navigation/ProgressTracker.kt` | `acquisitionPriorM`; `acquire` uses it; delete `tieBreakByDirection` |
-| `shared/.../navigation/FollowSession.kt` | `seedAlongM` parameter, passed to the tracker |
+| `shared/.../navigation/ProgressTracker.kt` | nullable `acquisitionPriorM`; `acquire` selects by it when set, else keeps `tieBreakByDirection` as the fallback |
+| `shared/.../navigation/FollowSession.kt` | `seedAlongM` parameter, passed straight to the tracker |
 | `shared/.../navigation/TrailGuidanceCoordinator.kt` | `startFollow` takes `seedAlongM` |
-| `shared/.../navigation/TrailFollower.kt` | delete `startNearest`; `completionRadiusM` moves to `NavigationPolicy` and is called from there |
+| `shared/.../navigation/TrailFollower.kt` | delete `startNearest`; add `followerIndexFor`; `completionRadiusM` moves to `NavigationPolicy` and is called from there |
 | `app/.../ui/gps/GpsViewModel.kt` | resolve once; seed both; `followPrompt`; `resolveFollowFork`; `cancelFollowFork` |
 | `app/.../ui/NavGraph.kt` | the fork dialog |
 | `shared/.../navigation/TrailFixtures.kt` | make `offsetFromOrigin(northM, eastM)` public here and have `WalkScenario` use it, so hand-built and scrubbed fixtures share one origin |
@@ -411,7 +430,7 @@ than literals. This is the fixture that exercises the same-ground radius: the tw
 | 10 | mid-leg of a straight fixture | either | `Resolved`, one candidate — regression guard |
 | 10a | 30 m up the stick (0, 30) | Reverse | `Fork`, options `[30 (remaining ≈ 30), 3470 (remaining ≈ 3470)]` — §2's row 4, otherwise unreachable |
 | 10b | 30 m up the stick (0, 30) | Forward | `Fork`; the two options are the loop (≈ 3470 m) and the walk out (≈ 30 m) |
-| 10c | 8 m up the stick (0, 8), `accuracyM = 6.0` | Reverse | radius is `min(15, max(5, 2 × 6)) = 12`, so the 8 m candidate is dropped and the anchor is ≈ 3500 — the follow that exists rather than the one that would complete on its first fix |
+| 10c | 8 m up the stick (0, 8), `accuracyM = 6.0` | Reverse | radius is `min(15, max(5, 2 × 6)) = 12`, so the 8 m candidate is dropped and the anchor is the return strand at ≈ 3492 — the follow that exists rather than the one that would complete on its first fix. **Not** 3500: the walker is 8 m from the trailhead on *either* strand, so the surviving anchor is 8 m short of the far end, not at it |
 | 10d | same position, `accuracyM = 2.0` | Reverse | radius is 5, so both candidates survive and it forks — a good fix earns the choice a poor fix cannot support |
 | 10e | anywhere on the candy, either direction | either | `Resolved` — one candidate, no prompt; the loop itself is not doubled ground |
 
@@ -423,21 +442,23 @@ disagree, so a future edit that reintroduces the former fails here rather than i
 | --- | --- | --- | --- |
 | `SmallLoop` | 30 m stick, 100 m loop, 30 m stick back (160 m total) | mid-stick | `Fork` — the two occurrences are 130 m apart along-track, which a 150 m collapse would have eaten, and 0 m apart on the ground |
 | `Hairpin` | two 200 m arms 10 m apart, 400 m apart along-track | on one arm | `Fork` — **intended**: at 10 m separation no fix this app receives can say which arm the walker is on, so both are offered |
-| `Switchback` | two 200 m arms 40 m apart | on one arm | `Resolved` — 40 m exceeds the tie, so the far arm is discarded and no prompt appears |
-| `TightSwitchback` | the same, arms 15 m apart | on one arm | `Fork` — inside the 20 m base at any accuracy, and unfixable by tuning (§5); asserted so the limitation is visible rather than discovered |
-| `Switchback`, `accuracyM = 20.0` | arms 40 m apart, poor fix | on one arm | `Fork` — the radius widens to 40 and the far arm re-enters. The accuracy-widening guard: the same geometry answers differently when the fix is worse, in the direction of asking |
+| `Switchback` | two 200 m arms 22 m apart | on one arm | `Resolved` — 22 m exceeds the 20 m same-path radius, so the far arm is discarded and no prompt appears |
+| `TightSwitchback` | the same, arms 10 m apart | on one arm | `Fork` — inside the 20 m base at any accuracy, and unfixable by tuning (§5); asserted so the limitation is visible rather than discovered |
+| `Switchback`, `accuracyM = 20.0` | arms 22 m apart, poor fix | on one arm | `Fork` — the radius widens to 40 and the far arm re-enters. The accuracy-widening guard: the same geometry answers differently when the fix is worse, in the direction of asking |
 | `FigureEight` | compact crossing, both lobes ≈ 300 m | at the crossing | `Fork`, exactly two options |
 | `TriplePass` | a stem walked out, back, and out again | mid-stem | `Fork` with **three** options, and a dialog rendering three buttons — the arbitrary-N guard |
 
 `ProgressTrackerArmingTest`:
 
 11. Jittered fixture, prior 475, direction Reverse, first fix at (0, 475): acquires ≈ 475, not ≈ 3025.
-    This is the case today's `tieBreakByDirection` gets wrong, and it is the reason the prior exists.
+    Basic regression coverage for the prior-set codepath at an everyday reverse acquisition.
 11a. **The split-brain guard.** Jittered fixture, prior on the outbound pass, first fix placed so the
     *return* pass has the smaller cross-track — the walker chose A and GPS then drifted toward B.
-    Acquisition must still return A. Under a tie-break prior it returns B while the follower stays on
-    A, which is the split-brain this ADR claims to make unrepresentable; under the selection-rule
-    prior it cannot. Fails loudly if anyone reintroduces a tolerance around the prior.
+    Acquisition must still return A. This is the case the null-prior fallback (`tieBreakByDirection`)
+    actually gets wrong: not tied (15 m > `candidateTieM`), so it returns whichever candidate is
+    geometrically nearest — B — while the follower stays armed on A. That is the split-brain this ADR
+    claims to make unrepresentable, recreated one layer down. Under the selection-rule prior it
+    cannot happen. Fails loudly if anyone reintroduces a tolerance around the prior.
 12. Prior at the traversal start on a closed fixture reproduces today's forward/reverse acquisition,
     proving the deletion is behaviour-preserving where it should be.
 
@@ -485,31 +506,34 @@ being wrong is a finding about this ADR, not a test to fix.
 
 ### Shared: arming
 
-- [ ] `NavigationPolicy` — add `SAME_PATH_BASE_M`, `SAME_PATH_ACCURACY_FACTOR`, `SAME_PATH_CAP_M`;
+- [x] `NavigationPolicy` — add `SAME_PATH_BASE_M`, `SAME_PATH_ACCURACY_FACTOR`, `SAME_PATH_CAP_M`;
       move `completionRadiusM` here from `TrailFollower`'s private copy and have `TrailFollower` call it.
-- [ ] `TrailFixtures.kt` — make `offsetFromOrigin(northM, eastM)` public; point `WalkScenario` at it.
-- [ ] `LollipopFixture.kt` — the 3500 m lollipop and its 15 m-jittered variant (§ *The fixture*).
-- [ ] `FollowArming.kt` — `ArmReason`, `AnchorOption`, `ArmingResult` (with `require(options.size >= 2)`
+- [x] `TrailFixtures.kt` — make `offsetFromOrigin(northM, eastM)` public; point `WalkScenario` at it.
+- [x] `LollipopFixture.kt` — the 3500 m lollipop and its 15 m-jittered variant (§ *The fixture*).
+- [x] `FollowArming.kt` — `ArmReason`, `AnchorOption`, `ArmingResult` (with `require(options.size >= 2)`
       on `Fork`), `ArmingTuning`, and `resolve()` implementing steps 1–7 in order.
-- [ ] `FollowArmingTest` — cases 1–10e. Gate: `make test-shared`.
-- [ ] Adversarial fixtures + tests — `SmallLoop`, `Hairpin`, `Switchback` (both accuracies),
+- [x] `FollowArmingTest` — cases 1–10e. Gate: `make test-shared`.
+- [x] Adversarial fixtures + tests — `SmallLoop`, `Hairpin`, `Switchback` (both accuracies),
       `TightSwitchback`, `FigureEight`, `TriplePass`. Gate: `make test-shared`.
 
 ### Shared: seeding both consumers
 
-- [ ] `ProgressTracker` — `acquisitionPriorM` constructor parameter with the direction-derived default;
-      `acquire` selects by nearest-to-prior among gate-passing candidates; delete `tieBreakByDirection`.
-- [ ] `FollowSession` — `seedAlongM: Double? = null`, resolved to the same default and passed down.
-- [ ] `TrailGuidanceCoordinator.startFollow` — accept and forward `seedAlongM`.
-- [ ] `TrailFollower` — delete `startNearest` and its tests.
-- [ ] `ProgressTrackerArmingTest` — 11, **11a (the split-brain guard)**, 12. Gate: `make test-shared`.
-- [ ] `TrailFollowerArmingTest` — 13–15. Gate: `make test-shared` clean, whole suite.
+- [x] `ProgressTracker` — nullable `acquisitionPriorM` constructor parameter (default `null`, **not**
+      the direction-derived traversal start — see the Amendment in §3); `acquire` selects by
+      nearest-to-prior among gate-passing candidates when set, else falls back to
+      `tieBreakByDirection` (kept, not deleted).
+- [x] `FollowSession` — `seedAlongM: Double? = null`, passed straight to the tracker, no default
+      resolved on its behalf.
+- [x] `TrailGuidanceCoordinator.startFollow` — accept and forward `seedAlongM`.
+- [x] `TrailFollower` — delete `startNearest` and its tests; add `followerIndexFor`.
+- [x] `ProgressTrackerArmingTest` — 11, **11a (the split-brain guard)**, 12. Gate: `make test-shared`.
+- [x] `TrailFollowerArmingTest` — 13–15. Gate: `make test-shared` clean, whole suite.
 
 ### App
 
-- [ ] `GpsViewModel.followTrailById` — resolve the anchor once; seed the session and the follower from
+- [x] `GpsViewModel.followTrailById` — resolve the anchor once; seed the session and the follower from
       it; `followPrompt`, `resolveFollowFork(optionIndex)`, `cancelFollowFork()`.
-- [ ] `NavGraph` — the fork `AlertDialog` beside the live region, buttons generated from `options`.
+- [x] `NavGraph` — the fork `AlertDialog` beside the live region, buttons generated from `options`.
 - [ ] Device check with TalkBack: fork dialog reachable from the **Trails** screen entry point (the one
       that does not navigate to the GPS tab), button labels read as whole phrases, Cancel starts nothing.
 

@@ -74,11 +74,20 @@ import kotlin.math.roundToInt
  * @param tuning the numeric thresholds. Defaults to the shipping values; a parameter so a recorded
  *   walk can be replayed against candidate values offline rather than by walking it again. See
  *   [MatchTuning].
+ * @param acquisitionPriorM where on the trail the walk was armed — [FollowArming]'s chosen anchor,
+ *   in recorded along-track metres, or `null` when nothing armed it explicitly. Constrains only the
+ *   first fix: see [acquire]. `null` is not "prior at the traversal start" — a caller that has not
+ *   been wired to [FollowArming] keeps today's cross-track-first acquisition exactly, rather than
+ *   being pulled toward an arbitrary placeholder position it never actually stood at. Found in
+ *   review: an earlier draft defaulted this to the traversal start, which changed acquisition for
+ *   every unseeded caller whenever a farther candidate happened to be nearer that placeholder than
+ *   the geometrically correct one was — see `BacktrackAlongTrackTest.switchbackTeleportDoesNotClaimWrongWay`.
  */
 class ProgressTracker(
     private val polyline: TrailPolyline,
     private val travelDirection: TravelDirection = TravelDirection.Forward,
     private val tuning: MatchTuning = MatchTuning.DEFAULT,
+    private val acquisitionPriorM: Double? = null,
 ) {
     /** The most recent match, or `null` before the first fix. */
     var match: TrailMatch? = null
@@ -376,18 +385,28 @@ class ProgressTracker(
     }
 
     /**
-     * The first match of a session, which has no prior to constrain it.
+     * The first match of a session, which has no prior confirmed position to constrain it.
      *
-     * On a loop — or any trail whose ends are within GPS accuracy of each other — the fix projects
-     * onto two candidates with near-zero cross-track, at `0` and at `totalLengthM`. Cross-track
-     * cannot choose between them and continuity does not exist yet, so the declared travel
-     * direction breaks the tie: it is precisely the information the geometry lacks.
+     * Two modes, depending on whether [acquisitionPriorM] is set:
+     *
+     * With a prior — a walk [FollowArming] actually anchored — the candidate nearest the prior wins,
+     * among those that pass the gate. This is a selection rule, not a tie-break: it is consulted for
+     * every acquisition, not only when candidates are geometrically close, because the alternative —
+     * preferring the nearer candidate and falling back to the prior only on a near-tie — is exactly
+     * the split-brain ADR 0002 §3 exists to make unrepresentable. If GPS drift makes a candidate
+     * other than the one the walker chose geometrically nearer, the prior still wins.
+     *
+     * Without one — every caller not yet wired to [FollowArming] — acquisition falls back to
+     * [tieBreakByDirection]: cross-track first, direction breaking only a near-tie. This is
+     * deliberately the pre-ADR-0002 behaviour, unchanged, because `null` here does not mean "prior at
+     * the traversal start" — that placeholder pulled acquisition toward the wrong candidate whenever
+     * a farther, off-trail one happened to be nearer it than the geometrically correct one was. See
+     * `BacktrackAlongTrackTest.switchbackTeleportDoesNotClaimWrongWay`, found in review.
      *
      * Acquisition commits directly to [MatchState.Matched] rather than going through corroboration.
      * Requiring displacement here would mean saying nothing at all at follow-start, and the tie is
-     * already guarded twice — by the direction preference here, and by the confirmed-travel
-     * requirement on completion, which is what makes a wrong choice harmless rather than merely
-     * unlikely.
+     * already guarded twice — by the selection rule here, and by the confirmed-travel requirement on
+     * completion, which is what makes a wrong choice harmless rather than merely unlikely.
      */
     private fun acquire(
         point: LatLng,
@@ -396,14 +415,20 @@ class ProgressTracker(
         accuracyM: Double?,
     ): TrailMatch {
         val found = polyline.candidates(point, window = null)
-        val chosen = tieBreakByDirection(found)
+        val prior = acquisitionPriorM
+        val chosen =
+            if (prior != null) {
+                found.filter { abs(it.crossTrackM) <= gateM }.minByOrNull { abs(it.alongTrackM - prior) }
+            } else {
+                tieBreakByDirection(found)
+            }
         val rejected = found.firstOrNull { it !== chosen }
 
         if (chosen == null || abs(chosen.crossTrackM) > gateM) {
             state = MatchState.Lost
             unmatchedCount++
             return emit(
-                chosen = chosen,
+                chosen = chosen ?: found.minByOrNull { abs(it.crossTrackM) },
                 bestRejected = rejected,
                 uncertainSec = 0.0,
                 scanKind = ScanKind.Global,
@@ -422,8 +447,28 @@ class ProgressTracker(
             scanKind = ScanKind.Global,
             windowM = null,
             budgetM = 0.0,
-            disposition = "acquire:${travelDirection.name.lowercase()}_xt_${chosen.crossTrackM.metres()}",
+            disposition =
+                if (prior != null) {
+                    "acquire:prior_${prior.metres()}_xt_${chosen.crossTrackM.metres()}"
+                } else {
+                    "acquire:${travelDirection.name.lowercase()}_xt_${chosen.crossTrackM.metres()}"
+                },
         )
+    }
+
+    /**
+     * Fallback selection when no [acquisitionPriorM] was seeded: cross-track first, with the
+     * declared direction breaking only a near-tie (within [MatchTuning.candidateTieM]). This is the
+     * pre-ADR-0002 acquisition rule, kept for every caller that has not been wired to [FollowArming].
+     */
+    private fun tieBreakByDirection(found: List<TrailPosition>): TrailPosition? {
+        val best = found.firstOrNull() ?: return null
+        val tied =
+            found.filter { abs(it.crossTrackM) - abs(best.crossTrackM) <= tuning.candidateTieM }
+        return when (travelDirection) {
+            TravelDirection.Forward -> tied.minByOrNull { it.alongTrackM }
+            TravelDirection.Reverse -> tied.maxByOrNull { it.alongTrackM }
+        } ?: best
     }
 
     /** Commits [position] as geometry-corroborated progress. The only place progress moves. */
@@ -487,17 +532,6 @@ class ProgressTracker(
         return found
             .filter { abs(it.crossTrackM) - abs(best.crossTrackM) <= tuning.candidateTieM }
             .minByOrNull { abs(it.alongTrackM - predicted) } ?: best
-    }
-
-    /** Tie-break for acquisition: prefer the end of the trail the declared direction starts from. */
-    private fun tieBreakByDirection(found: List<TrailPosition>): TrailPosition? {
-        val best = found.firstOrNull() ?: return null
-        val tied =
-            found.filter { abs(it.crossTrackM) - abs(best.crossTrackM) <= tuning.candidateTieM }
-        return when (travelDirection) {
-            TravelDirection.Forward -> tied.minByOrNull { it.alongTrackM }
-            TravelDirection.Reverse -> tied.maxByOrNull { it.alongTrackM }
-        } ?: best
     }
 
     /**

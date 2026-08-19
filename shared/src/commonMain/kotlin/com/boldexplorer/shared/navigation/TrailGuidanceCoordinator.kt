@@ -168,13 +168,17 @@ class TrailGuidanceCoordinator(
      * matcher itself. The follower's own waypoint list is reversed in place for a reverse follow,
      * which makes its along-track session-relative and incomparable with the match's, so it is not
      * what to pass here.
+     *
+     * @param seedAlongM where the walk was armed — [FollowArming]'s chosen anchor. `null` defaults
+     *   to the traversal start. See [FollowSession].
      */
     fun startFollow(
         points: List<LatLng>,
         direction: TravelDirection,
         tuning: MatchTuning = MatchTuning.DEFAULT,
         isRecorded: Boolean = true,
-    ) = adopt(FollowSession(points, direction, tuning, isRecorded))
+        seedAlongM: Double? = null,
+    ) = adopt(FollowSession(points, direction, tuning, isRecorded, seedAlongM))
 
     /** Adopt a prepared session. Test seam: production goes through [startFollow]. */
     internal fun adopt(followSession: FollowSession) {
