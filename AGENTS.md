@@ -64,10 +64,10 @@ mandatory for fixtures.
   interface before compiling Kotlin that uses it.
 - Update this entry point, `STYLE.md`, or the relevant skill when its guidance
   changes. `CLAUDE.md` only contains Claude-specific additions.
-- Do not assume a planning tool preserves its scratch plan in this repository.
-  Before hand-off, copy any plan worth retaining to its durable home: an ADR
-  for an architectural decision or `docs/plans/` for a user-requested major
-  refactor or feature. Claude Code's scratch-file lifecycle is in `CLAUDE.md`.
+- Route plans that need to persist before hand-off: use an ADR for an
+  architectural decision, `docs/plans/` for a multi-phase project or major
+  refactor, and the relevant GitHub issue for a small bugfix or other
+  short-lived work. Do not retain scratch plans in the repository.
 - Use the next available ADR number when recording an architectural decision.
 
 ## Repository conventions
