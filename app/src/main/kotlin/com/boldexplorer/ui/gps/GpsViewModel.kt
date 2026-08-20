@@ -1510,8 +1510,8 @@ class GpsViewModel
                     val followState = trailFollower.state.value
                     val guidance = guidanceCoordinator.computeGuidance(followState, sample)
                     announceOrdinaryTrailGuidance(followState, sample, guidance)
-                    announceOffTrail(followState, sample, guidance)
-                    announceBacktrack(followState, sample, guidance)
+                    val offTrailAlertFired = announceOffTrail(followState, sample, guidance)
+                    announceBacktrack(followState, sample, guidance, wrongVectorAlreadyEmitted = offTrailAlertFired)
                     // Last: match-state, then annotations, then progress — see announceFollowCues.
                     announceFollowCues(sample, match)
                 }
@@ -1670,9 +1670,9 @@ class GpsViewModel
             followState: TrailFollowerState,
             sample: LocationSample,
             guidance: TrailGuidanceState?,
-        ) {
+        ): Boolean {
             val eval =
-                guidanceCoordinator.evaluateOffTrail(followState, sample, guidance) ?: return
+                guidanceCoordinator.evaluateOffTrail(followState, sample, guidance) ?: return false
             viewModelScope.launch {
                 audioEventLog.append(
                     AudioLogEntry(
@@ -1697,7 +1697,7 @@ class GpsViewModel
                     ),
                 )
             }
-            if (!eval.fired) return
+            if (!eval.fired) return false
             announce(
                 "You may be off trail.",
                 kind = OutputKind.OFF_TRAIL_ALERT,
@@ -1706,7 +1706,8 @@ class GpsViewModel
                 sample = sample,
                 guidance = guidance,
             )
-            viewModelScope.launch { scheduler.emitWrongVector() }
+            emitWrongVectorEarcon()
+            return true
         }
 
         // BUG-9: alert when consecutive fixes show the user's position on the trail moving backwards.
@@ -1714,6 +1715,7 @@ class GpsViewModel
             followState: TrailFollowerState,
             sample: LocationSample,
             guidance: TrailGuidanceState?,
+            wrongVectorAlreadyEmitted: Boolean,
         ) {
             val eval =
                 guidanceCoordinator.evaluateBacktrack(followState, sample, guidance) ?: return
@@ -1755,6 +1757,12 @@ class GpsViewModel
                 sample = sample,
                 guidance = guidance,
             )
+            if (!wrongVectorAlreadyEmitted) emitWrongVectorEarcon()
+        }
+
+        /** Both alerts describe one wrong-vector condition, so one processed fix gets one earcon. */
+        private fun emitWrongVectorEarcon() {
+            viewModelScope.launch { scheduler.emitWrongVector() }
         }
 
         /**
