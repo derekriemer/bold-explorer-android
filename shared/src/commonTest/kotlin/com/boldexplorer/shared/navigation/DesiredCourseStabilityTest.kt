@@ -6,6 +6,7 @@ import com.boldexplorer.shared.model.LocationSample
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -106,13 +107,13 @@ class DesiredCourseStabilityTest {
     }
 
     @Test
-    fun withoutAPolyline_fallsBackToTheAdjacentSegment() {
-        // The polyline is optional so existing callers keep working. Passing none must not crash
-        // or return null; it simply gives the old, noisier answer.
+    fun withoutAPolyline_staysSilent() {
+        // The old adjacent-segment fallback is density-sensitive and can point down the wrong arm
+        // of a switchback. A caller without matcher geometry gets no directional guidance.
         val points = noisyStraightTrail()
         val active = TrailFollowerState.Active(points, currentIndex = 10, thresholdM = 15.0)
         val guidance = assertNotNull(TrailGuidance.compute(active, sampleAt(80.0), null, null))
-        assertNotNull(guidance.desiredCourseDeg, "fallback still produces a course")
+        assertNull(guidance.desiredCourseDeg)
     }
 
     @Test

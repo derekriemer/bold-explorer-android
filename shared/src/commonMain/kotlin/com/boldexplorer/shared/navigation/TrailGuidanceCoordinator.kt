@@ -257,7 +257,7 @@ class TrailGuidanceCoordinator(
         // the reckoning horizon it is a different claim: the value can be minutes old and on
         // another arm, and steering by it reproduces the S5 defect through state instead of through
         // an unwindowed projection. Beyond that, guidance says nothing rather than something stale,
-        // and `TrailGuidance` falls back to local geometry. Found in review, 2026-08-15.
+        // and `TrailGuidance` remains silent. Found in review, 2026-08-15.
         val steerableAlongM =
             match
                 ?.takeIf { it.state == MatchState.Matched || it.state == MatchState.Uncertain }
@@ -417,7 +417,12 @@ class TrailGuidanceCoordinator(
         val gateM = offTrailGateM(sample.accuracy)
         val overGate = absCrossTrackM != null && absCrossTrackM > gateM
         val far = absCrossTrackM != null && absCrossTrackM > NavigationPolicy.OFF_TRAIL_FAR_M
-        val angleAgrees = relative != null && TrailGuidance.isMajorCorrection(relative)
+        // A global candidate beyond the gate is already conclusive while Lost/Unconfirmed: it is a
+        // lower bound on the distance from every trail segment. Losing the directional course must
+        // not demote that evidence from the two-fix ladder to the five-fix ladder.
+        val rapidCorroboration =
+            relative?.let(TrailGuidance::isMajorCorrection)
+                ?: (match?.state == MatchState.Lost || match?.state == MatchState.Unconfirmed)
 
         // `shadow` always advances: it answers "what would this fix do if grace did not exist at
         // all", so it has to see every fix, in-grace or not, to mean anything. This is the fix for
@@ -425,7 +430,7 @@ class TrailGuidanceCoordinator(
         // once grace stopped being an early return let evidence gathered *during* grace decide
         // whether the *first post-grace* fix fired — a real alert, switch off, that the pre-S6 code
         // would not have spoken. `live` below is what stops that from happening again.
-        val shadow = advanceOffTrail(offTrailShadow, absCrossTrackM, overGate, far, angleAgrees, sample.timestamp)
+        val shadow = advanceOffTrail(offTrailShadow, absCrossTrackM, overGate, far, rapidCorroboration, sample.timestamp)
 
         // `live` only *persists* what it learns outside grace — `mutate = false` during grace makes
         // this call a read-only peek, so `offTrailLive` itself is frozen exactly as the pre-S6 early
@@ -438,7 +443,15 @@ class TrailGuidanceCoordinator(
         // does not change this — see `fired` below for why unfreezing `live` on the switch would be
         // wrong.
         val live =
-            advanceOffTrail(offTrailLive, absCrossTrackM, overGate, far, angleAgrees, sample.timestamp, mutate = !suppressedByGrace)
+            advanceOffTrail(
+                offTrailLive,
+                absCrossTrackM,
+                overGate,
+                far,
+                rapidCorroboration,
+                sample.timestamp,
+                mutate = !suppressedByGrace,
+            )
 
         // With the switch off, `fired` is `live`'s answer — bit-for-bit the pre-S6 behaviour, since a
         // peeked `live` can never reach `required` on its own (see above), so `!suppressedByGrace &&`
@@ -522,7 +535,7 @@ class TrailGuidanceCoordinator(
         absCrossTrackM: Double?,
         overGate: Boolean,
         far: Boolean,
-        angleAgrees: Boolean,
+        rapidCorroboration: Boolean,
         nowMs: Long,
         mutate: Boolean = true,
     ): OffTrailTrackResult {
@@ -551,7 +564,7 @@ class TrailGuidanceCoordinator(
         val diverging = rateMps != null && rateMps > NavigationPolicy.DIVERGENCE_FLOOR_MPS
         val trend = if (diverging) "diverging" else "converging"
         val required =
-            if (diverging || far || angleAgrees) {
+            if (diverging || far || rapidCorroboration) {
                 NavigationPolicy.OFF_TRAIL_CONSECUTIVE_FAST
             } else {
                 NavigationPolicy.OFF_TRAIL_CONSECUTIVE_SLOW

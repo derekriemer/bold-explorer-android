@@ -122,6 +122,28 @@ class OffTrailFromMatchTest {
     }
 
     @Test
+    fun lostGlobalEvidenceKeepsTheFastLadderWithoutDirectionalGuidance() {
+        // A 30 m global cross-track is above the gate but below the 60 m "far" shortcut. It must
+        // still fire after two fixes when Lost: global distance is a lower bound, and the course is
+        // deliberately absent because a stale bearing is unsafe to report.
+        val c = coordinator()
+        c.startFollow(points, TravelDirection.Forward)
+
+        val evals =
+            (0..1).mapNotNull { i ->
+                c.evaluateOffTrail(
+                    active,
+                    sample(100_000L + i * 1_000L),
+                    guidance(relativeDeg = null),
+                    matchWith(MatchState.Lost, 30.0),
+                )
+            }
+
+        assertEquals(2, evals.last().consecutiveCount)
+        assertTrue(evals.last().fired, "Lost global evidence must retain the two-fix ladder: ${evals.map { it.disposition }}")
+    }
+
+    @Test
     fun withNoCandidateAtAllThereIsNothingToMeasure() {
         // A `Lost` fix inside the rescan cooldown carries no candidate. There is genuinely no
         // cross-track to report then, and inventing one would mean projecting unwindowed again.

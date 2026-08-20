@@ -1230,7 +1230,7 @@ class GpsViewModel
                     if (relDir != null) {
                         append(" $distLabel, $relDir.")
                     } else {
-                        append(" $distLabel.")
+                        append(" $distLabel. Trail direction unavailable until the trail is acquired.")
                     }
                 }
             }

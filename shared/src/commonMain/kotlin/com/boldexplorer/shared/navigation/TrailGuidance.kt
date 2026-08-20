@@ -3,7 +3,6 @@ package com.boldexplorer.shared.navigation
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.deltaAngle
 import com.boldexplorer.shared.geo.haversineDistanceMeters
-import com.boldexplorer.shared.geo.initialBearingDeg
 import com.boldexplorer.shared.model.LocationSample
 import kotlin.math.abs
 
@@ -18,7 +17,8 @@ data class TrailGuidanceState(
     val targetName: String,
     val total: Int,
     val distanceToTargetM: Double,
-    val desiredCourseDeg: Double,
+    /** Null when the matcher has no trustworthy position from which to derive a trail course. */
+    val desiredCourseDeg: Double?,
     val relativeDeg: Double?,
     val courseIsFresh: Boolean,
     val courseIsSmoothed: Boolean = false,
@@ -79,7 +79,7 @@ object TrailGuidance {
         val target = active.waypoints.getOrNull(active.currentIndex) ?: return null
         val location = LatLng(sample.lat, sample.lon)
         val targetLocation = LatLng(target.lat, target.lon)
-        val desiredCourse = desiredTrailCourseDeg(active, location, polyline, alongTrackM, direction) ?: return null
+        val desiredCourse = desiredTrailCourseDeg(polyline, alongTrackM, direction)
         val freshCourse = freshCourseAt(trustedCourse, sample.timestamp)
 
         return TrailGuidanceState(
@@ -88,30 +88,22 @@ object TrailGuidance {
             total = active.waypoints.size,
             distanceToTargetM = haversineDistanceMeters(location, targetLocation),
             desiredCourseDeg = desiredCourse,
-            relativeDeg = freshCourse?.let { deltaAngle(it.deg, desiredCourse) },
-            courseIsFresh = freshCourse != null,
-            courseIsSmoothed = freshCourse?.isSmoothed ?: false,
+            relativeDeg = desiredCourse?.let { course -> freshCourse?.let { deltaAngle(it.deg, course) } },
+            courseIsFresh = desiredCourse != null && freshCourse != null,
+            courseIsSmoothed = desiredCourse != null && freshCourse?.isSmoothed == true,
         )
     }
 
     fun isMajorCorrection(relativeDeg: Double): Boolean = abs(relativeDeg) >= 60.0
 
     private fun desiredTrailCourseDeg(
-        active: TrailFollowerState.Active,
-        location: LatLng,
         polyline: TrailPolyline?,
         alongTrackM: Double?,
         direction: TravelDirection,
     ): Double? {
         // Preferred: the bearing of a chord over a fixed *physical* baseline ahead of the user.
         //
-        // The adjacent-segment fallback below is correct only when vertices are far enough apart
-        // that recording noise is small relative to spacing. At walking density it is not: a few
-        // metres of lateral GPS error across an 8 m segment swings the bearing by 45 degrees, so a
-        // straight road produced alternating "slight left" / "slight right" — and swung the
-        // directional beacon's pan by the same amount, since it reads this via relativeDeg.
-        //
-        // A chord over NavigationPolicy.COURSE_BASELINE_M averages that noise out and is
+        // A chord over NavigationPolicy.COURSE_BASELINE_M averages recording noise out and is
         // density-invariant, so the same physical road behaves identically whether recorded every
         // 2 m or every 30 m.
         //
@@ -119,32 +111,20 @@ object TrailGuidance {
         // for itself is what made this measure the chord on the wrong arm of a switchback and speak
         // a course up to 162° from the truth (ADR 0001, S5) — the same defect S5a removed from
         // wrong-way detection, in the one place where being wrong steers the user directly.
-        if (polyline != null && alongTrackM != null) {
-            // The chord is measured over the trail *ahead of the user*, which is toward increasing
-            // along-track only under Forward. `alongTrackM` is always in recorded order, so under
-            // Reverse the baseline is taken behind the recorded direction and the resulting bearing
-            // is reversed to face travel.
-            val half = NavigationPolicy.COURSE_BASELINE_M / 2.0
-            val centreM = alongTrackM + half * direction.sign
-            polyline
-                .chordBearingAt(centreM, baselineM = NavigationPolicy.COURSE_BASELINE_M)
-                ?.let { return if (direction == TravelDirection.Reverse) (it + 180.0) % 360.0 else it }
-        }
+        // No confirmed matcher position means no trustworthy answer. The old index-based fallback
+        // was density-sensitive and could point down the wrong arm of a switchback, precisely when
+        // a confident bearing is most harmful. Silence until the matcher has an along-track answer.
+        val trustedPolyline = polyline ?: return null
+        val trustedAlongM = alongTrackM ?: return null
 
-        val points = active.waypoints
-        val target = points.getOrNull(active.currentIndex) ?: return null
-        val targetLocation = LatLng(target.lat, target.lon)
-
-        if (active.currentIndex > 0) {
-            val prev = points[active.currentIndex - 1]
-            return initialBearingDeg(LatLng(prev.lat, prev.lon), targetLocation)
-        }
-
-        val next = points.getOrNull(active.currentIndex + 1)
-        if (next != null) {
-            return initialBearingDeg(targetLocation, LatLng(next.lat, next.lon))
-        }
-
-        return initialBearingDeg(location, targetLocation)
+        // The chord is measured over the trail *ahead of the user*, which is toward increasing
+        // along-track only under Forward. `alongTrackM` is always in recorded order, so under
+        // Reverse the baseline is taken behind the recorded direction and the resulting bearing
+        // is reversed to face travel.
+        val half = NavigationPolicy.COURSE_BASELINE_M / 2.0
+        val centreM = trustedAlongM + half * direction.sign
+        return trustedPolyline
+            .chordBearingAt(centreM, baselineM = NavigationPolicy.COURSE_BASELINE_M)
+            ?.let { if (direction == TravelDirection.Reverse) (it + 180.0) % 360.0 else it }
     }
 }

@@ -6,6 +6,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -110,27 +111,19 @@ class GuidanceFromMatchTest {
 
     @Test
     fun aFrozenPositionStopsSteeringOnceTheMatchIsLost() {
-        // `confirmedAlongM` keeps its value through `Uncertain` and `Lost` — that is deliberate, and
-        // the dog fixture depends on it. But a value frozen 90 seconds ago on the *outbound* arm
-        // must not still be choosing which way to point: the chord gets taken there, and the spoken
-        // direction stays 180° from travel. That is the S5 defect again, reached through state
-        // rather than through an unwindowed projection.
+        // A Lost match must not use its frozen confirmed position to steer. It may be on the other
+        // arm of a switchback by now, so the only honest guidance is silence until reacquisition.
         val coordinator = TrailGuidanceCoordinator(TestScope())
         coordinator.startFollow(points, TravelDirection.Forward)
         val active = activeAt(points.size - 1)
         val sample = fixOnReturnArm()
 
         val stale = matchOnOutboundArm(MatchState.Lost)
-        val course =
-            assertNotNull(
-                coordinator.computeGuidance(active, sample, stale)?.desiredCourseDeg,
-                "guidance must still be produced",
-            )
+        val guidance = assertNotNull(coordinator.computeGuidance(active, sample, stale))
 
-        assertTrue(
-            abs(deltaAngle(0.0, course)) > 90.0,
-            "a Lost match froze the course on the outbound arm; guidance said $course",
-        )
+        assertNull(guidance.desiredCourseDeg, "Lost must not produce a course")
+        assertNull(guidance.relativeDeg, "a missing course cannot produce a relative direction")
+        assertTrue(guidance.distanceToTargetM > 0.0, "Lost must retain course-independent target context")
     }
 
     @Test
@@ -177,9 +170,9 @@ class GuidanceFromMatchTest {
     )
 
     @Test
-    fun withNoMatchYetTheCourseFallsBackToLocalGeometryRatherThanGuessing() {
-        // Before acquisition there is no windowed answer. The adjacent-segment fallback is noisy,
-        // but it is local: it cannot teleport to the far arm the way a global projection can.
+    fun withNoMatchYetTheCourseIsSilentRatherThanGuessing() {
+        // Before acquisition there is no matcher answer. An index-based guess can point down the
+        // wrong arm of a switchback, so it must not become a directional beacon.
         val guidance =
             TrailGuidance.compute(
                 activeAt(currentIndex = 3),
@@ -190,6 +183,7 @@ class GuidanceFromMatchTest {
                 direction = TravelDirection.Forward,
             )
 
-        assertNotNull(guidance?.desiredCourseDeg, "guidance must still be available before the first match")
+        assertNotNull(guidance, "target context must remain available before the first match")
+        assertNull(guidance.desiredCourseDeg, "guidance must stay silent before the first match")
     }
 }

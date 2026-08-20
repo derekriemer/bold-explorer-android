@@ -15,6 +15,17 @@ class TrailGuidanceTest {
     private val northB = TrailPoint(2, "B", 0.001, 0.0)
     private val northC = TrailPoint(3, "C", 0.002, 0.0)
 
+    private fun guidanceFor(
+        follower: TrailFollower,
+        sample: LocationSample,
+        trustedCourse: TrustedCourse?,
+    ): TrailGuidanceState? {
+        val active = follower.state.value as? TrailFollowerState.Active ?: return null
+        val polyline = TrailPolyline(active.waypoints.map { LatLng(it.lat, it.lon) })
+        val alongTrackM = polyline.project(LatLng(sample.lat, sample.lon))?.alongTrackM ?: return null
+        return TrailGuidance.compute(active, sample, trustedCourse, polyline, alongTrackM)
+    }
+
     @Test
     fun movingNorthOnNorthboundSegment_isStraightAhead() {
         val follower = TrailFollower()
@@ -23,7 +34,7 @@ class TrailGuidanceTest {
 
         val sample = sample(lat = 0.0005, lon = 0.0, heading = 0.0, speed = 1.4)
         val course = TrailGuidance.updateTrustedCourse(null, sample)
-        val guidance = TrailGuidance.compute(follower.state.value, sample, course)
+        val guidance = guidanceFor(follower, sample, course)
 
         assertNotNull(guidance)
         assertTrue(abs(guidance.relativeDeg ?: 999.0) < 1.0)
@@ -38,7 +49,7 @@ class TrailGuidanceTest {
 
         val sample = sample(lat = 0.0005, lon = 0.0, heading = 0.0, speed = 1.4)
         val course = TrailGuidance.updateTrustedCourse(null, sample)
-        val guidance = TrailGuidance.compute(follower.state.value, sample, course)
+        val guidance = guidanceFor(follower, sample, course)
 
         assertNotNull(guidance)
         assertTrue(abs(guidance.relativeDeg ?: 999.0) < 1.0)
@@ -51,18 +62,8 @@ class TrailGuidanceTest {
         follower.onLocationUpdate(LatLng(northA.lat, northA.lon))
 
         val trusted = TrailGuidance.updateTrustedCourse(null, sample(timestamp = 1_000, heading = 0.0, speed = 1.5))
-        val held =
-            TrailGuidance.compute(
-                follower.state.value,
-                sample(lat = 0.0005, timestamp = 10_999, heading = null, speed = 0.0),
-                trusted,
-            )
-        val expired =
-            TrailGuidance.compute(
-                follower.state.value,
-                sample(lat = 0.0005, timestamp = 11_001, heading = null, speed = 0.0),
-                trusted,
-            )
+        val held = guidanceFor(follower, sample(lat = 0.0005, timestamp = 10_999, heading = null, speed = 0.0), trusted)
+        val expired = guidanceFor(follower, sample(lat = 0.0005, timestamp = 11_001, heading = null, speed = 0.0), trusted)
 
         assertNotNull(held)
         assertTrue(held.courseIsFresh)
@@ -86,7 +87,7 @@ class TrailGuidanceTest {
 
         val sample = sample(lat = northB.lat, lon = northB.lon, heading = 90.0, speed = 1.5, timestamp = 2_000)
         val course = TrailGuidance.updateTrustedCourse(null, sample)
-        val guidance = TrailGuidance.compute(follower.state.value, sample, course)
+        val guidance = guidanceFor(follower, sample, course)
 
         assertNotNull(guidance)
         assertEquals(2, guidance.targetIndex)
@@ -94,7 +95,7 @@ class TrailGuidanceTest {
     }
 
     @Test
-    fun singlePointTrail_fallsBackToDirectTargetBearing() {
+    fun singlePointTrail_hasNoTrustworthyTrailCourse() {
         val follower = TrailFollower()
         follower.start(listOf(northA), thresholdM = 1.0)
 
@@ -103,7 +104,8 @@ class TrailGuidanceTest {
         val guidance = TrailGuidance.compute(follower.state.value, sample, course)
 
         assertNotNull(guidance)
-        assertTrue(abs(guidance.relativeDeg ?: 999.0) < 1.0)
+        assertNull(guidance.desiredCourseDeg)
+        assertNull(guidance.relativeDeg)
     }
 
     @Test
@@ -160,7 +162,7 @@ class TrailGuidanceTest {
         val smoothed = SmoothedHeading(deg = 0.0, confidence = 0.85, sampleCount = 4, newestTimestampMs = 500)
         val sample = sample(lat = 0.0005, lon = 0.0, heading = null, speed = 0.5, timestamp = 1_000)
         val course = TrailGuidance.updateTrustedCourse(null, sample, smoothed)
-        val guidance = TrailGuidance.compute(follower.state.value, sample, course)
+        val guidance = guidanceFor(follower, sample, course)
 
         assertNotNull(guidance)
         assertTrue(guidance.courseIsSmoothed)
