@@ -46,12 +46,6 @@ class GraceShadowTest {
             coordinator.startFollow(points, TravelDirection.Forward)
         }
 
-        var shadowAlertsAudible: Boolean
-            get() = coordinator.shadowAlertsAudible
-            set(value) {
-                coordinator.shadowAlertsAudible = value
-            }
-
         fun resetThrottle(sample: LocationSample) = coordinator.resetThrottle(sample)
 
         fun evaluateOffTrail(sample: LocationSample): OffTrailEvaluation? {
@@ -100,7 +94,7 @@ class GraceShadowTest {
     // from the 0L "never fired" sentinel and independent of the grace window — has already elapsed.
     // At t=0 the two could never both hold: the cooldown needs 45 s from zero and the off-trail
     // grace window here lasts only 30 s, so a fix could never be both "inside grace" and "past
-    // cooldown" — which would make it impossible to observe the switch actually letting one through.
+    // cooldown" — which would make it impossible to observe the grace-specific shadow result.
     private val armedAtMs = 1_000_000L
     private val primingFixMs = armedAtMs + 10_000L
     private val secondFixMs = armedAtMs + 20_000L
@@ -113,7 +107,7 @@ class GraceShadowTest {
         val h = OffTrailHarness()
         h.resetThrottle(offTrailSample(armedAtMs, eastM = 0.0))
         // Builds sustain evidence toward the fast-path threshold without risking anything being
-        // spoken: shadowAlertsAudible defaults false, so this fix cannot fire regardless of the maths.
+        // spoken: grace blocks production alerts regardless of the shadow's result.
         h.evaluateOffTrail(offTrailSample(primingFixMs, eastM = 35.0))
         return h
     }
@@ -140,8 +134,8 @@ class GraceShadowTest {
     // ── Two questions, two fields (spec correction, re-review 2026-08-17) ──────────────
     //
     // `disposition` answers "what actually happened" and can never contradict `fired`, because it is
-    // built from whichever track decided it. `shadowDisposition` always answers the counterfactual —
-    // "what would removing grace have produced" — regardless of `fired` or the switch. Counting
+    // built from the production track that decided it. `shadowDisposition` always answers the counterfactual —
+    // "what would removing grace have produced" — regardless of `fired`. Counting
     // `shadow:would_fire` in `shadowDisposition` is how a walk answers that question; the first
     // version of this split answered it by prefix-matching a single `disposition` string, which let
     // a genuinely spoken alert log as `bail:cooldown_...` (the shadow's cooldown, not the live one
@@ -166,30 +160,6 @@ class GraceShadowTest {
     }
 
     @Test
-    fun theDebugSwitchLetsTheShadowBeHeard() {
-        // Measuring from a log tells you the count; it does not tell you what the walk sounds like.
-        // The owner asked to be able to hear it, having judged the risk acceptable — so the switch
-        // exists, defaults off, and changes nothing else.
-        val c = coordinatorInGrace()
-        c.shadowAlertsAudible = true
-
-        val eval = assertNotNull(c.evaluateOffTrail(fixWellOffTrail()))
-
-        assertTrue(eval.suppressedByGrace, "the shadow still reports that grace would have muted it")
-        assertTrue(eval.fired, "but it is spoken, because the switch is on")
-        // With the switch on, `disposition` reads shadow (the track that decided `fired`), so it
-        // now uses the `fire:` spelling — proving `disposition` and `fired` cannot diverge.
-        assertEquals(
-            "fire:xt_35m_converging",
-            eval.disposition,
-            "with the switch on, disposition reads the same track that decided fired",
-        )
-        // `shadowDisposition` keeps its own dedicated spelling regardless of the switch — it answers
-        // the counterfactual question, not "what got spoken".
-        assertEquals("shadow:would_fire_xt_35m_converging", eval.shadowDisposition)
-    }
-
-    @Test
     fun aFixStoppedByTheRealCooldownIsDistinctFromGraceShadow() {
         // Same shape as offTrail_respectsCooldownAfterFiring in TrailGuidanceCoordinatorTest, but
         // pinning the exact disposition string: a fix stopped by the real 45 s cooldown — nothing to
@@ -207,11 +177,6 @@ class GraceShadowTest {
         assertFalse(cooled.fired)
         assertEquals("bail:cooldown_1000ms", cooled.disposition)
         assertEquals("bail:cooldown_1000ms", cooled.shadowDisposition)
-    }
-
-    @Test
-    fun theSwitchDefaultsOff() {
-        assertFalse(TrailGuidanceCoordinator(TestScope()).shadowAlertsAudible)
     }
 
     // ── State must not escape the grace window (Critical, review 2026-08-17) ──────────
@@ -235,7 +200,7 @@ class GraceShadowTest {
         val afterGrace = assertNotNull(c.evaluateOffTrail(offTrailSample(armedAtMs + 31_000L, eastM = 35.0)))
 
         assertFalse(afterGrace.suppressedByGrace, "grace must actually have expired for this to be the regression")
-        assertFalse(afterGrace.fired, "must not fire on carried-over in-grace evidence, switch off")
+        assertFalse(afterGrace.fired, "must not fire on carried-over in-grace evidence")
         // The other half of the property (re-review, 2026-08-17): the shadow's evidence must
         // *survive* the grace boundary rather than being reset at it — a "tidy up the shadow when
         // grace expires" edit would keep every assertion above green while quietly destroying the
@@ -333,23 +298,6 @@ class GraceShadowTest {
     }
 
     @Test
-    fun backtrackDebugSwitchLetsTheShadowBeHeard() {
-        val (c, active, fix) = coordinatorInGraceForBacktrack()
-        c.shadowAlertsAudible = true
-
-        val eval = assertNotNull(c.evaluateBacktrack(active, fix, backtrackGuidance(), matchAt(90.0)))
-
-        assertTrue(eval.suppressedByGrace, "the shadow still reports that grace would have muted it")
-        assertTrue(eval.fired, "but it is spoken, because the switch is on")
-        assertEquals(
-            "FIRING",
-            eval.disposition,
-            "with the switch on, disposition reads the same track that decided fired",
-        )
-        assertEquals("shadow:would_fire", eval.shadowDisposition)
-    }
-
-    @Test
     fun backtrackFixStoppedByTheRealCooldownIsDistinctFromGraceShadow() {
         // Pinned per review, same reasoning as the off-trail version: a fix stopped by the real 45 s
         // cooldown — nothing to do with grace, which has already expired — must still say
@@ -423,7 +371,7 @@ class GraceShadowTest {
             )
 
         assertFalse(afterGrace.suppressedByGrace, "grace must actually have expired for this to be the regression")
-        assertFalse(afterGrace.fired, "must not fire on carried-over in-grace evidence, switch off")
+        assertFalse(afterGrace.fired, "must not fire on carried-over in-grace evidence")
         // The other half of the property (re-review, 2026-08-17): see the matching assertion in
         // postGraceFixDoesNotInheritInGraceEvidence — the shadow's evidence must survive the grace
         // boundary rather than being reset at it. `shadow` accumulated to threshold entirely inside

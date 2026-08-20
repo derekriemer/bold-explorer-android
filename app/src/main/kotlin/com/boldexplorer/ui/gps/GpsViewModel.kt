@@ -9,7 +9,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.boldexplorer.BuildConfig
 import com.boldexplorer.audio.AudioEventLog
-import com.boldexplorer.audio.ShadowAlertsMonitor
 import com.boldexplorer.audio.ShadowMatchMonitor
 import com.boldexplorer.audio.AudioLogEntry
 import com.boldexplorer.audio.LastOutput
@@ -375,7 +374,6 @@ class GpsViewModel
         private val settingsRepo: SettingsRepository,
         private val audioEventLog: AudioEventLog,
         private val shadowMatchMonitor: ShadowMatchMonitor,
-        private val shadowAlertsMonitor: ShadowAlertsMonitor,
         private val scheduler: AudioCueScheduler,
     ) : ViewModel() {
         // ── Settings ──────────────────────────────────────────────────────────────────
@@ -801,12 +799,6 @@ class GpsViewModel
                 location.filterNotNull().collect { s ->
                     compassProvider.setLocation(s.lat, s.lon, s.altitude ?: 0.0)
                 }
-            }
-            // Mirror the debug switch into the coordinator (ADR 0001, S6). The coordinator is
-            // `:shared` and must not know about Hilt or the monitor — this is the one place that
-            // bridges the two, the same shape as every other Debug-screen toggle here.
-            viewModelScope.launch {
-                shadowAlertsMonitor.audible.collect { guidanceCoordinator.shadowAlertsAudible = it }
             }
             // Stop the explorer immediately on any collection change so GPS fixes that arrive before
             // the reactive DB queries re-emit don't fire announcements against stale points. The

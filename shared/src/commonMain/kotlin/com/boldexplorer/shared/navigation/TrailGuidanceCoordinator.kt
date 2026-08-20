@@ -49,17 +49,6 @@ class TrailGuidanceCoordinator(
 
     private var lastTrustedCourse: TrustedCourse? = null
 
-    /**
-     * Whether alerts grace would have muted are spoken anyway (debug; ADR 0001, S6).
-     *
-     * Default false, which is the strict shadow: the evaluation and its disposition are recorded, and
-     * nothing new is said. Turning it on is how the owner hears what dropping grace would sound like
-     * before the change is made for real — a count in a log does not convey whether a walk is livable.
-     * `suppressedByGrace` still reports what grace *would* have done, so the log stays readable either
-     * way.
-     */
-    var shadowAlertsAudible: Boolean = false
-
     // Ordinary-guidance throttle.
     //
     // Null means "nothing spoken yet this session" — not a sentinel timestamp. A `Long.MIN_VALUE`
@@ -354,8 +343,8 @@ class TrailGuidanceCoordinator(
      * event log.
      *
      * Inside the grace window the evaluation still runs and [OffTrailEvaluation.suppressedByGrace]
-     * is set, but `fired` stays false unless [shadowAlertsAudible] overrides it (ADR 0001, S6) — see
-     * the field comment on `shadowAlertsAudible`.
+     * is set, while `fired` stays false. The grace-free result remains available in
+     * [OffTrailEvaluation.shadowDisposition] for field-log analysis.
      *
      * On a hand-built route (`session?.isRecorded == false`, ADR 0001, Task 10) this returns a
      * genuine early exit instead — `disposition = "bail:hand_built_route"`, `fired = false`, and
@@ -428,7 +417,7 @@ class TrailGuidanceCoordinator(
         // all", so it has to see every fix, in-grace or not, to mean anything. This is the fix for
         // the Critical the 2026-08-17 review found: a single counter set that ran unconditionally
         // once grace stopped being an early return let evidence gathered *during* grace decide
-        // whether the *first post-grace* fix fired — a real alert, switch off, that the pre-S6 code
+        // whether the *first post-grace* fix fired — a real alert that the pre-S6 code
         // would not have spoken. `live` below is what stops that from happening again.
         val shadow = advanceOffTrail(offTrailShadow, absCrossTrackM, overGate, far, rapidCorroboration, sample.timestamp)
 
@@ -453,33 +442,28 @@ class TrailGuidanceCoordinator(
                 mutate = !suppressedByGrace,
             )
 
-        // With the switch off, `fired` is `live`'s answer — bit-for-bit the pre-S6 behaviour, since a
-        // peeked `live` can never reach `required` on its own (see above), so `!suppressedByGrace &&`
-        // is belt-and-suspenders rather than load-bearing. With the switch on, `fired` is `shadow`'s
-        // answer instead: the switch exists so the owner can hear what removing grace would sound
-        // like, and `shadow` — which never freezes — is the only track that actually knows that.
-        val fired = if (shadowAlertsAudible) shadow.wouldFire else (!suppressedByGrace && live.wouldFire)
+        // `live` drives production alerts — bit-for-bit the pre-S6 behaviour. A peeked `live` can
+        // never reach `required` on its own (see above), so `!suppressedByGrace &&` is
+        // belt-and-suspenders rather than load-bearing. `shadow` remains measurement only.
+        val fired = !suppressedByGrace && live.wouldFire
 
         val xt = absCrossTrackM?.roundToInt()
         // Two questions, two fields — deliberately not one string trying to answer both (ADR 0001,
         // S6, spec correction found in re-review, 2026-08-17).
         //
-        // `disposition` answers "what actually happened, and why" — built from whichever track
-        // decided `fired` (`live` with the switch off, `shadow` with it on), so it can never
-        // contradict `fired`: a spoken alert can never be logged as a cooldown bail, and a held fix
-        // can never be logged as fired. This is what "the decision, then its description" requires:
-        // the first version of this split had `disposition` always read `shadow`, which could log
-        // `bail:cooldown_30000ms` on the exact fix that spoke "You may be off trail." — a spoken
-        // alert with the *dying* shadow's cooldown attached to it, because the shadow can fire (and
-        // start cooling down) tens of seconds before `live` catches up past grace. Found in
-        // re-review.
+        // `disposition` answers "what actually happened, and why" — always from `live`, which
+        // decides `fired`, so it can never contradict it: a spoken alert can never be logged as a
+        // cooldown bail, and a held fix can never be logged as fired. The first version of this split
+        // had `disposition` always read `shadow`, which could log `bail:cooldown_30000ms` on the
+        // exact fix that spoke "You may be off trail." — a spoken alert with the *dying* shadow's
+        // cooldown attached to it, because the shadow can fire (and start cooling down) tens of
+        // seconds before `live` catches up past grace. Found in re-review.
         //
         // `shadowDisposition` answers the counterfactual, always from `shadow`, regardless of the
-        // switch — this is the field a walk's log is actually for: counting `fire:` + `shadow:` in
+        // production alert path — this is the field a walk's log is actually for: counting `fire:` + `shadow:` in
         // `disposition` conflated "what was said" with "what removing grace would produce"; counting
         // `shadow:would_fire` in `shadowDisposition` instead keeps the two questions apart.
-        val activeTrack = if (shadowAlertsAudible) shadow else live
-        val disposition = offTrailDisposition(activeTrack, absCrossTrackM, overGate, gateM, xt) { "fire:xt_${xt}m_${activeTrack.trend}" }
+        val disposition = offTrailDisposition(live, absCrossTrackM, overGate, gateM, xt) { "fire:xt_${xt}m_${live.trend}" }
         val shadowDisposition =
             offTrailDisposition(shadow, absCrossTrackM, overGate, gateM, xt) { "shadow:would_fire_xt_${xt}m_${shadow.trend}" }
 
@@ -604,7 +588,8 @@ class TrailGuidanceCoordinator(
      * to speak "You may be going the wrong way", with diagnostics for the log.
      *
      * Inside the grace window the evaluation still runs and [BacktrackEvaluation.suppressedByGrace]
-     * is set, but `fired` stays false unless [shadowAlertsAudible] overrides it (ADR 0001, S6).
+     * is set, while `fired` stays false. The grace-free result remains available in
+     * [BacktrackEvaluation.shadowDisposition] for field-log analysis.
      *
      * ## Why this reads [match] instead of projecting (ADR 0001, S5a)
      *
@@ -656,15 +641,13 @@ class TrailGuidanceCoordinator(
         val live =
             advanceBacktrack(backtrackLive, alongM, contiguous, match?.state, noiseFloorM, sample.timestamp, mutate = !suppressedByGrace)
 
-        // See evaluateOffTrail for why `fired` reads `live` with the switch off and `shadow` with it
-        // on.
-        val fired = if (shadowAlertsAudible) shadow.wouldFire else (!suppressedByGrace && live.wouldFire)
+        // See evaluateOffTrail: `live` drives production alerts; `shadow` remains measurement only.
+        val fired = !suppressedByGrace && live.wouldFire
 
         // Two fields, not one — see the matching comment in evaluateOffTrail. `disposition` is built
-        // from whichever track decided `fired`, so it can never contradict it; `shadowDisposition` is
+        // from `live`, which decides `fired`, so it can never contradict it; `shadowDisposition` is
         // always the counterfactual.
-        val activeTrack = if (shadowAlertsAudible) shadow else live
-        val disposition = backtrackDisposition(activeTrack) { "FIRING" }
+        val disposition = backtrackDisposition(live) { "FIRING" }
         val shadowDisposition = backtrackDisposition(shadow) { "shadow:would_fire" }
 
         return BacktrackEvaluation(
@@ -789,7 +772,7 @@ class TrailGuidanceCoordinator(
  * regardless of grace so it can answer "what would removing grace produce". A single shared instance
  * was tried first — mutated on every in-grace fix per the original brief's Step 3 — and that let
  * evidence gathered *during* grace decide whether the fix right after grace expired would fire: a
- * real alert, switch off, that the old code would not have spoken. Found in review, 2026-08-17.
+ * real alert that the old code would not have spoken. Found in review, 2026-08-17.
  *
  * Keep these as two instances of one class rather than prefixing each field `shadow` on a single
  * one: six near-identical fields drift when only one copy gets touched by the next edit, which is
@@ -860,11 +843,11 @@ data class OffTrailEvaluation(
     val relativeDeg: Double?,
     val consecutiveCount: Int,
     val sinceLastAlertMs: Long,
-    /** What actually happened — built from whichever track decided [fired], so never contradicts it. */
+    /** What actually happened — built from the production track that decided [fired], so never contradicts it. */
     val disposition: String,
     /**
-     * What the shadow (grace-free) track would have decided, always — regardless of [fired] or the
-     * debug switch. Counting `shadow:would_fire` here is how a walk answers "what would removing
+     * What the shadow (grace-free) track would have decided, always — regardless of [fired].
+     * Counting `shadow:would_fire` here is how a walk answers "what would removing
      * grace produce"; `disposition` answers "what did this walk actually do" (ADR 0001, S6, spec
      * correction found in re-review, 2026-08-17).
      */
@@ -892,11 +875,11 @@ data class BacktrackEvaluation(
     val prevDistanceToTargetM: Double?,
     val consecutiveCount: Int,
     val sinceLastAlertMs: Long,
-    /** What actually happened — built from whichever track decided [fired], so never contradicts it. */
+    /** What actually happened — built from the production track that decided [fired], so never contradicts it. */
     val disposition: String,
     /**
-     * What the shadow (grace-free) track would have decided, always — regardless of [fired] or the
-     * debug switch. See [OffTrailEvaluation.shadowDisposition] for the full reasoning.
+     * What the shadow (grace-free) track would have decided, always — regardless of [fired]. See
+     * [OffTrailEvaluation.shadowDisposition] for the full reasoning.
      */
     val shadowDisposition: String = disposition,
     val fired: Boolean,

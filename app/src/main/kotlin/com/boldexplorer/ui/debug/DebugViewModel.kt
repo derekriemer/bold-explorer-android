@@ -6,7 +6,6 @@ import androidx.lifecycle.viewModelScope
 import com.boldexplorer.audio.AudioEngine
 import com.boldexplorer.audio.AudioEventLog
 import com.boldexplorer.audio.AudioLogEntry
-import com.boldexplorer.audio.ShadowAlertsMonitor
 import com.boldexplorer.audio.ShadowMatchMonitor
 import com.boldexplorer.audio.ShadowMatchSnapshot
 import com.boldexplorer.compass.SensorCompassProvider
@@ -47,7 +46,6 @@ class DebugViewModel
         private val scheduler: AudioCueScheduler,
         private val audioEventLog: AudioEventLog,
         private val shadowMatchMonitor: ShadowMatchMonitor,
-        private val shadowAlertsMonitor: ShadowAlertsMonitor,
         private val hapticMonitor: AccuracyHapticMonitor,
     ) : ViewModel() {
         val location: StateFlow<LocationSample?> =
@@ -82,15 +80,6 @@ class DebugViewModel
         val shadowMatch: StateFlow<ShadowMatchSnapshot?> = shadowMatchMonitor.snapshot
 
         fun setShadowMatchEnabled(enabled: Boolean) = shadowMatchMonitor.setEnabled(enabled)
-
-        /**
-         * Whether off-trail/wrong-way alerts that grace would mute are spoken anyway (ADR 0001, S6).
-         * Defaults false; see [ShadowAlertsMonitor] for why that default differs from trail-match
-         * logging's.
-         */
-        val shadowAlertsAudible: StateFlow<Boolean> = shadowAlertsMonitor.audible
-
-        fun setShadowAlertsAudible(audible: Boolean) = shadowAlertsMonitor.setAudible(audible)
 
         fun setAccuracyHapticsEnabled(enabled: Boolean) = hapticMonitor.setEnabled(enabled)
 

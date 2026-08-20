@@ -221,7 +221,7 @@ class TrailGuidanceCoordinatorTest {
         val duringGrace = c.evaluateOffTrail(active, offTrailSample(120_000), guidance(relativeDeg = 90.0))
         assertNotNull(duringGrace, "the evaluator runs inside grace now — only firing is gated")
         assertTrue(duringGrace.suppressedByGrace)
-        assertFalse(duringGrace.fired, "must not speak during grace, with the debug switch off")
+        assertFalse(duringGrace.fired, "must not speak during grace")
         // After grace expires it evaluates again, unsuppressed — and, critically, must not have
         // inherited the one qualifying fix gathered above during grace. That fix plus this one would
         // be enough to reach the two-fix fast-path threshold if the count carried over; it must not,
@@ -293,7 +293,7 @@ class TrailGuidanceCoordinatorTest {
         val duringGrace = h.evaluateBacktrack(active, sample(110_000), guidance(90.0, distanceToTargetM = 100.0))
         assertNotNull(duringGrace, "the evaluator runs inside grace now — only firing is gated")
         assertTrue(duringGrace.suppressedByGrace)
-        assertFalse(duringGrace.fired, "must not speak during grace, with the debug switch off")
+        assertFalse(duringGrace.fired, "must not speak during grace")
         // This fixture only has one in-grace fix, which is not enough evidence by itself to
         // demonstrate the carry-over Critical (backtrack needs three) — but the assertion still
         // belongs here as a floor. See GraceShadowTest.backtrackPostGraceFixDoesNotInheritInGraceEvidence
