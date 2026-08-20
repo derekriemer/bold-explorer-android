@@ -64,8 +64,11 @@ mandatory for fixtures.
   interface before compiling Kotlin that uses it.
 - Update this entry point, `STYLE.md`, or the relevant skill when its guidance
   changes. `CLAUDE.md` only contains Claude-specific additions.
-- Record architectural decisions as the next numbered ADR. Create a durable
-  `docs/plans/` document only for a user-requested major refactor or feature.
+- Do not assume a planning tool preserves its scratch plan in this repository.
+  Before hand-off, copy any plan worth retaining to its durable home: an ADR
+  for an architectural decision or `docs/plans/` for a user-requested major
+  refactor or feature. Claude Code's scratch-file lifecycle is in `CLAUDE.md`.
+- Use the next available ADR number when recording an architectural decision.
 
 ## Repository conventions
 
