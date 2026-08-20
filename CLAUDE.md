@@ -1,8 +1,9 @@
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working in this repository.
-All architecture, commands, patterns, and rules are defined in [`AGENTS.md`](AGENTS.md) — YOU MUST read that first.
-Only Claude Code–specific additions appear below.
+Read [`AGENTS.md`](AGENTS.md) first, then [`STYLE.md`](STYLE.md) and any focused
+skill that AGENTS.md routes to for the task. Only Claude Code–specific additions
+appear below.
 
 ## Claude Code notes
 
@@ -20,7 +21,8 @@ Only Claude Code–specific additions appear below.
     Only use Bash for commands that genuinely need shell execution, such as builds, tests, git, or project scripts.
 ### Accessibility: contentDescription
 
-See "Accessibility constraints" in [`AGENTS.md`](AGENTS.md) — do not duplicate that guidance here.
+See [Compose accessibility in `STYLE.md`](STYLE.md#compose-accessibility) — do
+not duplicate that guidance here.
 
 
 ## Plans and architecture.
@@ -39,4 +41,3 @@ durable home:
   scratch file. It should not sit in the repo forever.
 
 When the routing is genuinely unclear, ask rather than defaulting to an ADR.
-
