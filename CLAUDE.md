@@ -7,14 +7,11 @@ appear below.
 
 ## Claude Code notes
 
-- Use the `jj` skill (`/jujutsu`) when working in this repo — it is a jujutsu repository.
-- Prefer `make test-shared` for fast feedback; it runs on the JVM with no device needed.
-- `make assemble` requires `ANDROID_HOME` to be set.
 - For code navigation and file discovery, do not use Bash find/grep/ls pipelines.
 
     Use:
         - Glob for file discovery
-        - Grep for text search
+        - grep or rg for text search
         - LSP for definitions, references, symbols, hover/type info, and diagnostics
         - check for ripgrep and fd as desired, I usually have them.
 
