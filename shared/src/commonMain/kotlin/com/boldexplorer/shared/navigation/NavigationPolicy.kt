@@ -496,6 +496,9 @@ object NavigationPolicy {
     /** Beyond this from the trail, an annotation is phrased as an aside rather than plainly. */
     const val ANNOTATION_ASIDE_M = 25.0
 
+    /** Nearby recorded passes of a landmark which are each spoken (for example, a lollipop stick). */
+    const val ANNOTATION_REPEAT_PASS_TOLERANCE_M = 20.0
+
     /** Window `sagittaOver` is asked about when deciding whether the trail ahead is straight. */
     const val STRAIGHT_LOOKAHEAD_M = 40.0
 

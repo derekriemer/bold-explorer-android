@@ -55,7 +55,7 @@ import com.boldexplorer.shared.navigation.MatchState
 import com.boldexplorer.shared.navigation.MatchStateCue
 import com.boldexplorer.shared.navigation.MatchStateCueProducer
 import com.boldexplorer.shared.navigation.ProgressCueProducer
-import com.boldexplorer.shared.navigation.RouteAnnotation
+import com.boldexplorer.shared.navigation.routeAnnotationsForFollow
 import com.boldexplorer.shared.navigation.TrailFollower
 import com.boldexplorer.shared.navigation.FixOutcome
 import com.boldexplorer.audio.trailMatchLogEntry
@@ -988,6 +988,7 @@ class GpsViewModel
             val name: String,
             val isRecorded: Boolean,
             val recordedPoints: List<LatLng>,
+            val recordedTrailPoints: List<TrailPoint>,
             val points: List<TrailPoint>,
             val direction: TravelDirection,
             val options: List<AnchorOption>,
@@ -1033,6 +1034,7 @@ class GpsViewModel
                 // in the field logs. Arming reads this same list, so its anchor is in the same frame
                 // `startFollow` below builds its polyline from.
                 val recordedPoints = wps.map { LatLng(it.lat, it.lon) }
+                val recordedTrailPoints = wps.map { TrailPoint(it.id, it.name, it.lat, it.lon, elevationM = it.elevM, kind = it.kind) }
                 val loc = location.value?.let { LatLng(it.lat, it.lon) }
                 val accuracyM = location.value?.accuracy
                 val direction = if (reversed) TravelDirection.Reverse else TravelDirection.Forward
@@ -1040,13 +1042,13 @@ class GpsViewModel
                 when (val armed = FollowArming.resolve(TrailPolyline(recordedPoints), direction, loc, accuracyM)) {
                     is ArmingResult.Fork -> {
                         pendingFollow =
-                            PendingFollow(trailId, reversed, name, isRecorded, recordedPoints, points, direction, armed.options, loc)
+                            PendingFollow(trailId, reversed, name, isRecorded, recordedPoints, recordedTrailPoints, points, direction, armed.options, loc)
                         _followPrompt.value =
                             FollowForkPrompt(armed.options.map { FollowForkOption(forkOptionLabel(it, direction)) })
                     }
 
                     is ArmingResult.Resolved ->
-                        beginFollow(trailId, reversed, name, isRecorded, recordedPoints, points, direction, armed.anchor, loc)
+                        beginFollow(trailId, reversed, name, isRecorded, recordedPoints, recordedTrailPoints, points, direction, armed.anchor, loc)
                 }
             }
         }
@@ -1064,6 +1066,7 @@ class GpsViewModel
                     pending.name,
                     pending.isRecorded,
                     pending.recordedPoints,
+                    pending.recordedTrailPoints,
                     pending.points,
                     pending.direction,
                     option.anchor,
@@ -1108,6 +1111,7 @@ class GpsViewModel
             name: String,
             isRecorded: Boolean,
             recordedPoints: List<LatLng>,
+            recordedTrailPoints: List<TrailPoint>,
             points: List<TrailPoint>,
             direction: TravelDirection,
             anchor: TrailPosition,
@@ -1136,17 +1140,12 @@ class GpsViewModel
             // too — see its doc for why an independently-built one would misread `cumulativeM`.
             val polyline = guidanceCoordinator.followSession!!.polyline
             val annotations =
-                annotationRepo.forTrail(trailId).map { a ->
-                    RouteAnnotation(
-                        id = a.id,
-                        name = a.waypoint.name,
-                        alongTrackM = polyline.alongTrackFor(a.segmentIndex, a.offsetM),
-                        // project(point, window = null) always finds a position on a non-empty
-                        // polyline; the fallback exists only to satisfy the type system.
-                        signedCrossTrackM =
-                            polyline.project(LatLng(a.waypoint.lat, a.waypoint.lon))?.crossTrackM ?: 0.0,
-                    )
-                }
+                routeAnnotationsForFollow(
+                    polyline = polyline,
+                    annotations = annotationRepo.forTrail(trailId),
+                    recordedPoints = recordedTrailPoints,
+                    isRecorded = isRecorded,
+                )
             followCues =
                 FollowCueProducers(
                     progress = ProgressCueProducer(),

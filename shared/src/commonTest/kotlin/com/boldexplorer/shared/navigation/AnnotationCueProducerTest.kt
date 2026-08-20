@@ -1,5 +1,7 @@
 package com.boldexplorer.shared.navigation
 
+import com.boldexplorer.shared.model.TrailAnnotation
+import com.boldexplorer.shared.model.Waypoint
 import com.boldexplorer.shared.settings.Units
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -106,5 +108,55 @@ class AnnotationCueProducerTest {
         p.onFix(90.0, 1.3, Units.IMPERIAL)
 
         assertTrue(p.onReacquired(40.0, 180.0, null, Units.IMPERIAL).isEmpty())
+    }
+
+    @Test
+    fun aLollipopAnnotationIsAnnouncedOnBothStickPasses() {
+        val polyline = TrailPolyline(LollipopFixture.points)
+        val stickMarker =
+            Waypoint(
+                id = 71L,
+                name = "Footbridge",
+                lat = offsetFromOrigin(northM = LollipopFixture.MID_STICK_M, eastM = 0.0).lat,
+                lon = offsetFromOrigin(northM = LollipopFixture.MID_STICK_M, eastM = 0.0).lon,
+                elevM = null,
+                description = null,
+                createdAt = 0L,
+            )
+        val annotations =
+            routeAnnotationsForFollow(
+                polyline = polyline,
+                annotations = listOf(TrailAnnotation(9L, 1L, stickMarker, segmentIndex = 0, offsetM = 0.0, createdAt = 0L)),
+                recordedPoints = emptyList(),
+                isRecorded = true,
+            )
+
+        assertEquals(2, annotations.size, "the stick is walked outward and back")
+        val cues = AnnotationCueProducer(annotations, TravelDirection.Forward)
+        val spoken = annotations.sortedBy { it.alongTrackM }.flatMap { landmark ->
+            cues.onFix(landmark.alongTrackM - 5.0, speedMps = 1.3, units = Units.IMPERIAL)
+        }
+
+        assertEquals(2, spoken.size)
+        assertTrue(spoken.all { it.startsWith("Footbridge ahead") })
+    }
+
+    @Test
+    fun recordedNamedVerticesSpeakButTrackPointsStaySilent() {
+        val geometry = listOf(offsetFromOrigin(0.0, 0.0), offsetFromOrigin(100.0, 0.0), offsetFromOrigin(200.0, 0.0))
+        val polyline = TrailPolyline(geometry)
+        val points =
+            listOf(
+                TrailPoint(1L, "GPS start", geometry[0].lat, geometry[0].lon, kind = Waypoint.KIND_TRACK_POINT),
+                TrailPoint(2L, "Old gate", geometry[1].lat, geometry[1].lon),
+                TrailPoint(3L, "GPS end", geometry[2].lat, geometry[2].lon, kind = Waypoint.KIND_TRACK_POINT),
+            )
+        val landmarks = routeAnnotationsForFollow(polyline, emptyList(), points, isRecorded = true)
+
+        assertEquals(listOf("Old gate"), landmarks.map { it.name })
+        val forward = AnnotationCueProducer(landmarks, TravelDirection.Forward)
+        val reverse = AnnotationCueProducer(landmarks, TravelDirection.Reverse)
+        assertEquals(1, forward.onFix(95.0, 1.3, Units.IMPERIAL).size)
+        assertEquals(1, reverse.onFix(105.0, 1.3, Units.IMPERIAL).size)
     }
 }

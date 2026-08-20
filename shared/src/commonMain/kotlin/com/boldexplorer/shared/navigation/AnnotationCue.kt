@@ -1,5 +1,8 @@
 package com.boldexplorer.shared.navigation
 
+import com.boldexplorer.shared.geo.LatLng
+import com.boldexplorer.shared.model.TrailAnnotation
+import com.boldexplorer.shared.model.Waypoint
 import com.boldexplorer.shared.settings.Units
 import kotlin.math.abs
 
@@ -18,6 +21,53 @@ data class RouteAnnotation(
 )
 
 /**
+ * Builds the named landmarks spoken while following a recorded trail.
+ *
+ * An attached annotation can sit beside more than one pass of the same ground.  Keep every local
+ * projection close enough to the waypoint, rather than just the database's canonical projection,
+ * so a lollipop's stick speaks the landmark on the outward and return passes.  A named vertex is
+ * already part of the recorded geometry, so it has exactly one, index-addressable occurrence.
+ */
+fun routeAnnotationsForFollow(
+    polyline: TrailPolyline,
+    annotations: List<TrailAnnotation>,
+    recordedPoints: List<TrailPoint>,
+    isRecorded: Boolean,
+): List<RouteAnnotation> {
+    val attached =
+        annotations.flatMap { annotation ->
+            val point = LatLng(annotation.waypoint.lat, annotation.waypoint.lon)
+            val candidates = polyline.candidates(point)
+            val closePasses =
+                candidates.filter { abs(it.crossTrackM) <= NavigationPolicy.ANNOTATION_REPEAT_PASS_TOLERANCE_M }
+            // An annotation may deliberately be beside the trail.  It still needs its closest,
+            // canonical cue even when no pass falls inside the duplicate-ground tolerance.
+            (closePasses.ifEmpty { candidates.take(1) }).map { position ->
+                RouteAnnotation(
+                    id = annotation.id,
+                    name = annotation.waypoint.name,
+                    alongTrackM = position.alongTrackM,
+                    signedCrossTrackM = position.crossTrackM,
+                )
+            }
+        }
+
+    if (!isRecorded) return attached
+
+    val vertices =
+        recordedPoints.mapIndexedNotNull { index, point ->
+            if (point.kind != Waypoint.KIND_WAYPOINT) return@mapIndexedNotNull null
+            RouteAnnotation(
+                id = point.id,
+                name = point.name,
+                alongTrackM = polyline.cumulativeM[index],
+                signedCrossTrackM = 0.0,
+            )
+        }
+    return attached + vertices
+}
+
+/**
  * Announces annotations as the walker comes up on them.
  *
  * Announced on approach rather than on arrival: these are benches, gates and parking areas — things
@@ -29,7 +79,9 @@ class AnnotationCueProducer(
     private val annotations: List<RouteAnnotation>,
     private val direction: TravelDirection,
 ) {
-    private val announced = mutableSetOf<Long>()
+    // The same saved annotation can intentionally have one occurrence per pass over duplicate
+    // ground.  Track the occurrence, not its database id, so a lollipop's return stick speaks too.
+    private val announced = mutableSetOf<RouteAnnotation>()
 
     fun onFix(
         alongTrackM: Double,
@@ -41,11 +93,11 @@ class AnnotationCueProducer(
                 .coerceIn(NavigationPolicy.ANNOTATION_LEAD_MIN_M, NavigationPolicy.ANNOTATION_LEAD_MAX_M)
 
         return annotations
-            .filter { it.id !in announced }
+            .filter { it !in announced }
             .filter { withinLead(it, alongTrackM, leadM) }
             .sortedBy { aheadM(it, alongTrackM) }
             .map { annotation ->
-                announced += annotation.id
+                announced += annotation
                 phrase(annotation, units)
             }
     }
@@ -87,10 +139,10 @@ class AnnotationCueProducer(
         val hi = maxOf(fromAlongTrackM, toAlongTrackM)
 
         return annotations
-            .filter { it.id !in announced && it.alongTrackM in lo..hi }
+            .filter { it !in announced && it.alongTrackM in lo..hi }
             .sortedBy { aheadM(it, toAlongTrackM) }
             .map { annotation ->
-                announced += annotation.id
+                announced += annotation
                 val behindM = abs(toAlongTrackM - annotation.alongTrackM)
                 val distance = formatSpokenDistance(behindM, units)
                 "You passed ${annotation.name}, $distance back, on your ${side(annotation)}"
