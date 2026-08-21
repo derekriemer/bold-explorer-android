@@ -3,6 +3,8 @@ package com.boldexplorer.shared.navigation
 import com.boldexplorer.shared.settings.Units
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class SpokenDistanceTest {
     @Test
@@ -25,5 +27,16 @@ class SpokenDistanceTest {
     fun zeroAndTinyDistancesStillRender() {
         assertEquals("0 meters", formatSpokenDistance(0.0, Units.METRIC))
         assertEquals("0 feet", formatSpokenDistance(0.0, Units.IMPERIAL))
+    }
+
+    @Test
+    fun roundsToZeroAgreesWithWhatFormatSpokenDistanceActuallyRenders() {
+        // Metric rounds to "0 meters" under half a metre.
+        assertTrue(roundsToZero(0.4, Units.METRIC))
+        assertFalse(roundsToZero(0.5, Units.METRIC))
+
+        // Imperial rounds to "0 feet" under half a foot (~0.1524 m) — much tighter than metric's.
+        assertTrue(roundsToZero(0.05, Units.IMPERIAL))
+        assertFalse(roundsToZero(0.4, Units.IMPERIAL), "0.4 m is 1.3 ft, which rounds to \"1 feet\"")
     }
 }

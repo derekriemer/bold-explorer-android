@@ -20,8 +20,10 @@ class ProgressCueProducerTest {
         lastSpokeAtMs: Long = Long.MIN_VALUE,
         alongTrackM: Double? = 100.0,
         matchLost: Boolean = false,
+        travelled: Boolean = true,
     ) = producer.onFix(nowMs, straight, alongTrackM = alongTrackM, remainingM = remainingM,
-        direction = direction, units = Units.IMPERIAL, lastSpokeAtMs = lastSpokeAtMs, matchLost = matchLost)
+        direction = direction, units = Units.IMPERIAL, lastSpokeAtMs = lastSpokeAtMs, matchLost = matchLost,
+        travelled = travelled)
 
     @Test
     fun theSpeechCadenceHoldsAfterTheFirstFix() {
@@ -63,7 +65,7 @@ class ProgressCueProducerTest {
         // means to cover. 170 m puts the corner substantially inside [170, 210).
         val cue = producer.onFix(0L, corner, alongTrackM = 170.0, remainingM = 200.0,
             direction = TravelDirection.Forward, units = Units.IMPERIAL, lastSpokeAtMs = Long.MIN_VALUE,
-            matchLost = false)
+            matchLost = false, travelled = true)
 
         assertNull(cue.speech, "a corner is 30 m ahead")
     }
@@ -80,7 +82,7 @@ class ProgressCueProducerTest {
 
         val cue = producer.onFix(0L, corner, alongTrackM = 170.0, remainingM = 170.0,
             direction = TravelDirection.Reverse, units = Units.IMPERIAL, lastSpokeAtMs = Long.MIN_VALUE,
-            matchLost = false)
+            matchLost = false, travelled = true)
 
         assertNotNull(cue.speech, "the corner is behind a reverse follow, not ahead")
     }
@@ -108,5 +110,45 @@ class ProgressCueProducerTest {
         val cue = produce(ProgressCueProducer(), 0L, matchLost = false, alongTrackM = 100.0, remainingM = 400.0)
 
         assertNotNull(cue.speech, "matched, confirmed, and nothing else suppressing it")
+    }
+
+    // #91: a follow that armed near the wrong end of a loop (the #80 case) can read a near-zero
+    // remaining distance on its very first fix, before the walker has gone anywhere. A "0 feet to
+    // go" reading is only trustworthy on the same travel evidence that would let completion fire.
+
+    @Test
+    fun zeroDistanceIsSilencedWithoutTravelEvidence() {
+        val cue = produce(ProgressCueProducer(), 0L, remainingM = 0.05, travelled = false)
+
+        assertNull(cue.speech, "no confirmed travel this session; a near-zero reading is not trustworthy")
+    }
+
+    @Test
+    fun zeroDistanceStaysSilentAcrossRepeatedFixesWhileUndertravelled() {
+        // The false-arrival bug was five *consecutive* announcements, not just the first one.
+        val producer = ProgressCueProducer()
+        produce(producer, 0L, remainingM = 0.05, travelled = false)
+
+        val cue = produce(producer, 15_000L, remainingM = 0.05, travelled = false)
+
+        assertNull(cue.speech, "still no travel evidence on the next cadence tick")
+    }
+
+    @Test
+    fun zeroDistanceSpeaksOnceTravelEvidenceClears() {
+        // The legitimate-arrival case: the walker actually walked the trail, so a near-zero reading
+        // right before completion fires is exactly the information they need.
+        val cue = produce(ProgressCueProducer(), 0L, remainingM = 0.05, travelled = true)
+
+        assertNotNull(cue.speech, "confirmed travel backs up the near-zero reading")
+    }
+
+    @Test
+    fun nonZeroRemainingIgnoresTravelEvidence() {
+        // The guard is specific to the "nothing left" claim; an ordinary distance readout must not
+        // start requiring travel evidence it never needed before.
+        val cue = produce(ProgressCueProducer(), 0L, remainingM = 400.0, travelled = false)
+
+        assertNotNull(cue.speech, "travel evidence only gates a zero-distance reading")
     }
 }

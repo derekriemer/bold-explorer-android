@@ -33,6 +33,12 @@ class ProgressCueProducer {
      *   `MatchState` is not `Matched` right now. `confirmedAlongM`/`remainingM` freeze the instant the
      *   match stops being `Matched`, so the very first bad fix already makes the number stale — speech
      *   has to gate on that immediately rather than waiting for a sustained loss.
+     * @param travelled [CompletionEvidence.travelled] for this session — whether confirmed along-track
+     *   travel has cleared [NavigationPolicy.completionTravelGuardM]. A "0 feet to go" reading is only
+     *   trustworthy on the same evidence that would let the trail actually complete (#91): a follow
+     *   that armed near the far end of a loop can read near-zero remaining on its very first fix,
+     *   before the walker has gone anywhere, and that must stay silent rather than announcing arrival.
+     *   Non-zero readings are unaffected — the guard only concerns the "nothing left" claim.
      */
     fun onFix(
         nowMs: Long,
@@ -43,12 +49,16 @@ class ProgressCueProducer {
         units: Units,
         lastSpokeAtMs: Long,
         matchLost: Boolean,
+        travelled: Boolean,
     ): ProgressCue {
         val due = elapsedSinceMs(nowMs, lastSpeechAtMs) >= NavigationPolicy.PROGRESS_SPEECH_INTERVAL_MS
         val yielding = elapsedSinceMs(nowMs, lastSpokeAtMs) < NavigationPolicy.PROGRESS_YIELD_MS
         val straight = alongTrackM != null && FollowCuePolicy.isStraightAhead(polyline, alongTrackM, direction)
+        val untrustedZero = remainingM != null && !travelled && roundsToZero(remainingM, units)
         val speech =
-            if (due && !yielding && !matchLost && alongTrackM != null && remainingM != null && straight) {
+            if (due && !yielding && !matchLost && alongTrackM != null && remainingM != null &&
+                straight && !untrustedZero
+            ) {
                 lastSpeechAtMs = nowMs
                 "${formatSpokenDistance(remainingM, units)} to go"
             } else {

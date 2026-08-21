@@ -42,6 +42,7 @@ import com.boldexplorer.shared.navigation.CollectionExplorer
 import com.boldexplorer.shared.navigation.CollectionExplorerEvent
 import com.boldexplorer.shared.navigation.CollectionExplorerState
 import com.boldexplorer.shared.navigation.CollectionPoint
+import com.boldexplorer.shared.navigation.CompletionEvidence
 import com.boldexplorer.shared.navigation.NavMode
 import com.boldexplorer.shared.navigation.NavModeResolver
 import com.boldexplorer.shared.navigation.NavigationPolicy
@@ -1462,6 +1463,10 @@ class GpsViewModel
             smoothedBearingDeg: Float?,
             match: TrailMatch?,
         ) {
+            // Computed once and reused below for the progress cue's zero-distance guard (#91) —
+            // both readings must agree on the same fix's evidence, not two calls that happen to
+            // return the same thing today because nothing re-matches in between.
+            val completion = guidanceCoordinator.completionEvidence()
             when (
                 val event =
                     trailFollower.onLocationUpdate(
@@ -1478,7 +1483,7 @@ class GpsViewModel
                         // Completion decided from the match rather than the index, so overshooting
                         // the end still finishes the trail, and neither route to it fires before
                         // the user has walked (ADR 0001, S5).
-                        completion = guidanceCoordinator.completionEvidence(),
+                        completion = completion,
                     )
             ) {
                 is TrailFollowerEvent.TrailComplete -> {
@@ -1504,7 +1509,7 @@ class GpsViewModel
                     val offTrailAlertFired = announceOffTrail(followState, sample, guidance)
                     announceBacktrack(followState, sample, guidance, wrongVectorAlreadyEmitted = offTrailAlertFired)
                     // Last: match-state, then annotations, then progress — see announceFollowCues.
-                    announceFollowCues(sample, match)
+                    announceFollowCues(sample, match, completion)
                 }
             }
         }
@@ -1526,10 +1531,16 @@ class GpsViewModel
          * than null, so re-running the producers on the identical object would double-count evidence
          * that is not new: [MatchStateCueProducer] would advance its sustain counter twice for one
          * physical fix, and [ProgressCueProducer] would see the same `nowMs` twice.
+         *
+         * @param completion this fix's [CompletionEvidence], computed once by the caller and passed
+         *   through rather than re-derived — it must agree with whatever [TrailFollower] just used to
+         *   decide this fix did *not* complete, or the progress cue's zero-distance guard (#91) could
+         *   read different evidence than the completion check that ran moments earlier on the same fix.
          */
         private fun announceFollowCues(
             sample: LocationSample,
             match: TrailMatch?,
+            completion: CompletionEvidence,
         ) {
             val cues = followCues ?: return
             if (match == null || match === cues.previousMatch) return
@@ -1619,6 +1630,10 @@ class GpsViewModel
                         // from the very first bad fix, not only once a loss is confirmed. See the
                         // param doc on ProgressCueProducer.onFix for why these are two thresholds.
                         matchLost = match.state != MatchState.Matched,
+                        // Same evidence the completion routes required for this fix (#91) — a
+                        // near-zero reading is not trustworthy before the session has actually
+                        // walked anywhere.
+                        travelled = completion.travelled,
                     )
                 cue.speech?.let { text ->
                     announce(

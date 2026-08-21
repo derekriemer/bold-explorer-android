@@ -45,3 +45,17 @@ private fun formatOneDecimal(value: Double): String {
     val tenths = (value * 10.0).roundToInt()
     return "${tenths / 10}.${tenths % 10}"
 }
+
+/**
+ * Whether [formatSpokenDistance] would render [meters] as a literal "0" — the reading that claims
+ * nothing is left to travel. Mirrors that function's unit branches rather than a fixed metre
+ * threshold, because what counts as zero depends on which word it rounds to (feet vs. metres).
+ */
+fun roundsToZero(
+    meters: Double,
+    units: Units,
+): Boolean =
+    when (units) {
+        Units.METRIC -> meters < METRES_PER_KM && meters.roundToInt() == 0
+        Units.IMPERIAL -> (meters * FEET_PER_METRE).let { it < FEET_PER_MILE && it.roundToInt() == 0 }
+    }
