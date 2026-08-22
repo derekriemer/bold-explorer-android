@@ -13,7 +13,6 @@ import com.boldexplorer.shared.navigation.BearingComputer
 import com.boldexplorer.shared.repository.CollectionRepository
 import com.boldexplorer.shared.repository.SettingsRepository
 import com.boldexplorer.shared.repository.TrailAttachment
-import com.boldexplorer.shared.repository.TrailRepository
 import com.boldexplorer.shared.repository.WaypointRepository
 import com.boldexplorer.shared.settings.AppSettings
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -54,7 +53,6 @@ class WaypointsViewModel
     @Inject
     constructor(
         private val waypointRepo: WaypointRepository,
-        private val trailRepo: TrailRepository,
         private val collectionRepo: CollectionRepository,
         private val targetingStateHolder: TargetingStateHolder,
         private val selectedCollectionHolder: SelectedCollectionHolder,
@@ -82,10 +80,13 @@ class WaypointsViewModel
                 .observeAll()
                 .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
+        // Scoped to the selected collection — "attach to trail" must only ever offer trails the
+        // waypoint could plausibly belong with, never every trail across every collection.
         val trails: StateFlow<List<Trail>> =
-            trailRepo
-                .observeAll()
-                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
+            selectedCollectionHolder.selectedCollectionId
+                .flatMapLatest { id ->
+                    if (id == null) flowOf(emptyList()) else collectionRepo.observeTrailsForCollection(id)
+                }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
         val collections: StateFlow<List<ExplorerCollection>> =
             collectionRepo
