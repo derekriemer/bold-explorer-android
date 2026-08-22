@@ -505,7 +505,11 @@ object NavigationPolicy {
     /** Bulge over that window above which the trail ahead is not called straight. */
     const val STRAIGHT_SAGITTA_M = 4.0
 
-    /** Non-`Matched` fixes before a lost match is announced; stops flap chatter. */
+    /**
+     * Consecutive fixes before a match-state change is announced — non-`Matched` fixes for a loss,
+     * `Matched` fixes for a reacquisition (#82: the same flap-chatter risk exists in both
+     * directions, so both share this threshold).
+     */
     const val MATCH_LOST_SUSTAIN = 3
 
     /**
