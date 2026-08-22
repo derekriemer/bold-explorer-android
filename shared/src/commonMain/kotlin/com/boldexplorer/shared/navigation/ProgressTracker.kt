@@ -210,7 +210,7 @@ class ProgressTracker(
         val budgetM = budgetFor(uncertainSec, accuracyM)
         val windowM = (confirmed - budgetM)..(confirmed + budgetM)
         val found = polyline.candidates(point, windowM)
-        val chosen = rank(found, byPrediction = true)
+        val chosen = rank(found, tieBreakAnchorM = predictedAlongM)
         val rejected = found.firstOrNull { it !== chosen }
 
         val acceptM = acceptRadiusFor(chosen, gateM, accuracyM)
@@ -279,7 +279,11 @@ class ProgressTracker(
         val found = polyline.candidates(point, window = null)
         // Prediction is not consulted here: past the horizon it carries no information, and using
         // it would bias reacquisition toward exactly the stale prior we just declared worthless.
-        val chosen = rank(found, byPrediction = false)
+        // The last *confirmed* position is a different signal — it survives entering Lost
+        // unchanged — and breaking a near-tie toward it is what stops noise-level cross-track
+        // differences from silently relocating onto a geometrically nearby but unrelated stretch
+        // of trail (e.g. the mirrored arm of a switchback or lollipop).
+        val chosen = rank(found, tieBreakAnchorM = confirmedAlongM)
         val rejected = found.firstOrNull { it !== chosen }
 
         if (chosen == null || abs(chosen.crossTrackM) > gateM) {
@@ -328,7 +332,7 @@ class ProgressTracker(
         val budgetM = budgetFor(sinceSec, accuracyM)
         val windowM = (anchorM - budgetM)..(anchorM + budgetM)
         val found = polyline.candidates(point, windowM)
-        val chosen = rank(found, byPrediction = false)
+        val chosen = rank(found, tieBreakAnchorM = null)
         val rejected = found.firstOrNull { it !== chosen }
 
         if (chosen == null || abs(chosen.crossTrackM) > gateM) {
@@ -516,22 +520,22 @@ class ProgressTracker(
     }
 
     /**
-     * Ranks candidates, optionally letting prediction break a tie.
+     * Ranks candidates, optionally letting a continuity anchor break a tie.
      *
-     * Prediction is a *weak* signal and is confined to genuine ties: a candidate that is plainly
-     * nearer wins on geometry alone. Widening this into a general bias would let prediction error
-     * walk the answer away from the user's true position.
+     * The anchor — prediction during windowed tracking, last confirmed position during a global
+     * scan — is a *weak* signal and is confined to genuine ties: a candidate that is plainly
+     * nearer wins on geometry alone. Widening this into a general bias would let the anchor walk
+     * the answer away from the user's true position.
      */
     private fun rank(
         found: List<TrailPosition>,
-        byPrediction: Boolean,
+        tieBreakAnchorM: Double?,
     ): TrailPosition? {
         val best = found.firstOrNull() ?: return null
-        if (!byPrediction) return best
-        val predicted = predictedAlongM ?: return best
+        val anchor = tieBreakAnchorM ?: return best
         return found
             .filter { abs(it.crossTrackM) - abs(best.crossTrackM) <= tuning.candidateTieM }
-            .minByOrNull { abs(it.alongTrackM - predicted) } ?: best
+            .minByOrNull { abs(it.alongTrackM - anchor) } ?: best
     }
 
     /**

@@ -249,6 +249,36 @@ class ProgressTrackerLadderTest {
     }
 
     @Test
+    fun globalScan_prefersTheArmContinuousWithLastConfirmedPosition() {
+        // Two arms of a lollipop only 4 m apart on the ground, mirrored across the loop — the
+        // geometry the 2026-08-19 field walk hit, where the global scan silently relocated the
+        // walker ~2.7 km onto the wrong arm. Confirmed 100 m up the outbound (west) arm.
+        val legM = 600.0
+        val gapM = 4.0
+        val trail = TrailPolyline(densify(switchbackShape(legM, gapM), 10.0))
+        val tracker = ProgressTracker(trail)
+        tracker.onFix(sampleAt(northM = 100.0, eastM = 0.0, timestampMs = 0, speedMps = 0.0))
+
+        // Wander off both arms long enough to expire into Lost.
+        repeat(120) {
+            tracker.onFix(sampleAt(northM = 100.0, eastM = 90.0, timestampMs = (it + 1) * 1_000L, speedMps = 0.0))
+        }
+
+        // Comes back abeam northM=100 but, by GPS noise, marginally closer to the inbound (east)
+        // arm's line than the outbound one the walker was actually standing on.
+        val match = tracker.onFix(sampleAt(northM = 100.0, eastM = 2.5, timestampMs = 200_000L, speedMps = 0.0))
+
+        assertEquals(MatchState.Unconfirmed, match.state, "precondition: a global candidate is on the table")
+        assertEquals(
+            100.0,
+            assertNotNull(match.chosen).alongTrackM,
+            2.0,
+            "must reacquire on the arm continuous with the last confirmed position, not the " +
+                "nearer-by-noise one: got ${match.chosen?.alongTrackM}",
+        )
+    }
+
+    @Test
     fun theLakeFixture_anOffTrailExcursionNeverInflatesProgress() {
         // Leave the trail at 200 m, walk 150 m off it and back, rejoin at 205 m. The tracker must
         // never claim ~350 m — the distance walked is not the distance progressed.
