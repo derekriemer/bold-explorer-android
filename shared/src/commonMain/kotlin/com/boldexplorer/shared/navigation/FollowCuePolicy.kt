@@ -35,7 +35,18 @@ object FollowCuePolicy {
         polyline: TrailPolyline,
         alongTrackM: Double,
         direction: TravelDirection,
-    ): Boolean {
+    ): Boolean = sagittaAhead(polyline, alongTrackM, direction) <= NavigationPolicy.STRAIGHT_SAGITTA_M
+
+    /**
+     * The raw sagitta [isStraightAhead] compares against [NavigationPolicy.STRAIGHT_SAGITTA_M],
+     * exposed separately so a caller logging *why* a cue was suppressed (#85) can report where the
+     * observed value actually sat relative to the threshold, not just which side of it.
+     */
+    fun sagittaAhead(
+        polyline: TrailPolyline,
+        alongTrackM: Double,
+        direction: TravelDirection,
+    ): Double {
         val (startM, lookaheadM) =
             when (direction) {
                 TravelDirection.Forward -> alongTrackM to NavigationPolicy.STRAIGHT_LOOKAHEAD_M
@@ -44,6 +55,6 @@ object FollowCuePolicy {
                     (alongTrackM - NavigationPolicy.STRAIGHT_LOOKAHEAD_M).coerceAtLeast(0.0) to lookahead
                 }
             }
-        return polyline.sagittaOver(startM, lookaheadM) <= NavigationPolicy.STRAIGHT_SAGITTA_M
+        return polyline.sagittaOver(startM, lookaheadM)
     }
 }

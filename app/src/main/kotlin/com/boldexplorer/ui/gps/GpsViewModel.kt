@@ -1616,12 +1616,13 @@ class GpsViewModel
             // that cadence must keep running even before the match confirms a position, or the first
             // confirmed fix would read as "due" regardless of how long the follow had already run.
             if (session != null) {
+                val remainingM = alongTrackM?.let { session.remainingM(it) }
                 val cue =
                     cues.progress.onFix(
                         nowMs = sample.timestamp,
                         polyline = session.polyline,
                         alongTrackM = alongTrackM,
-                        remainingM = alongTrackM?.let { session.remainingM(it) },
+                        remainingM = remainingM,
                         direction = session.direction,
                         units = units,
                         lastSpokeAtMs = lastSpokeAtMs,
@@ -1635,6 +1636,24 @@ class GpsViewModel
                         // walked anywhere.
                         travelled = completion.travelled,
                     )
+                // #85: silence used to be indistinguishable between four causes (not due, yielding,
+                // match not Matched, trail not straight) — one entry per fix, same DETECTION_STATE
+                // shape the off-trail/backtrack detectors already log, so a field walk can attribute
+                // a quiet stretch without reconstructing the trail's geometry offline.
+                viewModelScope.launch {
+                    audioEventLog.append(
+                        AudioLogEntry(
+                            timestampMs = sample.timestamp,
+                            kind = AudioLogEntry.Kind.DETECTION_STATE,
+                            trigger = "ProgressCheck",
+                            inputs =
+                                "alongTrack=${alongTrackM.metresOrNull()}, remaining=${remainingM.metresOrNull()}" +
+                                    ", matchState=${match.state.name}, travelled=${completion.travelled}",
+                            outputs = "",
+                            played = cue.disposition,
+                        ),
+                    )
+                }
                 cue.speech?.let { text ->
                     announce(
                         text,

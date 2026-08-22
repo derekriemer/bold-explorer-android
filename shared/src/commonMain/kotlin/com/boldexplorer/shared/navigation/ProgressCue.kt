@@ -1,6 +1,7 @@
 package com.boldexplorer.shared.navigation
 
 import com.boldexplorer.shared.settings.Units
+import kotlin.math.roundToInt
 
 /**
  * What the follow should emit on this fix by way of progress.
@@ -8,9 +9,14 @@ import com.boldexplorer.shared.settings.Units
  * A value, not an effect. The producer decides; `GpsViewModel` speaks and beeps. That split is what
  * lets these decisions be JVM-tested and inherited by iOS, and it is the seam the next producer —
  * S8's "300 feet until a right turn" — is added beside rather than inside.
+ *
+ * @param disposition why, in `bail:`/`speak:` form (#85) — the audio log's `played` field for this
+ *   producer, same shape as `TrailGuidanceCoordinator`'s detector dispositions. Silence used to be
+ *   indistinguishable between four different causes; a field walk had to eliminate them by hand.
  */
 data class ProgressCue(
     val speech: String?,
+    val disposition: String,
 )
 
 /**
@@ -51,21 +57,39 @@ class ProgressCueProducer {
         matchLost: Boolean,
         travelled: Boolean,
     ): ProgressCue {
-        val due = elapsedSinceMs(nowMs, lastSpeechAtMs) >= NavigationPolicy.PROGRESS_SPEECH_INTERVAL_MS
-        val yielding = elapsedSinceMs(nowMs, lastSpokeAtMs) < NavigationPolicy.PROGRESS_YIELD_MS
-        val straight = alongTrackM != null && FollowCuePolicy.isStraightAhead(polyline, alongTrackM, direction)
-        val untrustedZero = remainingM != null && !travelled && roundsToZero(remainingM, units)
-        val speech =
-            if (due && !yielding && !matchLost && alongTrackM != null && remainingM != null &&
-                straight && !untrustedZero
-            ) {
-                lastSpeechAtMs = nowMs
-                "${formatSpokenDistance(remainingM, units)} to go"
-            } else {
-                null
+        // The decision, then its description — not the description parsed back into a decision (see
+        // TrailGuidanceCoordinator.offTrailDisposition for why: a spoken cue must never depend on the
+        // spelling of the log string that describes it). Each branch below produces both together.
+        val yieldElapsedMs = elapsedSinceMs(nowMs, lastSpokeAtMs)
+        val (speech, disposition) =
+            when {
+                elapsedSinceMs(nowMs, lastSpeechAtMs) < NavigationPolicy.PROGRESS_SPEECH_INTERVAL_MS ->
+                    null to "bail:not_due"
+                yieldElapsedMs < NavigationPolicy.PROGRESS_YIELD_MS ->
+                    null to "bail:yield_${yieldElapsedMs}ms"
+                matchLost -> null to "bail:match_lost"
+                alongTrackM == null || remainingM == null -> null to "bail:unconfirmed"
+                else -> {
+                    val sagittaM = FollowCuePolicy.sagittaAhead(polyline, alongTrackM, direction)
+                    when {
+                        sagittaM > NavigationPolicy.STRAIGHT_SAGITTA_M ->
+                            null to
+                                "bail:not_straight_sagitta_${sagittaM.roundToInt()}m_over_" +
+                                "${NavigationPolicy.STRAIGHT_SAGITTA_M.roundToInt()}m"
+
+                        !travelled && roundsToZero(remainingM, units) ->
+                            null to "bail:untrusted_zero_remaining_${remainingM.roundToInt()}m"
+
+                        else -> {
+                            lastSpeechAtMs = nowMs
+                            "${formatSpokenDistance(remainingM, units)} to go" to
+                                "speak:remaining_${remainingM.roundToInt()}m"
+                        }
+                    }
+                }
             }
 
-        return ProgressCue(speech = speech)
+        return ProgressCue(speech = speech, disposition = disposition)
     }
 
     /** Forget the cadence — a new follow starts its own rhythm rather than inheriting one. */

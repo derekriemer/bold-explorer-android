@@ -110,4 +110,19 @@ class FollowCuePolicyTest {
             "the corner sits 10 m outside the shortened window, not 20 m inside an unshortened one",
         )
     }
+
+    @Test
+    fun sagittaAheadAgreesWithIsStraightAhead() {
+        // #85: sagittaAhead is the raw value isStraightAhead's threshold check is built from —
+        // exercised separately so a disposition string can report where a fix actually sat, not
+        // just which side of the line.
+        val north = (0..10).map { LatLng(latFor(it * 20.0), 0.0) }
+        val east = (1..10).map { LatLng(latFor(200.0), lonFor(it * 20.0)) }
+        val poly = TrailPolyline(north + east)
+
+        val sagitta = FollowCuePolicy.sagittaAhead(poly, 170.0, TravelDirection.Forward)
+
+        assertTrue(sagitta > NavigationPolicy.STRAIGHT_SAGITTA_M, "the corner is 30 m ahead")
+        assertEquals(sagitta <= NavigationPolicy.STRAIGHT_SAGITTA_M, FollowCuePolicy.isStraightAhead(poly, 170.0, TravelDirection.Forward))
+    }
 }

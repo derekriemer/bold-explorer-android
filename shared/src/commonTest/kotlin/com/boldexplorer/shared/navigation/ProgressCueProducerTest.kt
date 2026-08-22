@@ -6,6 +6,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class ProgressCueProducerTest {
     private fun latFor(m: Double) = m / 111_194.9
@@ -150,5 +151,66 @@ class ProgressCueProducerTest {
         val cue = produce(ProgressCueProducer(), 0L, remainingM = 400.0, travelled = false)
 
         assertNotNull(cue.speech, "travel evidence only gates a zero-distance reading")
+    }
+
+    // #85: silence used to be indistinguishable between four causes. Each bail now names itself.
+
+    @Test
+    fun dispositionExplainsANotDueBail() {
+        val producer = ProgressCueProducer()
+        produce(producer, 0L)
+
+        assertEquals("bail:not_due", produce(producer, 5_000L).disposition)
+    }
+
+    @Test
+    fun dispositionExplainsAYieldBail() {
+        val cue = produce(ProgressCueProducer(), 20_000L, lastSpokeAtMs = 18_000L)
+
+        assertEquals("bail:yield_2000ms", cue.disposition)
+    }
+
+    @Test
+    fun dispositionExplainsAMatchLostBail() {
+        val cue = produce(ProgressCueProducer(), 0L, matchLost = true)
+
+        assertEquals("bail:match_lost", cue.disposition)
+    }
+
+    @Test
+    fun dispositionExplainsAnUnconfirmedBail() {
+        val cue = produce(ProgressCueProducer(), 0L, alongTrackM = null, remainingM = null)
+
+        assertEquals("bail:unconfirmed", cue.disposition)
+    }
+
+    @Test
+    fun dispositionExplainsANotStraightBailWithTheSagittaValue() {
+        // Same corner fixture as itStaysQuietWhereTheTrailIsNotStraight, so the sagitta value in the
+        // disposition is a real, non-trivial number, not zero.
+        val north = (0..10).map { LatLng(latFor(it * 20.0), 0.0) }
+        val east = (1..10).map { LatLng(latFor(200.0), it * 20.0 / 111_194.9) }
+        val corner = TrailPolyline(north + east)
+
+        val cue = ProgressCueProducer().onFix(0L, corner, alongTrackM = 170.0, remainingM = 200.0,
+            direction = TravelDirection.Forward, units = Units.IMPERIAL, lastSpokeAtMs = Long.MIN_VALUE,
+            matchLost = false, travelled = true)
+
+        assertTrue(cue.disposition.startsWith("bail:not_straight_sagitta_"), cue.disposition)
+        assertTrue(cue.disposition.endsWith("m_over_4m"), cue.disposition)
+    }
+
+    @Test
+    fun dispositionExplainsAnUntrustedZeroBail() {
+        val cue = produce(ProgressCueProducer(), 0L, remainingM = 0.05, travelled = false)
+
+        assertEquals("bail:untrusted_zero_remaining_0m", cue.disposition)
+    }
+
+    @Test
+    fun dispositionRecordsTheSpokenDistanceOnSuccess() {
+        val cue = produce(ProgressCueProducer(), 0L, remainingM = 640.0)
+
+        assertEquals("speak:remaining_640m", cue.disposition)
     }
 }
