@@ -9,6 +9,7 @@ import com.boldexplorer.shared.navigation.SmoothedHeading
 import com.boldexplorer.shared.navigation.TrailGuidanceState
 import com.boldexplorer.shared.repository.SettingsRepository
 import com.boldexplorer.shared.settings.AppSettings
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -52,8 +53,15 @@ class AudioCuePlayer
     ) {
         private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         private var playerJob: Job? = null
+
+        // Guards against dispatching a cue against the seed AppSettings() (absoluteSilenceEnabled =
+        // false) before DataStore's first async emission lands — a sticky silence preference must
+        // never be audibly violated by a race at process start.
+        private val firstSettingsLoaded = CompletableDeferred<Unit>()
         private val settings: StateFlow<AppSettings> =
-            settingsRepo.observeSettings().stateIn(scope, SharingStarted.Eagerly, AppSettings())
+            settingsRepo.observeSettings()
+                .onEach { firstSettingsLoaded.complete(Unit) }
+                .stateIn(scope, SharingStarted.Eagerly, AppSettings())
 
         // Stored from start() so dispatch() can snapshot current values for logging.
         private var accuracyMFlow: StateFlow<Double?>? = null
@@ -104,6 +112,7 @@ class AudioCuePlayer
         }
 
         private suspend fun dispatch(event: AudioCueEvent) {
+            firstSettingsLoaded.await()
             val currentSettings = settings.value
             val duck = currentSettings.duckAudioEnabled
 
