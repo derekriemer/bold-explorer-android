@@ -276,6 +276,12 @@ class TrailsViewModel
             targetingStateHolder.requestTrailEndTarget(trailId, isStart, label)
         }
 
+        /**
+         * Create a real waypoint and attach it to [trailId] — never a track point. A manually typed
+         * coordinate has no kinematics gate behind it the way the auto-recorder does, so it must
+         * never be allowed to fabricate geometry directly; routing through [WaypointRepository.attach]
+         * means a recorded trail can only ever gain an annotation from this, never a vertex (#102).
+         */
         fun addWaypointToTrail(
             trailId: Long,
             name: String,
@@ -283,9 +289,26 @@ class TrailsViewModel
             lon: Double,
             elevM: Double?,
         ) {
+            val collectionId =
+                selectedCollectionHolder.selectedCollectionId.value ?: run {
+                    _toast.value = "Select a collection first"
+                    return
+                }
             viewModelScope.launch {
-                waypointRepo.createTrackPoint(trailId, name, lat, lon, elevM)
-                _toast.value = "Waypoint added"
+                val id = waypointRepo.create(collectionId, name, lat, lon, elevM, null)
+                val outcome = waypointRepo.attach(trailId, id)
+                _toast.value =
+                    when {
+                        outcome is TrailAttachment.Annotation && outcome.fix.farFromTrail -> {
+                            "Waypoint added, but it is ${
+                                BearingComputer.formatDistance(outcome.fix.distanceFromTrailM, settings.value.units)
+                            } from the trail"
+                        }
+
+                        else -> {
+                            "Waypoint added"
+                        }
+                    }
             }
         }
 
