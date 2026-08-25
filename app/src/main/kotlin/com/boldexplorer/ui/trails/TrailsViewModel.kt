@@ -86,11 +86,15 @@ class TrailsViewModel
                 .observeAll()
                 .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
-        // User-created waypoints only — used for "attach existing" candidates.
-        val allWaypoints: StateFlow<List<Waypoint>> =
-            waypointRepo
-                .observeAll()
-                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
+        // User-created waypoints in the selected collection — used for "attach existing"
+        // candidates. Scoped like _collectionTrails above: "attach existing" must only ever offer
+        // waypoints the trail could plausibly belong with, never every waypoint across every
+        // collection (#102).
+        val collectionWaypoints: StateFlow<List<Waypoint>> =
+            selectedCollectionHolder.selectedCollectionId
+                .flatMapLatest { id ->
+                    if (id == null) flowOf(emptyList()) else collectionRepo.observeWaypointsForCollection(id)
+                }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
         // Where each trail actually begins and ends, from its geometry (ADR 0001, S5b).
         //

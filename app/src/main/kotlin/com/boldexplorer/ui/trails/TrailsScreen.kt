@@ -78,7 +78,7 @@ fun TrailsScreen(
     val trailEnds by viewModel.trailEnds.collectAsStateWithLifecycle()
     val trackPointCounts by viewModel.trackPointCounts.collectAsStateWithLifecycle()
     val trackPoints by viewModel.trackPoints.collectAsStateWithLifecycle()
-    val allWaypoints by viewModel.allWaypoints.collectAsStateWithLifecycle()
+    val collectionWaypoints by viewModel.collectionWaypoints.collectAsStateWithLifecycle()
     val collections by viewModel.collections.collectAsStateWithLifecycle()
     val selectedCollectionId by viewModel.selectedCollectionId.collectAsStateWithLifecycle()
     val query by viewModel.query.collectAsStateWithLifecycle()
@@ -314,7 +314,7 @@ fun TrailsScreen(
     // Attach existing waypoint(s) to trail
     attachWpToTrail?.let { trailId ->
         val existing = namedWaypoints[trailId]?.map { it.waypoint.id }?.toSet() ?: emptySet()
-        val candidates = allWaypoints.filter { it.id !in existing }
+        val candidates = collectionWaypoints.filter { it.id !in existing }
         MultiSelectItemDialog(
             title = "Attach Existing Waypoints",
             entries = candidates.map { it.id to it.name },
@@ -712,4 +712,3 @@ private fun AddWaypointToTrailDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
-
