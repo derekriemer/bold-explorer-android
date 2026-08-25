@@ -57,7 +57,6 @@ fun DebugScreen(
     val location by viewModel.location.collectAsStateWithLifecycle()
     val heading by viewModel.heading.collectAsStateWithLifecycle()
     val exportStatus by viewModel.exportStatus.collectAsStateWithLifecycle()
-    val accuracyBeaconEnabled by viewModel.accuracyBeaconEnabled.collectAsStateWithLifecycle()
     val useGnss by viewModel.useGnss.collectAsStateWithLifecycle()
     var showNewLogDialog by remember { mutableStateOf(false) }
     val logEntries by viewModel.logEntries.collectAsStateWithLifecycle()
@@ -331,48 +330,6 @@ fun DebugScreen(
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                 DebugRow("Magnetic", heading?.magnetic?.let { "${"%.1f".format(it)}°" } ?: "—")
                 DebugRow("True North", heading?.trueNorth?.let { "${"%.1f".format(it)}°" } ?: "—")
-            }
-        }
-
-        Spacer(Modifier.height(8.dp))
-
-        Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text("Audio", style = MaterialTheme.typography.titleSmall)
-                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                Row(
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .semantics(mergeDescendants = true) {
-                                // a11y: explains what the beacon sounds like and means, which the
-                                // visible "Accuracy beacon" label + switch don't convey.
-                                contentDescription =
-                                    "Accuracy beacon ${if (accuracyBeaconEnabled) "on" else "off"}: beeps on every GPS update, pitch maps to fix quality"
-                            },
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text("Accuracy beacon", style = MaterialTheme.typography.bodyMedium)
-                    Switch(
-                        checked = accuracyBeaconEnabled,
-                        onCheckedChange = { viewModel.setAccuracyBeaconEnabled(it) },
-                    )
-                }
-                Text(
-                    "Current accuracy: ${location?.accuracy?.let {
-                        "${"%.0f".format(
-                            it,
-                        )} m → ${"%.0f".format(880.0 - (880.0 - 220.0) * (it.coerceIn(0.0, 30.0) / 30.0))} Hz"
-                    } ?: "no fix"}",
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(vertical = 4.dp),
-                )
-                Button(
-                    onClick = { viewModel.testAccuracyBeacon() },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Play Accuracy Beacon")
-                }
             }
         }
 

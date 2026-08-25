@@ -60,7 +60,6 @@ class DebugViewModel
         private val _exportStatus = MutableStateFlow<String?>(null)
         val exportStatus: StateFlow<String?> = _exportStatus.asStateFlow()
 
-        val accuracyBeaconEnabled: StateFlow<Boolean> = scheduler.accuracyBeaconEnabled
 
         val useGnss: StateFlow<Boolean> = locationRouter.useGnss
 
@@ -174,19 +173,8 @@ class DebugViewModel
         }
 
         // ── Existing ──────────────────────────────────────────────────────────────────
-
-        fun setAccuracyBeaconEnabled(enabled: Boolean) {
-            scheduler.accuracyBeaconEnabled.value = enabled
-        }
-
         fun setUseGnss(enabled: Boolean) {
             locationRouter.setUseGnss(enabled)
-        }
-
-        fun testAccuracyBeacon() {
-            viewModelScope.launch {
-                audioEngine.playAccuracyBeacon(location.value?.accuracy ?: 15.0)
-            }
         }
 
         fun exportAllWaypoints() {

@@ -12,7 +12,6 @@ data class AudioLogEntry(
 ) {
     enum class Kind {
         DIRECTIONAL_BEACON,
-        ACCURACY_BEACON,
         ALIGNMENT_PING,
         TRAIL_COMPLETE,
         TTS_ANNOUNCEMENT,

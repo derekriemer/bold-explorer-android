@@ -6,11 +6,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -23,12 +21,8 @@ class AudioCueScheduler(
     private val _events = MutableSharedFlow<AudioCueEvent>(extraBufferCapacity = 16)
     val events: SharedFlow<AudioCueEvent> = _events.asSharedFlow()
 
-    // Toggled by the debug screen at runtime; off by default in production.
-    val accuracyBeaconEnabled = MutableStateFlow(false)
-
     fun start(
         scope: CoroutineScope,
-        accuracyM: StateFlow<Double?>,
         relativeDeg: StateFlow<Double?>,
         alignmentActive: StateFlow<Boolean>,
         beaconCuesEnabled: StateFlow<Boolean>,
@@ -53,15 +47,6 @@ class AudioCueScheduler(
                                 }
                             }
                             delay(config.directionalBeaconIntervalMs)
-                        }
-                    }
-                }
-
-                // Debug-only accuracy beacon: reactive to GPS updates, gated by runtime toggle.
-                launch {
-                    accuracyM.filterNotNull().collect { acc ->
-                        if (beaconCuesEnabled.value && !alignmentActive.value && accuracyBeaconEnabled.value) {
-                            _events.emit(AudioCueEvent.AccuracyBeacon(acc))
                         }
                     }
                 }

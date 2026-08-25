@@ -25,7 +25,7 @@ class CueOutputLifecycleTest {
         val entries = mutableListOf<AudioLogEntry>()
         val lifecycle = CueOutputLifecycle(FakeAudioEventLog(entries::add)) { 1_000L }
 
-        lifecycle.unavailable("AccuracyBeacon", reason = "track_create_failed")
+        lifecycle.unavailable("AlignmentPing", reason = "track_create_failed")
 
         assertEquals(1, entries.size)
         assertEquals(AudioLogEntry.Kind.AUDIO_OUTPUT, entries.single().kind)

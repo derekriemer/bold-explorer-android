@@ -44,7 +44,7 @@ class AudioFocusControllerTest {
             val controller = AudioFocusController(backend, FakeAudioEventLog(entries::add)) { 1_000L }
 
             val mode =
-                controller.play(duckAudioEnabled = false, cue = "AccuracyBeacon") {
+                controller.play(duckAudioEnabled = false, cue = "TrailComplete") {
                     actions += "playback"
                 }
 

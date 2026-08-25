@@ -75,11 +75,6 @@ class AudioEngine
             playCue("DirectionalBeacon", Tone(pitchHz, durationMs = 100, leftVol = left, rightVol = right))
         }
 
-        suspend fun playAccuracyBeacon(accuracyM: Double) {
-            val freq = mapAccuracyToFrequency(accuracyM)
-            playCue("AccuracyBeacon", Tone(freq, durationMs = 100, leftVol = 0.7f, rightVol = 0.7f))
-        }
-
         suspend fun playAlignmentPing(
             pan: Float,
             pitchHz: Double,
@@ -97,13 +92,6 @@ class AudioEngine
                 Tone(440.0, durationMs = 120, leftVol = 0.7f, rightVol = 0.7f),
             )
 
-        // 0 m (perfect fix) → 880 Hz; 30 m (degraded) → 220 Hz; clamped outside that range.
-        private fun mapAccuracyToFrequency(accuracyM: Double): Double {
-            val clamped = accuracyM.coerceIn(0.0, 30.0)
-            return 880.0 - (880.0 - 220.0) * (clamped / 30.0)
-        }
-
-        /** Returns only after the final audible cue frame has rendered or playback is interrupted. */
         private suspend fun playCue(
             cue: String,
             vararg tones: Tone,

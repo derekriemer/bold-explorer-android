@@ -9,12 +9,6 @@ sealed class AudioCueEvent {
         val pitchHz: Double,
     ) : AudioCueEvent()
 
-    // Debug-only: frequency maps GPS accuracy (0m → 880 Hz, 30m → 220 Hz).
-    // Enabled via the debug screen toggle, suppressed in production by default.
-    data class AccuracyBeacon(
-        val accuracyM: Double,
-    ) : AudioCueEvent()
-
     // Alignment ping at configurable Hz.
     // pan: [-1, 1] where negative = left ear (turn left), positive = right ear (turn right).
     // pitchHz: continuous, 880 Hz when aligned → 220 Hz at 180° off; higher = closer.

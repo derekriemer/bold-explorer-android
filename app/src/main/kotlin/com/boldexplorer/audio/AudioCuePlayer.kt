@@ -26,7 +26,7 @@ import javax.inject.Singleton
 /**
  * Bridges [AudioCueScheduler] (pure scheduling) to Android playback.
  *
- * - [AudioCueEvent.DirectionalBeacon] / [AudioCueEvent.AccuracyBeacon] / [AudioCueEvent.AlignmentPing]
+ * - [AudioCueEvent.DirectionalBeacon] / [AudioCueEvent.AlignmentPing]
  *   → [AudioEngine] streaming tone
  * - [AudioCueEvent.TrailComplete] → [TtsEngine]
  *
@@ -87,7 +87,7 @@ class AudioCuePlayer
             trailGuidanceFlow = trailGuidance
             smoothedHeadingFlow = smoothedHeading
 
-            val schedulerJob = scheduler.start(scope, accuracyM, relativeDeg, alignmentActive, beaconCuesEnabled)
+            val schedulerJob = scheduler.start(scope, relativeDeg, alignmentActive, beaconCuesEnabled)
             playerJob =
                 scheduler.events
                     .onEach { event -> dispatch(event) }
@@ -206,35 +206,6 @@ class AudioCuePlayer
                                         }
                                     },
                                 extra = extra,
-                            ),
-                        )
-                    }
-                }
-
-                is AudioCueEvent.AccuracyBeacon -> {
-                    val audioMode =
-                        if (!silenced) {
-                            audioFocusController.play(duck, "AccuracyBeacon") {
-                                audioEngine.playAccuracyBeacon(event.accuracyM)
-                            }
-                        } else {
-                            CueAudioMode.SUPPRESSED
-                        }
-                    val mappedHz = 880.0 - (880.0 - 220.0) * (event.accuracyM.coerceIn(0.0, 30.0) / 30.0)
-                    scope.launch {
-                        audioEventLog.append(
-                            AudioLogEntry(
-                                timestampMs = nowMs,
-                                kind = AudioLogEntry.Kind.ACCURACY_BEACON,
-                                trigger = "GPS update",
-                                inputs = cueInputs("accuracy=${"%.1f".format(event.accuracyM)}m", duck, audioMode),
-                                outputs = "pitchHz=${"%.0f".format(mappedHz)} Hz",
-                                played =
-                                    if (silenced) {
-                                        "Suppressed (silence mode): accuracy tone @ ${"%.0f".format(mappedHz)} Hz"
-                                    } else {
-                                        "Accuracy tone @ ${"%.0f".format(mappedHz)} Hz"
-                                    },
                             ),
                         )
                     }

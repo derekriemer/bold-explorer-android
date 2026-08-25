@@ -39,10 +39,7 @@ class LocationViewModel
             compassProvider.headingFlow
                 .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
 
-        /**
-         * GPS accuracy in metres — null until first fix.
-         * Consumed by AudioCueScheduler for the accuracy-beacon frequency.
-         */
+        /** GPS accuracy in metres — null until first fix. */
         val accuracyM: StateFlow<Double?> =
             location
                 .map { it?.accuracy }

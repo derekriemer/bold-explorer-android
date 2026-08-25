@@ -20,7 +20,6 @@ class AudioCueSchedulerTest {
             val job =
                 scheduler.start(
                     scope = schedulerScope,
-                    accuracyM = MutableStateFlow<Double?>(null),
                     relativeDeg = MutableStateFlow<Double?>(null),
                     alignmentActive = MutableStateFlow(false),
                     beaconCuesEnabled = MutableStateFlow(true),
