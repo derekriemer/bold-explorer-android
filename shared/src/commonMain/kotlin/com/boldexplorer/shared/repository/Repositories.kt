@@ -68,6 +68,11 @@ interface WaypointRepository {
      * Attach [waypointId] to [trailId], as geometry or as an annotation — see [TrailAttachment] for
      * which, and why the caller does not get to say.
      *
+     * [trail_waypoint] and [trail_annotation] both enforce `UNIQUE(trail_id, waypoint_id)`; a pair
+     * already attached comes back as [TrailAttachment.AlreadyAttached] rather than throwing. Callers
+     * offering an "attach to trail" choice should still filter [trailIdsFor] out of their candidate
+     * list — this is the safety net beneath that, not a replacement for it.
+     *
      * @param position an explicit vertex position. Passing one *is* the claim that this point
      *   belongs in the geometry at that index, so it is always honoured; it is how a hand-built
      *   route is assembled, and it is the only way to fabricate geometry left in the API.
@@ -82,6 +87,16 @@ interface WaypointRepository {
         trailId: Long,
         waypointId: Long,
     )
+
+    /**
+     * Trail ids [waypointId] is currently attached to, as a vertex or an annotation.
+     *
+     * Both `trail_waypoint` and `trail_annotation` enforce `UNIQUE(trail_id, waypoint_id)`. Callers
+     * offering an "attach to trail" choice should filter it out of their candidate list with this —
+     * [attach] tolerates re-attaching a pair already in this set, but only as a safety net for a
+     * stale list, not as license to skip the filter.
+     */
+    suspend fun trailIdsFor(waypointId: Long): Set<Long>
 
     suspend fun setPosition(
         trailId: Long,
@@ -280,10 +295,21 @@ interface TrailAnnotationRepository {
  */
 sealed interface TrailAttachment {
     /** The point became a vertex of the trail's geometry, at [position]. */
-    data class Vertex(val position: Int) : TrailAttachment
+    data class Vertex(
+        val position: Int,
+    ) : TrailAttachment
 
     /** The point annotates the trail without being part of it. */
-    data class Annotation(val fix: TrailAnnotationFix) : TrailAttachment
+    data class Annotation(
+        val fix: TrailAnnotationFix,
+    ) : TrailAttachment
+
+    /**
+     * The pair was already attached (as a vertex or an annotation); nothing changed. [attach] found
+     * this itself, rather than a caller having to catch the `UNIQUE(trail_id, waypoint_id)` violation
+     * that skipping the check would otherwise throw.
+     */
+    data object AlreadyAttached : TrailAttachment
 }
 
 /**

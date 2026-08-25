@@ -9,11 +9,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -72,6 +72,7 @@ fun WaypointsScreen(
     val trails by viewModel.trails.collectAsStateWithLifecycle()
     val collections by viewModel.collections.collectAsStateWithLifecycle()
     val waypointCollectionIds by viewModel.waypointCollectionIds.collectAsStateWithLifecycle()
+    val attachedTrailIds by viewModel.attachedTrailIds.collectAsStateWithLifecycle()
     val query by viewModel.query.collectAsStateWithLifecycle()
     val sortMode by viewModel.sortMode.collectAsStateWithLifecycle()
     val radiusFilterM by viewModel.radiusFilterM.collectAsStateWithLifecycle()
@@ -91,6 +92,10 @@ fun WaypointsScreen(
 
     LaunchedEffect(collectionTarget) {
         collectionTarget?.let { viewModel.loadWaypointCollections(it.id) }
+    }
+
+    LaunchedEffect(attachTarget) {
+        attachTarget?.let { viewModel.loadAttachedTrails(it.id) }
     }
 
     Column(modifier = Modifier.padding(paddingValues)) {
@@ -266,6 +271,7 @@ fun WaypointsScreen(
         AttachToTrailDialog(
             waypointName = wp.name,
             trails = trails,
+            attachedTrailIds = attachedTrailIds,
             onConfirm = { trailId ->
                 viewModel.attach(wp.id, trailId)
                 attachTarget = null
@@ -587,14 +593,28 @@ private fun MoveToCollectionDialog(
 private fun AttachToTrailDialog(
     waypointName: String,
     trails: List<Trail>,
+    attachedTrailIds: Set<Long>,
     onConfirm: (trailId: Long) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    if (trails.isEmpty()) {
+    // Re-attaching to a trail this waypoint is already on violates the DB's
+    // UNIQUE(trail_id, waypoint_id) constraint and used to crash the app (#107) — filter it out
+    // rather than let the user pick it.
+    val candidates = trails.filterNot { it.id in attachedTrailIds }
+
+    if (candidates.isEmpty()) {
         AlertDialog(
             onDismissRequest = onDismiss,
             title = { Text("Attach to Trail") },
-            text = { Text("No trails exist yet. Create a trail first.") },
+            text = {
+                Text(
+                    if (trails.isEmpty()) {
+                        "No trails exist yet. Create a trail first."
+                    } else {
+                        "$waypointName is already attached to every trail in this collection."
+                    },
+                )
+            },
             confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
         )
         return
@@ -605,7 +625,7 @@ private fun AttachToTrailDialog(
         title = { Text("Attach $waypointName to Trail") },
         text = {
             Column(modifier = Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
-                trails.forEach { trail ->
+                candidates.forEach { trail ->
                     TextButton(
                         onClick = { onConfirm(trail.id) },
                         modifier =

@@ -321,26 +321,36 @@ class TrailsViewModel
             waypointIds: Set<Long>,
         ) {
             viewModelScope.launch {
+                val outcomes = waypointIds.map { id -> id to waypointRepo.attach(trailId, id) }
+                // Attaching to a recorded trail annotates it; one that lands far off the
+                // trail is worth naming, since only the user can say whether it belongs.
                 val distant =
-                    waypointIds.mapNotNull { id ->
-                        val outcome = waypointRepo.attach(trailId, id)
-                        // Attaching to a recorded trail annotates it; one that lands far off the
-                        // trail is worth naming, since only the user can say whether it belongs.
+                    outcomes.mapNotNull { (id, outcome) ->
                         (outcome as? TrailAttachment.Annotation)
                             ?.takeIf { it.fix.farFromTrail }
                             ?.let { waypointRepo.getById(id)?.name to it.fix.distanceFromTrailM }
                     }
-                val attached = "${waypointIds.size} waypoint${if (waypointIds.size == 1) "" else "s"} attached"
+                // The candidate list is scoped to unattached trails, but it can go stale between
+                // opening the picker and confirming; count only what this call actually attached.
+                val alreadyAttachedCount = outcomes.count { (_, outcome) -> outcome is TrailAttachment.AlreadyAttached }
+                val attachedCount = outcomes.size - alreadyAttachedCount
+                val attached = "$attachedCount waypoint${if (attachedCount == 1) "" else "s"} attached"
+                val already =
+                    if (alreadyAttachedCount > 0) {
+                        " ($alreadyAttachedCount already attached)"
+                    } else {
+                        ""
+                    }
                 _toast.value =
                     if (distant.isEmpty()) {
-                        attached
+                        "$attached$already"
                     } else {
                         val units = settings.value.units
                         val far =
                             distant.joinToString("; ") { (name, m) ->
                                 "${name ?: "one"} is ${BearingComputer.formatDistance(m, units)} from the trail"
                             }
-                        "$attached — $far"
+                        "$attached$already — $far"
                     }
             }
         }

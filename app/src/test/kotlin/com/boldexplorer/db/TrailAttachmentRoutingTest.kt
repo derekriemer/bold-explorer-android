@@ -283,6 +283,40 @@ class TrailAttachmentRoutingTest {
         }
 
     @Test
+    fun reattachingAnExistingVertexIsToleratedNotThrown() =
+        runTest {
+            // The candidate list a caller builds from trailIdsFor is a snapshot; this is the safety
+            // net for when it goes stale before the user confirms. Without it, uq_trail_waypoint_pair
+            // would throw straight out of attach() and crash whichever screen called it (#110).
+            val db = createTestDatabase()
+            val waypoints = WaypointRepositoryImpl(db)
+            val cid = db.defaultCollection()
+            val trailId = TrailRepositoryImpl(db).create(cid, "Hand built", null)
+
+            val a = waypoints.create(cid, "A", 0.0, 0.0, null, null)
+            assertIs<TrailAttachment.Vertex>(waypoints.attach(trailId, a))
+
+            assertEquals(TrailAttachment.AlreadyAttached, waypoints.attach(trailId, a))
+            assertEquals(listOf("A"), waypoints.forTrail(trailId).map { it.name }, "a second insert slipped through")
+        }
+
+    @Test
+    fun reattachingAnExistingAnnotationIsToleratedNotThrown() =
+        runTest {
+            val db = createTestDatabase()
+            val waypoints = WaypointRepositoryImpl(db)
+            val annotations = TrailAnnotationRepositoryImpl(db)
+            val cid = db.defaultCollection()
+            val trailId = recordedTrail(db, cid)
+
+            val strayId = waypoints.create(cid, "dos", latFor(1200.0), 0.0, null, null)
+            assertIs<TrailAttachment.Annotation>(waypoints.attach(trailId, strayId))
+
+            assertEquals(TrailAttachment.AlreadyAttached, waypoints.attach(trailId, strayId))
+            assertEquals(1, annotations.forTrail(trailId).size, "a second insert slipped through")
+        }
+
+    @Test
     fun recordingFurtherReprojectsWhatIsAlreadyAnnotated() =
         runTest {
             // An annotation past the old end clamps to it. Extend the recording and it has to move,

@@ -224,6 +224,12 @@ class WaypointRepositoryImpl
             waypointId: Long,
             position: Int?,
         ): TrailAttachment {
+            // trail_waypoint and trail_annotation both enforce UNIQUE(trail_id, waypoint_id). Callers
+            // offering an "attach to trail" choice should already exclude this pair via trailIdsFor;
+            // this is the safety net for when that list went stale between offering the choice and
+            // the user confirming it, not the primary guard.
+            if (trailId in trailIdsFor(waypointId)) return TrailAttachment.AlreadyAttached
+
             // A recorded trail's geometry is finished; anything arriving afterwards annotates it.
             // Asked of the data rather than of the caller, because the answer is a property of the
             // trail — and because a user marking a waypoint mid-walk should not have to arbitrate a
@@ -268,6 +274,12 @@ class WaypointRepositoryImpl
             // Detaching is one gesture to the user whichever way the point was attached.
             annotations.remove(trailId, waypointId)
             annotations.reproject(trailId)
+        }
+
+        override suspend fun trailIdsFor(waypointId: Long): Set<Long> {
+            val vertexOf = db.trailWaypointQueries.trailsForWaypoint(waypointId).executeAsList()
+            val annotated = db.trailAnnotationQueries.trailsForWaypoint(waypointId).executeAsList()
+            return (vertexOf + annotated).toSet()
         }
 
         /**

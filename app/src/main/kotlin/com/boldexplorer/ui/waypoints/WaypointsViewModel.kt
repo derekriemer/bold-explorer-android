@@ -107,6 +107,14 @@ class WaypointsViewModel
         private val _waypointCollectionIds = MutableStateFlow<Set<Long>>(emptySet())
         val waypointCollectionIds: StateFlow<Set<Long>> = _waypointCollectionIds.asStateFlow()
 
+        // ── "Attach to trail" dialog state ────────────────────────────────────────────
+
+        // Trails the waypoint is already attached to (vertex or annotation) — the dialog must
+        // filter these out before showing the list, since re-attaching violates the DB's
+        // UNIQUE(trail_id, waypoint_id) constraint and crashes (#107) rather than failing softly.
+        private val _attachedTrailIds = MutableStateFlow<Set<Long>>(emptySet())
+        val attachedTrailIds: StateFlow<Set<Long>> = _attachedTrailIds.asStateFlow()
+
         // ── Derived: waypoint IDs in the selected collection (null = no filter) ───────
 
         private val _collectionFilterIds: StateFlow<Set<Long>?> =
@@ -302,12 +310,19 @@ class WaypointsViewModel
                 // the distance is the useful fact, and the user is the only one who can judge it.
                 _toast.value =
                     when {
-                        outcome is TrailAttachment.Annotation && outcome.fix.farFromTrail ->
+                        outcome is TrailAttachment.Annotation && outcome.fix.farFromTrail -> {
                             "Attached, but it is ${
                                 BearingComputer.formatDistance(outcome.fix.distanceFromTrailM, settings.value.units)
                             } from the trail"
+                        }
 
-                        else -> "Attached to trail"
+                        outcome is TrailAttachment.AlreadyAttached -> {
+                            "Already attached to that trail"
+                        }
+
+                        else -> {
+                            "Attached to trail"
+                        }
                     }
             }
         }
@@ -315,6 +330,12 @@ class WaypointsViewModel
         fun loadWaypointCollections(waypointId: Long) {
             viewModelScope.launch {
                 _waypointCollectionIds.value = collectionRepo.collectionsForWaypoint(waypointId).map { it.id }.toSet()
+            }
+        }
+
+        fun loadAttachedTrails(waypointId: Long) {
+            viewModelScope.launch {
+                _attachedTrailIds.value = waypointRepo.trailIdsFor(waypointId)
             }
         }
 
