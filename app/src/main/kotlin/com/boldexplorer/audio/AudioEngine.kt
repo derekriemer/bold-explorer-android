@@ -2,6 +2,7 @@ package com.boldexplorer.audio
 
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.os.SystemClock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -22,6 +23,14 @@ private const val AMPLITUDE = 0.6f
 // stream active between cues.
 private const val PRE_ROLL_MS = 60
 private const val PRE_ROLL_FRAMES = SAMPLE_RATE * PRE_ROLL_MS / 1000
+
+// Safety net for #109: on at least one device/route, AlignmentPing's playbackHeadPosition never
+// reached its cue's end frame — the completion-wait loop below spun until navigation stopped,
+// holding toneMutex (and, transitively, AudioFocusController's cueMutex) for up to 87s and
+// silently blocking every other cue behind it. 2s is generous next to the longest cue (WrongVector,
+// ~300ms including pre-roll) but short enough that a genuinely stuck track can never again hang the
+// shared pipeline for more than a couple of seconds.
+private const val COMPLETION_TIMEOUT_MS = 2_000L
 
 /**
  * On-demand streaming earcon output.
@@ -130,10 +139,15 @@ class AudioEngine
                         if (!writeFully(playback, samples, progress)) return@withLock
                     }
                     val cueEndFrame = progress.samplesWritten / 2L
+                    val deadlineElapsedMs = SystemClock.elapsedRealtime() + COMPLETION_TIMEOUT_MS
                     while (activePlayback === playback) {
                         val playedFrames = playbackFramePosition(playback.track, progress) ?: return@withLock
                         if (playedFrames >= cueEndFrame) {
                             stopReason = "cue_complete"
+                            return@withLock
+                        }
+                        if (SystemClock.elapsedRealtime() >= deadlineElapsedMs) {
+                            stopReason = "timeout"
                             return@withLock
                         }
                         delay(5L)
