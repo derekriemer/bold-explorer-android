@@ -91,15 +91,28 @@ class AnnotationCueProducerTest {
     }
 
     @Test
-    fun anUntrustworthyRejoinClaimsNothing() {
+    fun anUntrustworthyRejoinClaimsNothingInEitherPredictionDirection() {
         // A big prediction error means we may have rejoined somewhere else entirely, and "you
         // passed the bench" may simply be false. A confident false statement about position is the
         // worst thing this app can say.
-        val p = producer(bench)
+        val untrustedError = NavigationPolicy.REJOIN_TRUSTED_ERROR_M + 1.0
 
-        val cues = p.onReacquired(40.0, 180.0, predictionErrorM = 120.0, units = Units.IMPERIAL)
+        listOf(untrustedError, -untrustedError).forEach { predictionErrorM ->
+            val cues = producer(bench).onReacquired(40.0, 180.0, predictionErrorM, Units.IMPERIAL)
 
-        assertTrue(cues.isEmpty())
+            assertTrue(cues.isEmpty(), "prediction error $predictionErrorM must suppress the cue")
+        }
+    }
+
+    @Test
+    fun aRejoinAtTheTrustedErrorBoundaryStillReportsThePassedMark() {
+        val threshold = NavigationPolicy.REJOIN_TRUSTED_ERROR_M
+
+        listOf(threshold, -threshold).forEach { predictionErrorM ->
+            val cues = producer(bench).onReacquired(40.0, 180.0, predictionErrorM, Units.IMPERIAL)
+
+            assertEquals(1, cues.size, "prediction error $predictionErrorM is still trusted")
+        }
     }
 
     @Test

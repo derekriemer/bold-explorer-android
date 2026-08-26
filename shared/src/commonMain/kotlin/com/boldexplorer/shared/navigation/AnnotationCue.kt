@@ -132,7 +132,7 @@ class AnnotationCueProducer(
         predictionErrorM: Double?,
         units: Units,
     ): List<String> {
-        if (predictionErrorM != null && predictionErrorM > NavigationPolicy.REJOIN_TRUSTED_ERROR_M) {
+        if (predictionErrorM != null && abs(predictionErrorM) > NavigationPolicy.REJOIN_TRUSTED_ERROR_M) {
             return emptyList()
         }
         val lo = minOf(fromAlongTrackM, toAlongTrackM)
