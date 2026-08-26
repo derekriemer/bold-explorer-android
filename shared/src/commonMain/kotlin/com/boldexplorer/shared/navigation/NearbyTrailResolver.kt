@@ -2,6 +2,7 @@ package com.boldexplorer.shared.navigation
 
 import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.haversineDistanceMeters
+import com.boldexplorer.shared.geo.initialBearingDeg
 import com.boldexplorer.shared.model.TrailPointRow
 import kotlin.math.abs
 
@@ -110,5 +111,19 @@ object NearbyTrailResolver {
             nearestIndex = nearestIndex,
             position = position,
         )
+    }
+
+    /**
+     * Bearing from [location] to the nearest point on the nearest trail in [nearby] (already
+     * nearest-first, per [resolve]) — the "walk this way to rejoin the trail" stopgap (#113). Unlike
+     * [TrailPosition]-based guidance this needs no confident matcher candidate: [nearby] comes from
+     * the same per-fix bbox lookup whether or not `ProgressTracker` currently has one.
+     */
+    fun bearingToNearestDeg(
+        location: LatLng,
+        nearby: List<NearbyTrail>,
+    ): Double? {
+        val snapped = nearby.firstOrNull()?.position?.snapped ?: return null
+        return initialBearingDeg(location, snapped)
     }
 }

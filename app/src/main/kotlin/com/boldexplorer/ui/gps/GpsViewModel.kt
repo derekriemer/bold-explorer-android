@@ -136,6 +136,8 @@ data class GpsUiState(
     val bearingDeg: Double? = null,
     val distanceM: Double? = null,
     val relativeDeg: Double? = null,
+    val trailBearingDeg: Double? = null,
+    val trailLost: Boolean = false,
     val locationStale: Boolean = false,
     val alignmentActive: Boolean = false,
     val alignmentBearingDeg: Double? = null,
@@ -230,6 +232,8 @@ sealed interface GpsAction {
 
     data object AlignToTarget : GpsAction
 
+    data object AlignToTrail : GpsAction
+
     data object SpeakAlignmentDelta : GpsAction
 
     data object MarkWaypoint : GpsAction
@@ -305,8 +309,10 @@ private data class BearingGroup(
     val bearingDeg: Double?,
     val distanceM: Double?,
     val relativeDeg: Double?,
+    val trailBearingDeg: Double?,
     val alignmentActive: Boolean,
     val locationStale: Boolean = false,
+    val trailLost: Boolean = false,
 )
 
 private data class AudioAlignmentGroup(
@@ -622,6 +628,13 @@ class GpsViewModel
                     }
                 }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
+        // Bearing to the nearest point on the nearest trail (#113) — a rejoin stopgap that needs no
+        // confident matcher candidate, since [nearbyTrail] above is a separate per-fix bbox lookup.
+        val trailBearingDeg: StateFlow<Double?> =
+            combine(location, nearbyTrail) { loc, trails ->
+                loc?.let { NearbyTrailResolver.bearingToNearestDeg(LatLng(it.lat, it.lon), trails) }
+            }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
+
         // The single derived mode the GPS screen renders its contextual trail controls from. Folds the
         // three state holders with an explicit precedence (active session beats explorer target) and
         // never reads the unreliable TrailRecordingState.Selected.hasPoints flag — see NavModeResolver.
@@ -648,6 +661,7 @@ class GpsViewModel
                 scope = viewModelScope,
                 headingDeg = headingDeg,
                 targetBearingDeg = bearingDeg,
+                trailBearingDeg = trailBearingDeg,
                 outputManager = outputManager,
             )
         val alignmentActive: StateFlow<Boolean> = alignmentController.active
@@ -704,6 +718,11 @@ class GpsViewModel
         // True when audio was started solely to serve alignment (so we can stop it on stopAlignment).
         private val _audioStartedForAlignment = MutableStateFlow(false)
 
+        // True while an active follow's match is not Matched (#113: gates "Align to trail" so it
+        // only offers the rejoin stopgap when actually lost, not whenever merely near a trail).
+        private val _trailLost = MutableStateFlow(false)
+        private val trailLost: StateFlow<Boolean> = _trailLost.asStateFlow()
+
         // ── Combined UI state ─────────────────────────────────────────────────────────
 
         private val telemetryGroup =
@@ -726,18 +745,20 @@ class GpsViewModel
             ) { tr, col, fs, ce -> SelectionGroup(tr, col, fs, ce) }
         private val bearingGroup =
             combine(
-                combine(targetName, bearingDeg, distanceM, relativeDeg) { tn, bd, dm, rd ->
-                    BearingGroup(tn, bd, dm, rd, alignmentActive = false)
+                combine(targetName, bearingDeg, distanceM, relativeDeg, trailBearingDeg) { tn, bd, dm, rd, tbd ->
+                    BearingGroup(tn, bd, dm, rd, tbd, alignmentActive = false)
                 },
                 combine(alignmentActive, trailFollowState, trailGuidance) { aa, fs, guidance ->
                     Triple(aa, fs is TrailFollowerState.Active, guidance)
                 },
                 locationStale,
-            ) { group, (aa, trailActive, guidance), stale ->
+                trailLost,
+            ) { group, (aa, trailActive, guidance), stale, lost ->
                 group.copy(
                     relativeDeg = if (trailActive) guidance?.relativeDeg else group.relativeDeg,
                     alignmentActive = aa,
                     locationStale = stale,
+                    trailLost = lost,
                 )
             }
         private val interactionGroup =
@@ -781,6 +802,8 @@ class GpsViewModel
                     bearingDeg = bear.bearingDeg,
                     distanceM = bear.distanceM,
                     relativeDeg = bear.relativeDeg,
+                    trailBearingDeg = bear.trailBearingDeg,
+                    trailLost = bear.trailLost,
                     locationStale = bear.locationStale,
                     alignmentActive = bear.alignmentActive,
                     alignmentBearingDeg = inter.alignmentBearingDeg,
@@ -1259,6 +1282,7 @@ class GpsViewModel
             recordingMachine.stop()
             guidanceCoordinator.clear()
             followCues = null
+            _trailLost.value = false
             backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, false)
             stopLocationServiceIfIdle()
             announce(
@@ -1311,6 +1335,8 @@ class GpsViewModel
         fun setAlignmentBearing(deg: Double) = alignmentController.setBearing(deg)
 
         fun setAlignmentToBearing() = alignmentController.alignToTarget()
+
+        fun setAlignmentToTrail() = alignmentController.alignToTrail()
 
         /**
          * Speak the current alignment delta on demand. Driven by the alignment modal's opt-in ticker:
@@ -1463,6 +1489,8 @@ class GpsViewModel
             smoothedBearingDeg: Float?,
             match: TrailMatch?,
         ) {
+            _trailLost.value = match != null && match.state != MatchState.Matched
+
             // Computed once and reused below for the progress cue's zero-distance guard (#91) —
             // both readings must agree on the same fix's evidence, not two calls that happen to
             // return the same thing today because nothing re-matches in between.
@@ -1489,6 +1517,7 @@ class GpsViewModel
                 is TrailFollowerEvent.TrailComplete -> {
                     guidanceCoordinator.clear()
                     followCues = null
+                    _trailLost.value = false
                     announce(
                         // Hedged when accuracy was too poor to assert arrival. Saying "trail
                         // complete" to someone who is not there is worse than saying nothing
@@ -2161,6 +2190,11 @@ class GpsViewModel
 
                 GpsAction.AlignToTarget -> {
                     setAlignmentToBearing()
+                    startAlignment()
+                }
+
+                GpsAction.AlignToTrail -> {
+                    setAlignmentToTrail()
                     startAlignment()
                 }
 

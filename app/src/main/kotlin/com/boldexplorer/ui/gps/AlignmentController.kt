@@ -27,11 +27,14 @@ import kotlinx.coroutines.flow.stateIn
  * @param headingDeg live compass heading (sensor, never GPS course — the user is physically pointing
  *   the phone at a target, not travelling toward it).
  * @param targetBearingDeg bearing to the current navigation target, consumed by [alignToTarget].
+ * @param trailBearingDeg bearing to the nearest point on the nearest trail, consumed by
+ *   [alignToTrail] — a stopgap rejoin aid (#113) that needs no confident matcher candidate.
  */
 class AlignmentController(
     scope: CoroutineScope,
     private val headingDeg: StateFlow<Double?>,
     private val targetBearingDeg: StateFlow<Double?>,
+    private val trailBearingDeg: StateFlow<Double?>,
     private val outputManager: OutputManager,
 ) {
     private val _active = MutableStateFlow(false)
@@ -79,6 +82,11 @@ class AlignmentController(
     /** Point alignment at the current navigation target's bearing. */
     fun alignToTarget() {
         targetBearingDeg.value?.let { setBearing(it) }
+    }
+
+    /** Point alignment at the nearest point on the nearest trail — the #113 rejoin stopgap. */
+    fun alignToTrail() {
+        trailBearingDeg.value?.let { setBearing(it) }
     }
 
     /** Speak the current alignment delta on demand (e.g. the modal's "Read alignment now" action). */

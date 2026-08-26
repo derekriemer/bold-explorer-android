@@ -77,7 +77,7 @@ fun AlignmentDialog(
     }
 
     val deltaActions =
-        listOf(
+        listOfNotNull(
             CustomAccessibilityAction("Read alignment now") {
                 onAction(GpsAction.SpeakAlignmentDelta)
                 true
@@ -100,6 +100,14 @@ fun AlignmentDialog(
             CustomAccessibilityAction("Align to target") {
                 onAction(GpsAction.AlignToTarget)
                 true
+            },
+            if (state.trailLost) {
+                CustomAccessibilityAction("Align to trail") {
+                    onAction(GpsAction.AlignToTrail)
+                    true
+                }
+            } else {
+                null
             },
             CustomAccessibilityAction("Stop alignment") {
                 onAction(GpsAction.StopAlignment)
@@ -168,6 +176,12 @@ fun AlignmentDialog(
                     TextButton(
                         onClick = { onAction(GpsAction.AlignToTarget) },
                     ) { Text(state.targetName?.let { "Align to $it" } ?: "Align to target") }
+                }
+
+                if (state.trailBearingDeg != null && state.trailLost) {
+                    TextButton(
+                        onClick = { onAction(GpsAction.AlignToTrail) },
+                    ) { Text("Align to trail") }
                 }
 
                 TextButton(

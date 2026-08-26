@@ -137,4 +137,28 @@ class NearbyTrailResolverTest {
         assertEquals(0.0, assertNotNull(near.position).alongTrackM, 1e-9, "along-track is zero")
     }
 
+    // ── bearingToNearestDeg (#113) ─────────────────────────────────────────────────
+
+    @Test
+    fun bearingToNearestDeg_emptyList_returnsNull() {
+        assertEquals(null, NearbyTrailResolver.bearingToNearestDeg(LatLng(0.0, 0.0), emptyList()))
+    }
+
+    @Test
+    fun bearingToNearestDeg_pointsAtNearestTrailsSnappedPoint() {
+        // A trail due north of the user; the nearest projected point is straight ahead (~0°).
+        val points = verticalLine(trailId = 1, lon = 0.0, baseLat = 0.001, count = 3)
+        val nearby = NearbyTrailResolver.resolve(LatLng(0.0, 0.0), accuracyM = 200.0, points = points)
+        val bearing = assertNotNull(NearbyTrailResolver.bearingToNearestDeg(LatLng(0.0, 0.0), nearby))
+        assertTrue(bearing < 5.0 || bearing > 355.0, "expected ~north, got $bearing")
+    }
+
+    @Test
+    fun bearingToNearestDeg_usesNearestFirstEntry_whenMultipleTrailsQualify() {
+        val north = verticalLine(trailId = 1, lon = 0.0, baseLat = 0.002, count = 3) // farther, due north
+        val east = verticalLine(trailId = 2, lon = 0.00003) // nearer, due east
+        val nearby = NearbyTrailResolver.resolve(LatLng(0.0001, 0.0), accuracyM = null, points = north + east)
+        val bearing = assertNotNull(NearbyTrailResolver.bearingToNearestDeg(LatLng(0.0001, 0.0), nearby))
+        assertTrue(bearing > 45.0 && bearing < 135.0, "expected roughly east toward the nearer trail, got $bearing")
+    }
 }
