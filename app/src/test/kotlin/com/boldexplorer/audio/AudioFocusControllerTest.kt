@@ -1,99 +1,242 @@
 package com.boldexplorer.audio
 
-import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class AudioFocusControllerTest {
     @Test
-    fun duckMode_holdsFocusAcrossThePlaybackOperation() =
-        runTest {
-            val actions = mutableListOf<String>()
-            val entries = mutableListOf<AudioLogEntry>()
-            var nowMs = 1_000L
-            val backend = RecordingFocusBackend(actions, AudioFocusRequestResult.GRANTED)
-            val controller = AudioFocusController(backend, FakeAudioEventLog(entries::add)) { nowMs }
+    fun rareMode_requestsAndReleasesPerCue() {
+        val actions = mutableListOf<String>()
+        val entries = mutableListOf<AudioLogEntry>()
+        var nowMs = 1_000L
+        val backend = RecordingFocusBackend(actions, AudioFocusRequestResult.GRANTED)
+        val controller = AudioFocusController(backend, FakeAudioEventLog(entries::add)) { nowMs }
 
-            val mode =
-                controller.play(duckAudioEnabled = true, cue = "DirectionalBeacon") {
-                    actions += "playback-start"
-                    nowMs = 1_125L
-                    actions += "playback-complete"
-                }
+        val mode = controller.requestForCue(duckAudioEnabled = true, cue = "DirectionalBeacon")
+        assertEquals(CueAudioMode.DUCK, mode)
+        nowMs = 1_125L
+        controller.releaseAfterCue()
 
-            assertEquals(CueAudioMode.DUCK, mode)
-            assertEquals(
-                listOf("focus-request", "playback-start", "playback-complete", "focus-abandon"),
-                actions,
-                "focus must bracket completed playback, not merely dispatch",
-            )
-            assertEquals(2, entries.size)
-            assertTrue(entries.all { it.kind == AudioLogEntry.Kind.AUDIO_FOCUS })
-            assertEquals("result=GRANTED", entries[0].outputs)
-            assertEquals("result=ABANDONED, heldMs=125", entries[1].outputs)
-        }
+        assertEquals(listOf("focus-request", "focus-abandon"), actions)
+        assertEquals(2, entries.size)
+        assertTrue(entries.all { it.kind == AudioLogEntry.Kind.AUDIO_FOCUS })
+        assertEquals("result=GRANTED", entries[0].outputs)
+        assertEquals("result=ABANDONED, heldMs=125", entries[1].outputs)
+
+        // The next cue requests fresh — nothing was left held.
+        val secondMode = controller.requestForCue(duckAudioEnabled = true, cue = "DirectionalBeacon")
+        assertEquals(CueAudioMode.DUCK, secondMode)
+        assertEquals(listOf("focus-request", "focus-abandon", "focus-request"), actions)
+    }
 
     @Test
-    fun mixMode_neverTouchesAudioFocus() =
-        runTest {
-            val actions = mutableListOf<String>()
-            val entries = mutableListOf<AudioLogEntry>()
-            val backend = RecordingFocusBackend(actions, AudioFocusRequestResult.GRANTED)
-            val controller = AudioFocusController(backend, FakeAudioEventLog(entries::add)) { 1_000L }
+    fun mixMode_neverTouchesAudioFocus() {
+        val actions = mutableListOf<String>()
+        val entries = mutableListOf<AudioLogEntry>()
+        val backend = RecordingFocusBackend(actions, AudioFocusRequestResult.GRANTED)
+        val controller = AudioFocusController(backend, FakeAudioEventLog(entries::add)) { 1_000L }
 
-            val mode =
-                controller.play(duckAudioEnabled = false, cue = "TrailComplete") {
-                    actions += "playback"
-                }
+        val mode = controller.requestForCue(duckAudioEnabled = false, cue = "TrailComplete")
+        controller.releaseAfterCue()
 
-            assertEquals(CueAudioMode.MIX, mode)
-            assertEquals(listOf("playback"), actions)
-            assertTrue(entries.isEmpty(), "mixing has no focus transition to log")
-        }
+        assertEquals(CueAudioMode.MIX, mode)
+        assertTrue(actions.isEmpty(), "no backend call in mix mode")
+        assertTrue(entries.isEmpty(), "mixing has no focus transition to log")
+    }
 
     @Test
-    fun deniedDuckRequest_fallsBackToMixingWithoutDroppingTheCue() =
-        runTest {
-            val actions = mutableListOf<String>()
-            val entries = mutableListOf<AudioLogEntry>()
-            val backend = RecordingFocusBackend(actions, AudioFocusRequestResult.FAILED)
-            val controller = AudioFocusController(backend, FakeAudioEventLog(entries::add)) { 1_000L }
+    fun deniedRequest_fallsBackToMixingWithoutDroppingTheCue() {
+        val actions = mutableListOf<String>()
+        val entries = mutableListOf<AudioLogEntry>()
+        val backend = RecordingFocusBackend(actions, AudioFocusRequestResult.FAILED)
+        val controller = AudioFocusController(backend, FakeAudioEventLog(entries::add)) { 1_000L }
 
-            val mode =
-                controller.play(duckAudioEnabled = true, cue = "AlignmentPing") {
-                    actions += "playback"
-                }
+        val mode = controller.requestForCue(duckAudioEnabled = true, cue = "AlignmentPing")
 
-            assertEquals(CueAudioMode.MIX_FOCUS_DENIED, mode)
-            assertEquals(listOf("focus-request", "playback"), actions)
-            assertEquals(1, entries.size)
-            assertEquals("result=FAILED", entries.single().outputs)
-        }
+        assertEquals(CueAudioMode.MIX_FOCUS_DENIED, mode)
+        assertEquals(listOf("focus-request"), actions)
+        assertEquals(1, entries.size)
+        assertEquals("result=FAILED", entries.single().outputs)
+    }
 
     @Test
-    fun duckMode_releasesFocusWhenPlaybackFails() =
-        runTest {
-            val actions = mutableListOf<String>()
-            val backend = RecordingFocusBackend(actions, AudioFocusRequestResult.GRANTED)
-            val controller = AudioFocusController(backend, FakeAudioEventLog {}) { 1_000L }
+    fun frequentMode_holdsLeaseAcrossConsecutiveCuesWithoutASecondRequest() {
+        val actions = mutableListOf<String>()
+        val entries = mutableListOf<AudioLogEntry>()
+        val backend = RecordingFocusBackend(actions, AudioFocusRequestResult.GRANTED)
+        val controller = AudioFocusController(backend, FakeAudioEventLog(entries::add)) { 1_000L }
 
-            assertFailsWith<IllegalStateException> {
-                controller.play(duckAudioEnabled = true, cue = "WrongVector") {
-                    actions += "playback-failed"
-                    error("AudioTrack failed")
+        controller.setFrequentMode(true)
+        val first = controller.requestForCue(duckAudioEnabled = true, cue = "AlignmentPing")
+        controller.releaseAfterCue() // no-op while frequent
+        val second = controller.requestForCue(duckAudioEnabled = true, cue = "AlignmentPing")
+        controller.releaseAfterCue()
+
+        assertEquals(CueAudioMode.DUCK, first)
+        assertEquals(CueAudioMode.DUCK, second)
+        assertEquals(listOf("focus-request"), actions, "one request covers the whole run")
+    }
+
+    @Test
+    fun leavingFrequentMode_releasesTheHeldLease() {
+        val actions = mutableListOf<String>()
+        val entries = mutableListOf<AudioLogEntry>()
+        val backend = RecordingFocusBackend(actions, AudioFocusRequestResult.GRANTED)
+        val controller = AudioFocusController(backend, FakeAudioEventLog(entries::add)) { 1_000L }
+        var pausedReasons = mutableListOf<String>()
+        controller.onFocusLostOrModeChange = { pausedReasons.add(it) }
+
+        controller.setFrequentMode(true)
+        controller.requestForCue(duckAudioEnabled = true, cue = "AlignmentPing")
+        controller.setFrequentMode(false)
+
+        assertEquals(listOf("focus-request", "focus-abandon"), actions)
+        assertEquals(listOf("mode_change_to_rare"), pausedReasons)
+        assertFalse(controller.frequentModeActive)
+    }
+
+    @Test
+    fun rareCueDuringAFrequentRun_usesTheHeldLeaseAndDoesNotReleaseIt() {
+        val actions = mutableListOf<String>()
+        val entries = mutableListOf<AudioLogEntry>()
+        val backend = RecordingFocusBackend(actions, AudioFocusRequestResult.GRANTED)
+        val controller = AudioFocusController(backend, FakeAudioEventLog(entries::add)) { 1_000L }
+
+        controller.setFrequentMode(true)
+        controller.requestForCue(duckAudioEnabled = true, cue = "AlignmentPing")
+        controller.releaseAfterCue()
+        // A Rare cue (e.g. DirectionalBeacon) interleaved mid-run must not force a release.
+        val mode = controller.requestForCue(duckAudioEnabled = true, cue = "DirectionalBeacon")
+        controller.releaseAfterCue()
+
+        assertEquals(CueAudioMode.DUCK, mode)
+        assertEquals(listOf("focus-request"), actions, "still holding — no second request, no release")
+    }
+
+    @Test
+    fun lostTransient_clearsHoldingAndSignalsWithoutEndingTheSession() {
+        val actions = mutableListOf<String>()
+        val entries = mutableListOf<AudioLogEntry>()
+        var capturedOnFocusChange: ((AudioFocusChange) -> Unit)? = null
+        val backend =
+            object : AudioFocusBackend {
+                override fun requestTransientMayDuck(onFocusChange: (AudioFocusChange) -> Unit): AudioFocusRequestResult {
+                    actions += "focus-request"
+                    capturedOnFocusChange = onFocusChange
+                    return AudioFocusRequestResult.GRANTED
+                }
+
+                override fun abandonTransientMayDuck() {
+                    actions += "focus-abandon"
                 }
             }
+        val controller = AudioFocusController(backend, FakeAudioEventLog(entries::add)) { 1_000L }
+        val pausedReasons = mutableListOf<String>()
+        controller.onFocusLostOrModeChange = { pausedReasons.add(it) }
 
-            assertEquals(listOf("focus-request", "playback-failed", "focus-abandon"), actions)
-        }
+        controller.setFrequentMode(true)
+        controller.requestForCue(duckAudioEnabled = true, cue = "AlignmentPing")
+        assertTrue(controller.frequentModeActive)
+
+        capturedOnFocusChange?.invoke(AudioFocusChange.LostTransient)
+
+        assertEquals(listOf("focus_lost"), pausedReasons)
+        assertTrue(controller.frequentModeActive, "losing focus does not end frequent mode")
+        // Deliberately no abandon(): staying registered is what makes Android's automatic
+        // AUDIOFOCUS_GAIN callback land once the transient interrupter releases.
+        assertEquals(listOf("focus-request"), actions)
+
+        // The next cue re-requests, since we're no longer holding.
+        val mode = controller.requestForCue(duckAudioEnabled = true, cue = "AlignmentPing")
+        assertEquals(CueAudioMode.DUCK, mode)
+        assertEquals(listOf("focus-request", "focus-request"), actions)
+    }
+
+    @Test
+    fun permanentLoss_abandonsCleanlyUnlikeTransientLoss() {
+        val actions = mutableListOf<String>()
+        val entries = mutableListOf<AudioLogEntry>()
+        var capturedOnFocusChange: ((AudioFocusChange) -> Unit)? = null
+        val backend =
+            object : AudioFocusBackend {
+                override fun requestTransientMayDuck(onFocusChange: (AudioFocusChange) -> Unit): AudioFocusRequestResult {
+                    actions += "focus-request"
+                    capturedOnFocusChange = onFocusChange
+                    return AudioFocusRequestResult.GRANTED
+                }
+
+                override fun abandonTransientMayDuck() {
+                    actions += "focus-abandon"
+                }
+            }
+        val controller = AudioFocusController(backend, FakeAudioEventLog(entries::add)) { 1_000L }
+        val pausedReasons = mutableListOf<String>()
+        controller.onFocusLostOrModeChange = { pausedReasons.add(it) }
+
+        controller.setFrequentMode(true)
+        controller.requestForCue(duckAudioEnabled = true, cue = "AlignmentPing")
+
+        capturedOnFocusChange?.invoke(AudioFocusChange.Lost)
+
+        assertEquals(listOf("focus_lost"), pausedReasons)
+        assertTrue(controller.frequentModeActive, "permanent loss still doesn't end frequent mode")
+        // Unlike LostTransient, a permanent loss abandons right away — no automatic GAIN is coming.
+        assertEquals(listOf("focus-request", "focus-abandon"), actions)
+    }
+
+    @Test
+    fun gained_setsHoldingBackToTrueWithoutANewRequest() {
+        val actions = mutableListOf<String>()
+        val entries = mutableListOf<AudioLogEntry>()
+        var capturedOnFocusChange: ((AudioFocusChange) -> Unit)? = null
+        val backend =
+            object : AudioFocusBackend {
+                override fun requestTransientMayDuck(onFocusChange: (AudioFocusChange) -> Unit): AudioFocusRequestResult {
+                    actions += "focus-request"
+                    capturedOnFocusChange = onFocusChange
+                    return AudioFocusRequestResult.GRANTED
+                }
+
+                override fun abandonTransientMayDuck() {
+                    actions += "focus-abandon"
+                }
+            }
+        val controller = AudioFocusController(backend, FakeAudioEventLog(entries::add)) { 1_000L }
+
+        controller.setFrequentMode(true)
+        controller.requestForCue(duckAudioEnabled = true, cue = "AlignmentPing")
+        capturedOnFocusChange?.invoke(AudioFocusChange.LostTransient)
+        capturedOnFocusChange?.invoke(AudioFocusChange.Gained)
+
+        // Regained without us re-requesting — the next cue sees "already holding".
+        val mode = controller.requestForCue(duckAudioEnabled = true, cue = "AlignmentPing")
+
+        assertEquals(CueAudioMode.DUCK, mode)
+        assertEquals(listOf("focus-request"), actions, "regain needs no new request")
+    }
+
+    @Test
+    fun close_releasesAndClearsFrequentMode() {
+        val actions = mutableListOf<String>()
+        val entries = mutableListOf<AudioLogEntry>()
+        val backend = RecordingFocusBackend(actions, AudioFocusRequestResult.GRANTED)
+        val controller = AudioFocusController(backend, FakeAudioEventLog(entries::add)) { 1_000L }
+
+        controller.setFrequentMode(true)
+        controller.requestForCue(duckAudioEnabled = true, cue = "AlignmentPing")
+        controller.close()
+
+        assertEquals(listOf("focus-request", "focus-abandon"), actions)
+        assertFalse(controller.frequentModeActive)
+    }
 
     private class RecordingFocusBackend(
         private val actions: MutableList<String>,
         private val requestResult: AudioFocusRequestResult,
     ) : AudioFocusBackend {
-        override fun requestTransientMayDuck(): AudioFocusRequestResult {
+        override fun requestTransientMayDuck(onFocusChange: (AudioFocusChange) -> Unit): AudioFocusRequestResult {
             actions += "focus-request"
             return requestResult
         }

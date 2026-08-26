@@ -34,8 +34,11 @@ import javax.inject.Singleton
  * exactly the audible cue, or transparent mixing with other media. A denied focus request falls
  * back to mixing so an accessibility cue is never lost solely because focus was unavailable.
  *
- * [AudioEngine] opens and releases its output stream for each cue. Its bounded silent pre-roll
- * gives Bluetooth a chance to warm without retaining audio output between cues (issue #53).
+ * [AudioEngine] holds one session-scoped [android.media.AudioTrack] across the whole session
+ * (#114/#108) rather than reopening one per cue; [AudioFocusController] mirrors that with a
+ * cue-scoped focus lease by default, widening to span a run of cues only while a frequent-cadence
+ * cue source (`frequentCuesActive`) is active. See the design note on #114/#108 for the full
+ * rationale — this replaced a strictly per-cue-scoped track/lease pair.
  *
  * Every dispatched event is appended to [AudioEventLog] for post-session debugging.
  */
@@ -73,7 +76,7 @@ class AudioCuePlayer
         fun start(
             accuracyM: StateFlow<Double?>,
             relativeDeg: StateFlow<Double?>,
-            alignmentActive: StateFlow<Boolean>,
+            frequentCuesActive: StateFlow<Boolean>,
             beaconCuesEnabled: StateFlow<Boolean>,
             location: StateFlow<LocationSample?>,
             trailGuidance: StateFlow<TrailGuidanceState?>,
@@ -87,7 +90,15 @@ class AudioCuePlayer
             trailGuidanceFlow = trailGuidance
             smoothedHeadingFlow = smoothedHeading
 
-            val schedulerJob = scheduler.start(scope, relativeDeg, alignmentActive, beaconCuesEnabled)
+            audioEngine.open()
+            audioFocusController.onFocusLostOrModeChange = { reason ->
+                if (reason == "focus_lost") audioEngine.pauseForFocusLoss() else audioEngine.pauseForModeChange()
+            }
+            // Edge-triggered mode toggle (#114/#108) — not a per-cue re-check. StateFlow only emits on
+            // an actual value change, so this fires exactly on frequent-mode entry/exit.
+            frequentCuesActive.onEach { audioFocusController.setFrequentMode(it) }.launchIn(scope)
+
+            val schedulerJob = scheduler.start(scope, relativeDeg, frequentCuesActive, beaconCuesEnabled)
             playerJob =
                 scheduler.events
                     .onEach { event -> dispatch(event) }
@@ -108,7 +119,7 @@ class AudioCuePlayer
             trailGuidanceFlow = null
             smoothedHeadingFlow = null
             audioEngine.stop()
-            audioFocusController.abandonForStop()
+            audioFocusController.close()
         }
 
         private suspend fun dispatch(event: AudioCueEvent) {
@@ -139,14 +150,18 @@ class AudioCuePlayer
                     // false impression of live tracking. Go silent instead of playing a
                     // confidently-wrong tone.
                     val stale = isLocationStale(nowMs, loc?.timestamp)
+                    val shouldAttempt = !silenced && !stale
                     val audioMode =
-                        if (!silenced && !stale) {
-                            audioFocusController.play(duck, "DirectionalBeacon") {
-                                audioEngine.playDirectionalBeacon(event.pan, event.pitchHz)
-                            }
+                        if (shouldAttempt) {
+                            audioFocusController.requestForCue(duck, "DirectionalBeacon")
                         } else {
                             CueAudioMode.SUPPRESSED
                         }
+                    if (shouldAttempt) {
+                        audioEngine.playDirectionalBeacon(event.pan, event.pitchHz)
+                        audioFocusController.releaseAfterCue()
+                        audioEngine.pauseAfterCue()
+                    }
                     scope.launch {
                         val courseIsSmoothed = guidance?.courseIsSmoothed ?: false
                         val extra =
@@ -212,14 +227,18 @@ class AudioCuePlayer
                 }
 
                 is AudioCueEvent.AlignmentPing -> {
+                    val shouldAttempt = !silenced
                     val audioMode =
-                        if (!silenced) {
-                            audioFocusController.play(duck, "AlignmentPing") {
-                                audioEngine.playAlignmentPing(event.pan, event.pitchHz)
-                            }
+                        if (shouldAttempt) {
+                            audioFocusController.requestForCue(duck, "AlignmentPing")
                         } else {
                             CueAudioMode.SUPPRESSED
                         }
+                    if (shouldAttempt) {
+                        audioEngine.playAlignmentPing(event.pan, event.pitchHz)
+                        audioFocusController.releaseAfterCue()
+                        audioEngine.pauseAfterCue()
+                    }
                     scope.launch {
                         audioEventLog.append(
                             AudioLogEntry(
@@ -264,14 +283,18 @@ class AudioCuePlayer
                 }
 
                 is AudioCueEvent.WrongVector -> {
+                    val shouldAttempt = !silenced
                     val audioMode =
-                        if (!silenced) {
-                            audioFocusController.play(duck, "WrongVector") {
-                                audioEngine.playWrongVector()
-                            }
+                        if (shouldAttempt) {
+                            audioFocusController.requestForCue(duck, "WrongVector")
                         } else {
                             CueAudioMode.SUPPRESSED
                         }
+                    if (shouldAttempt) {
+                        audioEngine.playWrongVector()
+                        audioFocusController.releaseAfterCue()
+                        audioEngine.pauseAfterCue()
+                    }
                     scope.launch {
                         audioEventLog.append(
                             AudioLogEntry(

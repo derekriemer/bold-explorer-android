@@ -24,7 +24,9 @@ class AudioCueScheduler(
     fun start(
         scope: CoroutineScope,
         relativeDeg: StateFlow<Double?>,
-        alignmentActive: StateFlow<Boolean>,
+        // Named for what it means to the audio layer (a Frequent-cadence cue source is live), not for
+        // the one navigation concept that happens to drive it today — see CueCadence/#114/#108.
+        frequentCuesActive: StateFlow<Boolean>,
         beaconCuesEnabled: StateFlow<Boolean>,
     ): Job? {
         if (!config.enabled) return null
@@ -38,7 +40,7 @@ class AudioCueScheduler(
                 if (config.directionalBeaconEnabled) {
                     launch {
                         while (true) {
-                            if (beaconCuesEnabled.value && !alignmentActive.value) {
+                            if (beaconCuesEnabled.value && !frequentCuesActive.value) {
                                 val deg = relativeDeg.value
                                 if (deg != null) {
                                     val pan = BearingComputer.computePan(deg)
@@ -55,7 +57,7 @@ class AudioCueScheduler(
                 if (config.alignmentPingEnabled) {
                     launch {
                         while (true) {
-                            if (beaconCuesEnabled.value && alignmentActive.value) {
+                            if (beaconCuesEnabled.value && frequentCuesActive.value) {
                                 val deg = relativeDeg.value
                                 if (deg != null) {
                                     val aligned = abs(deg) <= config.alignmentDeadbandDeg

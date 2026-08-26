@@ -21,7 +21,7 @@ class AudioCueSchedulerTest {
                 scheduler.start(
                     scope = schedulerScope,
                     relativeDeg = MutableStateFlow<Double?>(null),
-                    alignmentActive = MutableStateFlow(false),
+                    frequentCuesActive = MutableStateFlow(false),
                     beaconCuesEnabled = MutableStateFlow(true),
                 )
 

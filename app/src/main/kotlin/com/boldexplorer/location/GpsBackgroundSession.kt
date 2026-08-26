@@ -111,7 +111,7 @@ class GpsBackgroundSession
             audioCuePlayer.start(
                 accuracyM = inputs.accuracyM,
                 relativeDeg = inputs.relativeDeg,
-                alignmentActive = inputs.alignmentActive,
+                frequentCuesActive = inputs.alignmentActive,
                 beaconCuesEnabled = inputs.beaconCuesEnabled,
                 location = inputs.location,
                 trailGuidance = inputs.trailGuidance,
