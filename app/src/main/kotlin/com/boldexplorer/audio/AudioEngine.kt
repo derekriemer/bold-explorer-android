@@ -141,6 +141,11 @@ class AudioEngine
                 stopSilenceFiller()
             }
             runCatching { session.track.pause() }
+            // A paused track is cold the same way a just-created one is — the route may not be
+            // settled by the time real audio resumes. Rare mode pauses after every single cue, so
+            // without this every rare-mode cue after the first would resume with zero warm-up lead-in
+            // (field-confirmed: clipped/dropped tones, not just a theoretical risk).
+            session.needsPreRoll = true
             outputLifecycle.trackPaused(reason)
         }
 
@@ -233,12 +238,12 @@ class AudioEngine
 
                 var outcome = "interrupted"
                 try {
-                    if (session.freshlyCreated) {
+                    if (session.needsPreRoll) {
                         if (!writeFully(session, preRollSamples)) {
                             outcome = "write_failed"
                             return@withLock
                         }
-                        session.freshlyCreated = false
+                        session.needsPreRoll = false
                     }
                     for (samples in rendered) {
                         if (!writeFully(session, samples)) {
@@ -387,7 +392,11 @@ class AudioEngine
             val lease: AudioOutputLease,
         ) {
             val progress = PlaybackProgress()
-            var freshlyCreated = true
+
+            // Volatile: set from pauseCurrentTrack(), which can run on the AudioManager
+            // focus-listener thread, and read/cleared from playCue()'s Dispatchers.IO coroutine.
+            @Volatile
+            var needsPreRoll = true
             var consecutiveTimeouts = 0
         }
 
