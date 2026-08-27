@@ -57,6 +57,7 @@ fun DebugScreen(
     val location by viewModel.location.collectAsStateWithLifecycle()
     val heading by viewModel.heading.collectAsStateWithLifecycle()
     val exportStatus by viewModel.exportStatus.collectAsStateWithLifecycle()
+    val audioTestStatus by viewModel.audioTestStatus.collectAsStateWithLifecycle()
     val useGnss by viewModel.useGnss.collectAsStateWithLifecycle()
     var showNewLogDialog by remember { mutableStateOf(false) }
     val logEntries by viewModel.logEntries.collectAsStateWithLifecycle()
@@ -330,6 +331,38 @@ fun DebugScreen(
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                 DebugRow("Magnetic", heading?.magnetic?.let { "${"%.1f".format(it)}°" } ?: "—")
                 DebugRow("True North", heading?.trueNorth?.let { "${"%.1f".format(it)}°" } ?: "—")
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // #114: exercises rare-mode-pause vs. frequent-mode-silence-filler behavior without needing
+        // GPS/navigation active. Do not run while a real navigation/alignment session is running —
+        // AudioEngine is a shared singleton and both would fight over the same track.
+        Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("Audio test", style = MaterialTheme.typography.titleSmall)
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                Text(
+                    "5 beeps 5s apart (rare mode), then 5 beeps 2s apart (frequent mode). " +
+                        "Not while GPS navigation is running.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+                audioTestStatus?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(bottom = 4.dp),
+                    )
+                    Announcement(it)
+                }
+                Button(
+                    onClick = { viewModel.testAudioModes() },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Run Audio Test")
+                }
             }
         }
 

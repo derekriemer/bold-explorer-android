@@ -23,6 +23,7 @@ import com.boldexplorer.shared.repository.WaypointRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -161,6 +162,47 @@ class DebugViewModel
         fun newLog() {
             audioEventLog.newSession()
             _logStatus.value = "Log cleared"
+        }
+
+        // ── Audio mode test (#114) ───────────────────────────────────────────────────
+        //
+        // Exercises AudioEngine's real cadence-dependent behavior — rare mode's per-cue pause and
+        // frequent mode's silence filler — without needing GPS/an active navigation session outside.
+        // AudioEngine is a singleton shared with the real AudioCuePlayer session; do not run this
+        // while GPS navigation/alignment is active, since both would fight over the same track.
+
+        private val _audioTestStatus = MutableStateFlow<String?>(null)
+        val audioTestStatus: StateFlow<String?> = _audioTestStatus.asStateFlow()
+
+        private var audioTestRunning = false
+
+        fun testAudioModes() {
+            if (audioTestRunning) return
+            audioTestRunning = true
+            viewModelScope.launch {
+                audioEngine.open(viewModelScope)
+                try {
+                    repeat(5) { i ->
+                        _audioTestStatus.value = "Rare mode (5s apart): beep ${i + 1} of 5"
+                        audioEngine.playDirectionalBeacon(pan = 0f, pitchHz = 880.0)
+                        // Real navigation always pauses after a rare-mode cue (AudioCuePlayer.dispatch) —
+                        // without this the track sits PLAYSTATE_PLAYING and idle for the whole 5s gap,
+                        // which is a different (and already-disproven) code path from what this is meant
+                        // to test.
+                        audioEngine.pauseAfterCue()
+                        delay(5_000L)
+                    }
+                    repeat(5) { i ->
+                        _audioTestStatus.value = "Frequent mode (2s apart): beep ${i + 1} of 5"
+                        audioEngine.playAlignmentPing(pan = 0f, pitchHz = 880.0)
+                        delay(2_000L)
+                    }
+                    _audioTestStatus.value = "Audio test complete"
+                } finally {
+                    audioEngine.stop()
+                    audioTestRunning = false
+                }
+            }
         }
 
         fun exportLog() {
