@@ -22,27 +22,30 @@ import kotlin.math.sin
 private const val SAMPLE_RATE = 44100
 private const val AMPLITUDE = 0.6f
 
-// A bounded silent lead-in gives a newly opened Bluetooth route a chance to warm before an audible
-// cue. Written only when a track is (re)created, not on every cue — see #114/#108.
-private const val PRE_ROLL_MS = 60
-private const val PRE_ROLL_FRAMES = SAMPLE_RATE * PRE_ROLL_MS / 1000
-
 // Safety net for #109: on at least one device/route, AlignmentPing's playbackHeadPosition never
 // reached its cue's end frame — the completion-wait loop below spun until navigation stopped,
 // holding toneMutex (and, transitively, AudioFocusController's lease) for up to 87s and silently
-// blocking every other cue behind it. 2s is generous next to the longest cue (WrongVector, ~300ms
-// including pre-roll) but short enough that a genuinely stuck track can never again hang the shared
-// pipeline for more than a couple of seconds.
+// blocking every other cue behind it. 2s is generous next to the longest cue (WrongVector, ~300ms)
+// but short enough that a genuinely stuck track can never again hang the shared pipeline for more
+// than a couple of seconds.
 private const val COMPLETION_TIMEOUT_MS = 2_000L
 
 // #114: after this many consecutive completion-timeouts on the same session-scoped track, treat it
 // as wedged and recreate it, even without an exception. Not field-tuned — a guess.
 private const val CONSECUTIVE_TIMEOUT_ESCALATION_THRESHOLD = 3
 
-// Silence chunk the filler writes at a time while frequent mode is active. Short enough that a real
-// cue's write (which shares toneMutex) never waits long for a filler write in flight to finish.
+// Silence chunk written a) repeatedly by the frequent-mode filler between real cues, and b) by
+// warmUpUntilActive() while confirming a paused/fresh track has actually been reactivated. Short
+// enough that a real cue's write (sharing toneMutex) never waits long behind one in flight.
 private const val SILENCE_CHUNK_MS = 100
 private const val SILENCE_CHUNK_FRAMES = SAMPLE_RATE * SILENCE_CHUNK_MS / 1000
+
+// #114: how long warmUpUntilActive() will keep writing silence and polling playbackHeadPosition for
+// proof a paused/fresh track has been reactivated, before giving up. Field-observed reactivation
+// latency ranged 400ms-2.3s in one trace; this replaces what used to be a fixed 60ms pre-roll guess
+// (proven insufficient — see the class doc) with a bound generous enough to actually cover that
+// range, at the cost of worse-case per-cue latency when a track really is stuck.
+private const val WARMUP_TIMEOUT_MS = 3_000L
 
 /**
  * Session-scoped streaming earcon output (#114/#108).
@@ -51,7 +54,7 @@ private const val SILENCE_CHUNK_FRAMES = SAMPLE_RATE * SILENCE_CHUNK_MS / 1000
  * dispatched until the session ends ([stop]) or the track errors/wedges — reopening a
  * Bluetooth-routed stream on every single cue is the mechanism #114's stall theory targets.
  *
- * **Two prior fixes for the remaining stall were tried and field-disproven before this one; see
+ * **Three prior fixes for the remaining stall were tried and field-disproven before this one; see
  * #114's issue history for the traces.** Leaving a frequent-cadence run's track in
  * `PLAYSTATE_PLAYING` between cues (relying on natural underrun-to-silence) let AudioFlinger disable
  * the track — confirmed via `AudioFlinger`/`AudioTrack` logcat, on the plain speaker, not just
@@ -59,13 +62,18 @@ private const val SILENCE_CHUNK_FRAMES = SAMPLE_RATE * SILENCE_CHUNK_MS / 1000
  * the same `prepareTracks_l BUFFER TIMEOUT: ... due to underrun` eviction still fired repeatedly for
  * an explicitly-paused track, just without the extra `restartIfDisabled()` recovery tax layered on
  * top — AudioFlinger's periodic sweep does not appear to distinguish "app paused this on purpose"
- * from "app let this starve." The only remaining lever is to never let a frequent-mode track go idle
- * at all: [ensureSilenceFiller] keeps writing small silence chunks between real cues for as long as
- * frequent mode is active, so the track is never absent from AudioFlinger's active list in the first
- * place. Rare-mode cues still use the cheaper [pauseAfterCue] discipline — the two prior fixes were
- * never disproven for that case, and it avoids paying the same #53-shaped continuous-activity
- * tradeoff where it isn't needed. Not fully understood *why* this device evicts so eagerly; this is
- * confirmed to route around the symptom, not a mechanism we've verified end to end.
+ * from "app let this starve." [ensureSilenceFiller] fixes that for frequent-mode runs by never
+ * letting the track go idle at all — confirmed field-clean. But rare-mode cues (`DirectionalBeacon`)
+ * pause for the whole gap between cues (5s+), always longer than AudioFlinger's sweep interval, so
+ * every rare-mode cue after the first resumes from evicted — and a **fixed** 60ms pre-roll guess
+ * (the original mitigation for a "newly opened route") was field-disproven too: the actual
+ * reactivation latency is genuinely variable (400ms-2.3s in one trace), racing a fixed guess against
+ * a variable recovery time is exactly why it looked intermittent (some cues heard, most not) rather
+ * than reliably broken. [warmUpUntilActive] replaces the guess with a confirmation: keep writing
+ * silence and polling `playbackHeadPosition` for actual forward movement — proof AudioFlinger has
+ * reactivated the track — before writing the real tone, bounded by its own timeout separate from the
+ * tone's own completion wait. Not fully understood *why* this device evicts so eagerly; every fix
+ * here routes around the confirmed symptom, not a mechanism verified end to end.
  */
 @Singleton
 class AudioEngine
@@ -100,7 +108,6 @@ class AudioEngine
                 .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
                 .build()
 
-        private val preRollSamples = FloatArray(PRE_ROLL_FRAMES * 2)
         private val silenceChunk = FloatArray(SILENCE_CHUNK_FRAMES * 2)
 
         /** Starts a session: resets bookkeeping. No track is created until the first cue. */
@@ -120,31 +127,28 @@ class AudioEngine
         }
 
         /** Immediate, synchronous — safe to call from the AudioManager focus-listener thread. */
-        fun pauseForFocusLoss() = pauseCurrentTrack(reason = "focus_lost", external = true)
+        fun pauseForFocusLoss() = pauseCurrentTrackExternally(reason = "focus_lost")
 
         /** Frequent → rare mode transition: return to per-cue pause discipline. */
-        fun pauseForModeChange() = pauseCurrentTrack(reason = "mode_change_to_rare", external = true)
+        fun pauseForModeChange() = pauseCurrentTrackExternally(reason = "mode_change_to_rare")
 
-        /** Called after every rare-mode cue; never races an in-flight completion poll. */
-        fun pauseAfterCue() = pauseCurrentTrack(reason = "cue_end", external = false)
-
-        private fun pauseCurrentTrack(
-            reason: String,
-            external: Boolean,
-        ) {
+        /**
+         * Both callers are reactive to something outside the ordinary cue lifecycle (a focus loss, or
+         * frequent mode ending) — an ordinary rare-mode cue's own end-of-cue pause lives inside
+         * playCue() itself instead, since cadence is data playCue() already has, not something a
+         * caller should have to separately remember to act on (#114).
+         */
+        private fun pauseCurrentTrackExternally(reason: String) {
             val session = activeSession ?: return
-            if (external) {
-                pausedExternally = true
-                // A held-open route is exactly what something needing exclusive focus (dictation)
-                // needs us to stop being — the filler must not keep writing through a focus loss or a
-                // frequent→rare transition. The next Frequent-cadence cue restarts it (see playCue()).
-                stopSilenceFiller()
-            }
+            pausedExternally = true
+            // A held-open route is exactly what something needing exclusive focus (dictation) needs
+            // us to stop being — the filler must not keep writing through a focus loss or a
+            // frequent→rare transition. The next Frequent-cadence cue restarts it (see playCue()).
+            stopSilenceFiller()
             runCatching { session.track.pause() }
             // A paused track is cold the same way a just-created one is — the route may not be
-            // settled by the time real audio resumes. Rare mode pauses after every single cue, so
-            // without this every rare-mode cue after the first would resume with zero warm-up lead-in
-            // (field-confirmed: clipped/dropped tones, not just a theoretical risk).
+            // settled by the time real audio resumes (field-confirmed: clipped/dropped tones, not
+            // just a theoretical risk).
             session.needsPreRoll = true
             outputLifecycle.trackPaused(reason)
         }
@@ -239,8 +243,11 @@ class AudioEngine
                 var outcome = "interrupted"
                 try {
                     if (session.needsPreRoll) {
-                        if (!writeFully(session, preRollSamples)) {
-                            outcome = "write_failed"
+                        // Folds into the same timeout/flush/escalation handling below as an ordinary
+                        // completion timeout — a track that can't prove it's reactivated within its
+                        // own budget is no more trustworthy than one that failed to finish a cue.
+                        if (!warmUpUntilActive(session)) {
+                            outcome = "timeout"
                             return@withLock
                         }
                         session.needsPreRoll = false
@@ -281,7 +288,8 @@ class AudioEngine
                         // up, surfacing as several quick beeps in a row rather than the intended
                         // silence. flush() drops whatever's still queued so the next cue starts clean.
                         // It resets the track's own head-position counter to zero, so the session's
-                        // cumulative bookkeeping must reset with it.
+                        // cumulative bookkeeping must reset with it, and — same as any other pause —
+                        // the next write into it needs to re-confirm reactivation, not assume it.
                         runCatching {
                             session.track.pause()
                             session.track.flush()
@@ -289,6 +297,7 @@ class AudioEngine
                         session.progress.samplesWritten = 0L
                         session.progress.playbackHeadWrapOffset = 0L
                         session.progress.lastPlaybackHeadRaw = 0L
+                        session.needsPreRoll = true
                         session.consecutiveTimeouts++
                         if (session.consecutiveTimeouts >= CONSECUTIVE_TIMEOUT_ESCALATION_THRESHOLD) {
                             closeSession(session, reason = "reopen_after_timeout_escalation")
@@ -296,8 +305,36 @@ class AudioEngine
                     } else if (outcome == "write_failed" || outcome == "read_failed") {
                         closeSession(session, reason = "reopen_after_error")
                     }
+                    // Cadence, not the caller, decides whether a cue pauses when it's done — a caller
+                    // that plays a cue directly (bypassing AudioCuePlayer.dispatch()) can't forget a
+                    // separate follow-up call that doesn't exist (#114: exactly this shape of bug bit
+                    // the debug screen's audio test). Skipped when the session already got closed above
+                    // (nothing left to pause) or when an external pause/mode-change already raced this
+                    // cue (pausedExternally) — don't fight a transition that already happened correctly.
+                    if (cadence == CueCadence.Rare && !pausedExternally && activeSession === session) {
+                        runCatching { session.track.pause() }
+                        session.needsPreRoll = true
+                        outputLifecycle.trackPaused("cue_end")
+                    }
                 }
             }
+        }
+
+        /**
+         * Writes silence and waits for `playbackHeadPosition` to actually move — proof AudioFlinger
+         * has reactivated a paused or freshly-created track — instead of guessing a fixed lead-in
+         * duration. Must be called while [toneMutex] is held.
+         */
+        private fun warmUpUntilActive(session: AudioSession): Boolean {
+            val baseline = playbackFramePosition(session) ?: return false
+            val deadlineElapsedMs = SystemClock.elapsedRealtime() + WARMUP_TIMEOUT_MS
+            while (activeSession === session) {
+                if (!writeFully(session, silenceChunk)) return false
+                val pos = playbackFramePosition(session) ?: return false
+                if (pos > baseline) return true
+                if (SystemClock.elapsedRealtime() >= deadlineElapsedMs) return false
+            }
+            return false
         }
 
         /** Must be called while [toneMutex] is held. Reuses [activeSession] if one exists. */
@@ -316,7 +353,7 @@ class AudioEngine
             val session =
                 AudioSession(
                     track = track,
-                    lease = outputLifecycle.trackOpened("session_open", PRE_ROLL_MS),
+                    lease = outputLifecycle.trackOpened("session_open", WARMUP_TIMEOUT_MS),
                 )
             activeSession = session
             return session
@@ -335,7 +372,7 @@ class AudioEngine
                     .Builder()
                     .setAudioAttributes(beaconAudioAttributes())
                     .setAudioFormat(audioFormat)
-                    .setBufferSizeInBytes(maxOf(minBufferBytes, preRollSamples.size * Float.SIZE_BYTES))
+                    .setBufferSizeInBytes(maxOf(minBufferBytes, silenceChunk.size * Float.SIZE_BYTES))
                     .setTransferMode(AudioTrack.MODE_STREAM)
                     .build()
             }.getOrNull()

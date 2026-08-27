@@ -184,12 +184,9 @@ class DebugViewModel
                 try {
                     repeat(5) { i ->
                         _audioTestStatus.value = "Rare mode (5s apart): beep ${i + 1} of 5"
+                        // AudioEngine.playCue() decides internally whether to pause afterward, based
+                        // on cue cadence — no separate follow-up call needed (#114).
                         audioEngine.playDirectionalBeacon(pan = 0f, pitchHz = 880.0)
-                        // Real navigation always pauses after a rare-mode cue (AudioCuePlayer.dispatch) —
-                        // without this the track sits PLAYSTATE_PLAYING and idle for the whole 5s gap,
-                        // which is a different (and already-disproven) code path from what this is meant
-                        // to test.
-                        audioEngine.pauseAfterCue()
                         delay(5_000L)
                     }
                     repeat(5) { i ->

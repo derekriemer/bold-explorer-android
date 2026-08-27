@@ -59,7 +59,7 @@ class CueOutputLifecycle internal constructor(
 
     internal fun trackOpened(
         reason: String,
-        preRollMs: Int,
+        warmupBudgetMs: Long,
     ): AudioOutputLease {
         val startedAt = nowMs()
         audioLog.append(
@@ -67,7 +67,7 @@ class CueOutputLifecycle internal constructor(
                 timestampMs = startedAt,
                 kind = AudioLogEntry.Kind.AUDIO_OUTPUT,
                 trigger = reason,
-                inputs = outputInputs(preRollMs),
+                inputs = outputInputs(warmupBudgetMs),
                 outputs = "state=TRACK_OPENED",
                 played = "",
             ),
@@ -138,6 +138,6 @@ class CueOutputLifecycle internal constructor(
         )
     }
 
-    private fun outputInputs(preRollMs: Int): String =
-        "action=track_open, usage=$AUDIO_USAGE_NAME, contentType=$CONTENT_TYPE_NAME, preRollMs=$preRollMs"
+    private fun outputInputs(warmupBudgetMs: Long): String =
+        "action=track_open, usage=$AUDIO_USAGE_NAME, contentType=$CONTENT_TYPE_NAME, warmupBudgetMs=$warmupBudgetMs"
 }

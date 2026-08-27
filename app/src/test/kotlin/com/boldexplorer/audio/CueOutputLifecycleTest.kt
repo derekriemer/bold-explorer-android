@@ -25,7 +25,7 @@ class CueOutputLifecycleTest {
         var nowMs = 1_000L
         val lifecycle = CueOutputLifecycle(FakeAudioEventLog(entries::add)) { nowMs }
 
-        val lease = lifecycle.trackOpened("session_open", preRollMs = 60)
+        val lease = lifecycle.trackOpened("session_open", warmupBudgetMs = 3_000L)
         nowMs = 1_175L
         lifecycle.trackClosed(lease, reason = "reopen_after_error")
 

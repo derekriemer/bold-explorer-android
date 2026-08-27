@@ -160,7 +160,6 @@ class AudioCuePlayer
                     if (shouldAttempt) {
                         audioEngine.playDirectionalBeacon(event.pan, event.pitchHz)
                         audioFocusController.releaseAfterCue()
-                        if (!audioFocusController.frequentModeActive) audioEngine.pauseAfterCue()
                     }
                     scope.launch {
                         val courseIsSmoothed = guidance?.courseIsSmoothed ?: false
@@ -237,7 +236,6 @@ class AudioCuePlayer
                     if (shouldAttempt) {
                         audioEngine.playAlignmentPing(event.pan, event.pitchHz)
                         audioFocusController.releaseAfterCue()
-                        if (!audioFocusController.frequentModeActive) audioEngine.pauseAfterCue()
                     }
                     scope.launch {
                         audioEventLog.append(
@@ -293,7 +291,6 @@ class AudioCuePlayer
                     if (shouldAttempt) {
                         audioEngine.playWrongVector()
                         audioFocusController.releaseAfterCue()
-                        if (!audioFocusController.frequentModeActive) audioEngine.pauseAfterCue()
                     }
                     scope.launch {
                         audioEventLog.append(
