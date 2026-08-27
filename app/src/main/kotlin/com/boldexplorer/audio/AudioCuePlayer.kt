@@ -90,7 +90,7 @@ class AudioCuePlayer
             trailGuidanceFlow = trailGuidance
             smoothedHeadingFlow = smoothedHeading
 
-            audioEngine.open()
+            audioEngine.open(scope)
             audioFocusController.onFocusLostOrModeChange = { reason ->
                 if (reason == "focus_lost") audioEngine.pauseForFocusLoss() else audioEngine.pauseForModeChange()
             }
@@ -160,7 +160,7 @@ class AudioCuePlayer
                     if (shouldAttempt) {
                         audioEngine.playDirectionalBeacon(event.pan, event.pitchHz)
                         audioFocusController.releaseAfterCue()
-                        audioEngine.pauseAfterCue()
+                        if (!audioFocusController.frequentModeActive) audioEngine.pauseAfterCue()
                     }
                     scope.launch {
                         val courseIsSmoothed = guidance?.courseIsSmoothed ?: false
@@ -237,7 +237,7 @@ class AudioCuePlayer
                     if (shouldAttempt) {
                         audioEngine.playAlignmentPing(event.pan, event.pitchHz)
                         audioFocusController.releaseAfterCue()
-                        audioEngine.pauseAfterCue()
+                        if (!audioFocusController.frequentModeActive) audioEngine.pauseAfterCue()
                     }
                     scope.launch {
                         audioEventLog.append(
@@ -293,7 +293,7 @@ class AudioCuePlayer
                     if (shouldAttempt) {
                         audioEngine.playWrongVector()
                         audioFocusController.releaseAfterCue()
-                        audioEngine.pauseAfterCue()
+                        if (!audioFocusController.frequentModeActive) audioEngine.pauseAfterCue()
                     }
                     scope.launch {
                         audioEventLog.append(
