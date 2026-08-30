@@ -143,6 +143,13 @@ class AudioFocusController internal constructor(
 
     private val stateLock = Any()
     private var holding = false
+
+    // True from a granted request until releaseHeldLease() or a permanent Lost abandons it —
+    // deliberately outlives `holding` across a transient loss, since staying registered (not
+    // `holding`) is what lets Android's automatic AUDIOFOCUS_GAIN land (see handleFocusChange).
+    // releaseHeldLease() keys off this, not `holding`, so a session ending mid-transient-loss still
+    // abandons the still-registered request instead of leaking it (see close()).
+    private var registered = false
     private var frequentMode = false
     private var heldSinceMs = 0L
 
@@ -166,10 +173,11 @@ class AudioFocusController internal constructor(
                 frequentMode = frequent
                 !frequent && holding
             }
-        if (shouldRelease) {
-            releaseHeldLease(reason = "mode_change_to_rare")
-            onFocusLostOrModeChange?.invoke("mode_change_to_rare")
-        }
+        if (shouldRelease) releaseHeldLease(reason = "mode_change_to_rare")
+        // Fires on every frequent-mode exit, not just when a lease was actually held — with ducking
+        // disabled `holding` is always false, but AudioEngine's silence filler (started independently
+        // of any focus lease) still needs this signal to stop.
+        if (!frequent) onFocusLostOrModeChange?.invoke("mode_change_to_rare")
     }
 
     /** Plays one cue with either transient ducking or transparent mixing. */
@@ -200,6 +208,7 @@ class AudioFocusController internal constructor(
 
         synchronized(stateLock) {
             holding = true
+            registered = true
             heldSinceMs = startedAt
         }
         return CueAudioMode.DUCK
@@ -221,7 +230,7 @@ class AudioFocusController internal constructor(
     private fun handleFocusChange(change: AudioFocusChange) {
         when (change) {
             AudioFocusChange.Lost -> {
-                val wasHolding = synchronized(stateLock) { holding.also { holding = false } }
+                val wasHolding = synchronized(stateLock) { holding.also { holding = false; registered = false } }
                 if (!wasHolding) return
                 // Permanent loss carries no platform guarantee of an automatic future GAIN callback
                 // (that contract is specific to LOSS_TRANSIENT, below) — abandon cleanly now so a
@@ -253,13 +262,14 @@ class AudioFocusController internal constructor(
     }
 
     private fun releaseHeldLease(reason: String) {
-        val wasHolding =
+        val wasRegistered =
             synchronized(stateLock) {
-                holding.also {
+                registered.also {
                     holding = false
+                    registered = false
                 }
             }
-        if (!wasHolding) return
+        if (!wasRegistered) return
         val result = runCatching { backend.abandonTransientMayDuck() }
         logAbandon(reason, result.isSuccess)
     }

@@ -1489,7 +1489,7 @@ class GpsViewModel
             smoothedBearingDeg: Float?,
             match: TrailMatch?,
         ) {
-            _trailLost.value = match != null && match.state != MatchState.Matched
+            _trailLost.value = match?.state == MatchState.Lost
 
             // Computed once and reused below for the progress cue's zero-distance guard (#91) —
             // both readings must agree on the same fix's evidence, not two calls that happen to

@@ -101,7 +101,7 @@ fun AlignmentDialog(
                 onAction(GpsAction.AlignToTarget)
                 true
             },
-            if (state.trailLost) {
+            if (state.trailLost && state.trailBearingDeg != null) {
                 CustomAccessibilityAction("Align to trail") {
                     onAction(GpsAction.AlignToTrail)
                     true

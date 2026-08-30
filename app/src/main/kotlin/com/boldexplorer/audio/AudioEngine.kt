@@ -47,6 +47,15 @@ private const val SILENCE_CHUNK_FRAMES = SAMPLE_RATE * SILENCE_CHUNK_MS / 1000
 // range, at the cost of worse-case per-cue latency when a track really is stuck.
 private const val WARMUP_TIMEOUT_MS = 3_000L
 
+// #114: minimum wall-clock time warmUpUntilActive() insists on before treating confirmation as done,
+// even if playbackHeadPosition moves sooner. AudioTrack.write() returns once there's buffer space,
+// not once real time has actually elapsed — on a just-reactivated, empty-buffer track the very first
+// write can be accepted (and position can tick) almost instantly, well under the physical settling
+// time some hardware genuinely needs (field-confirmed clipped/dropped starts on a bone-conduction
+// headset). This restores the old fixed pre-roll's floor as a minimum *underneath* the adaptive
+// confirmation, instead of the confirmation replacing it outright.
+private const val MIN_WARMUP_MS = 60L
+
 /**
  * Session-scoped streaming earcon output (#114/#108).
  *
@@ -72,8 +81,13 @@ private const val WARMUP_TIMEOUT_MS = 3_000L
  * than reliably broken. [warmUpUntilActive] replaces the guess with a confirmation: keep writing
  * silence and polling `playbackHeadPosition` for actual forward movement — proof AudioFlinger has
  * reactivated the track — before writing the real tone, bounded by its own timeout separate from the
- * tone's own completion wait. Not fully understood *why* this device evicts so eagerly; every fix
- * here routes around the confirmed symptom, not a mechanism verified end to end.
+ * tone's own completion wait. Field-confirmed the confirmation alone isn't sufficient either: on a
+ * bone-conduction headset, position could tick forward — satisfying the confirmation — faster than
+ * the hardware had actually physically settled, clipping the start of the very next real tone.
+ * [MIN_WARMUP_MS] restores the old fixed pre-roll's floor as a minimum *underneath* the adaptive
+ * confirmation rather than the confirmation replacing it outright. Not fully understood *why* this
+ * device evicts so eagerly; every fix here routes around the confirmed symptom, not a mechanism
+ * verified end to end.
  */
 @Singleton
 class AudioEngine
@@ -323,16 +337,21 @@ class AudioEngine
         /**
          * Writes silence and waits for `playbackHeadPosition` to actually move — proof AudioFlinger
          * has reactivated a paused or freshly-created track — instead of guessing a fixed lead-in
-         * duration. Must be called while [toneMutex] is held.
+         * duration. Requires both that confirmation *and* [MIN_WARMUP_MS] of real elapsed time:
+         * `write()` accepting data (and position ticking) is not proof real time has passed for
+         * hardware that needs to physically settle, only that AudioFlinger has buffer space. Must be
+         * called while [toneMutex] is held.
          */
         private fun warmUpUntilActive(session: AudioSession): Boolean {
             val baseline = playbackFramePosition(session) ?: return false
-            val deadlineElapsedMs = SystemClock.elapsedRealtime() + WARMUP_TIMEOUT_MS
+            val startElapsedMs = SystemClock.elapsedRealtime()
+            val deadlineElapsedMs = startElapsedMs + WARMUP_TIMEOUT_MS
             while (activeSession === session) {
                 if (!writeFully(session, silenceChunk)) return false
                 val pos = playbackFramePosition(session) ?: return false
-                if (pos > baseline) return true
-                if (SystemClock.elapsedRealtime() >= deadlineElapsedMs) return false
+                val nowElapsedMs = SystemClock.elapsedRealtime()
+                if (pos > baseline && nowElapsedMs - startElapsedMs >= MIN_WARMUP_MS) return true
+                if (nowElapsedMs >= deadlineElapsedMs) return false
             }
             return false
         }

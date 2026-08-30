@@ -16,6 +16,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
@@ -94,9 +96,16 @@ class AudioCuePlayer
             audioFocusController.onFocusLostOrModeChange = { reason ->
                 if (reason == "focus_lost") audioEngine.pauseForFocusLoss() else audioEngine.pauseForModeChange()
             }
-            // Edge-triggered mode toggle (#114/#108) — not a per-cue re-check. StateFlow only emits on
-            // an actual value change, so this fires exactly on frequent-mode entry/exit.
-            frequentCuesActive.onEach { audioFocusController.setFrequentMode(it) }.launchIn(scope)
+            // Edge-triggered mode toggle (#114/#108) — not a per-cue re-check. ANDed with
+            // beaconCuesEnabled so disabling beacon cues mid-alignment actually exits frequent mode
+            // (the scheduler below independently stops emitting AlignmentPing on the same condition,
+            // but without this the focus lease and AudioEngine's silence filler would otherwise keep
+            // running past that point). distinctUntilChanged() preserves the fires-only-on-change
+            // guarantee combine() alone doesn't give.
+            combine(frequentCuesActive, beaconCuesEnabled) { active, enabled -> active && enabled }
+                .distinctUntilChanged()
+                .onEach { audioFocusController.setFrequentMode(it) }
+                .launchIn(scope)
 
             val schedulerJob = scheduler.start(scope, relativeDeg, frequentCuesActive, beaconCuesEnabled)
             playerJob =
