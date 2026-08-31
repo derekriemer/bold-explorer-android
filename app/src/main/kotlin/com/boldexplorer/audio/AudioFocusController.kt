@@ -24,9 +24,6 @@ internal fun beaconAudioAttributes(): AudioAttributes =
 internal enum class CueAudioMode(
     val logValue: String,
 ) {
-    /** No focus request: the cue mixes with other media at its current volume. */
-    MIX("mix"),
-
     /** Transient-may-duck focus was granted for the cue's audible lifetime (or already held). */
     DUCK("duck"),
 
@@ -35,6 +32,14 @@ internal enum class CueAudioMode(
 
     /** Policy prevented the cue from playing, so no focus request was made. */
     SUPPRESSED("suppressed"),
+
+    /**
+     * A transient loss is still outstanding (waiting on Android's automatic regain) — the cue did
+     * not play at all, rather than falling back to [MIX_FOCUS_DENIED]'s mix-anyway. Distinguishes a
+     * known, active exclusive-focus interruption (e.g. dictation) from ordinary first-contact
+     * denial, which still mixes (#108).
+     */
+    SUPPRESSED_FOCUS_LOST("suppressed_focus_lost"),
 }
 
 internal enum class AudioFocusRequestResult {
@@ -126,8 +131,13 @@ private class AndroidAudioFocusBackend(
  * targets. Holding a lease longer only stays safe because of the reactive [onFocusChange] handling
  * below — see the design note on #114/#108 for the full rationale.
  *
- * When ducking is disabled ([requestForCue]'s `duckAudioEnabled = false`), this class never touches
- * Android's focus API at all, in either mode.
+ * Every cue requests focus, unconditionally — there used to be a user-facing "duck audio" toggle
+ * that skipped the request entirely when off, but that meant this class (and therefore
+ * [AudioEngine]'s reactive pause) had zero signal that another app had grabbed exclusive focus for
+ * something like dictation, so cues kept playing straight into an active mic. Removed rather than
+ * fixed: `AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK` is already the least disruptive request type Android
+ * has (dropping "may duck" asks others to fully pause, not less), so there was no gentler way to
+ * keep the old opt-out while still getting the detection signal.
  */
 @Singleton
 class AudioFocusController internal constructor(
@@ -174,21 +184,24 @@ class AudioFocusController internal constructor(
                 !frequent && holding
             }
         if (shouldRelease) releaseHeldLease(reason = "mode_change_to_rare")
-        // Fires on every frequent-mode exit, not just when a lease was actually held — with ducking
-        // disabled `holding` is always false, but AudioEngine's silence filler (started independently
-        // of any focus lease) still needs this signal to stop.
+        // Fires on every frequent-mode exit, not just when a lease was actually held — a fresh
+        // frequent-mode run always requests fresh (see requestForCue), so `holding` can still be
+        // false here (e.g. the very first cue hasn't landed yet), but AudioEngine's silence filler
+        // (started independently of any focus lease) still needs this signal to stop regardless.
         if (!frequent) onFocusLostOrModeChange?.invoke("mode_change_to_rare")
     }
 
-    /** Plays one cue with either transient ducking or transparent mixing. */
-    internal fun requestForCue(
-        duckAudioEnabled: Boolean,
-        cue: String,
-    ): CueAudioMode {
-        if (!duckAudioEnabled) return CueAudioMode.MIX
-
-        val alreadyHolding = synchronized(stateLock) { holding }
+    /** Requests transient-may-duck focus for one cue (or reuses an already-held lease). */
+    internal fun requestForCue(cue: String): CueAudioMode {
+        val (alreadyHolding, awaitingRegain) =
+            synchronized(stateLock) { holding to (registered && !holding) }
         if (alreadyHolding) return CueAudioMode.DUCK
+        // Don't re-request while a transient loss is still outstanding: the original request stays
+        // registered specifically so Android's own automatic AUDIOFOCUS_GAIN can land (see
+        // handleFocusChange) — firing a fresh request every cue instead defeats that contract, and
+        // field-confirmed (#108) gets silently throttled by the platform's own background-app focus
+        // request hardening ("AudioHardening ... ignored") well before the interruption ends anyway.
+        if (awaitingRegain) return CueAudioMode.SUPPRESSED_FOCUS_LOST
 
         val startedAt = nowMs()
         val result =

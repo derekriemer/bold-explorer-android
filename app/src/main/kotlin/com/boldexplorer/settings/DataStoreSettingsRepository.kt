@@ -15,7 +15,6 @@ import com.boldexplorer.shared.settings.BearingDisplayMode
 import com.boldexplorer.shared.settings.BearingDisplayPrefSpec
 import com.boldexplorer.shared.settings.CompassMode
 import com.boldexplorer.shared.settings.CompassPrefSpec
-import com.boldexplorer.shared.settings.DuckAudioPrefSpec
 import com.boldexplorer.shared.settings.SpokenGuidancePrefSpec
 import com.boldexplorer.shared.settings.Units
 import com.boldexplorer.shared.settings.UnitsPrefSpec
@@ -37,7 +36,6 @@ private val BEARING_KEY = stringPreferencesKey(BearingDisplayPrefSpec.key)
 private val AUDIO_KEY = stringPreferencesKey(AudioCuesPrefSpec.key)
 private val SPOKEN_GUIDANCE_KEY = stringPreferencesKey(SpokenGuidancePrefSpec.key)
 private val BEACON_CUES_KEY = stringPreferencesKey(BeaconCuesPrefSpec.key)
-private val DUCK_KEY = stringPreferencesKey(DuckAudioPrefSpec.key)
 private val ABSOLUTE_SILENCE_KEY = stringPreferencesKey(AbsoluteSilencePrefSpec.key)
 
 @Singleton
@@ -57,7 +55,6 @@ class DataStoreSettingsRepository
             val legacyAudio = prefs[AUDIO_KEY]
             val spokenGuidance = migrateStoredValue(SpokenGuidancePrefSpec, prefs[SPOKEN_GUIDANCE_KEY] ?: legacyAudio)
             val beaconCues = migrateStoredValue(BeaconCuesPrefSpec, prefs[BEACON_CUES_KEY] ?: legacyAudio)
-            val duck = migrateStoredValue(DuckAudioPrefSpec, prefs[DUCK_KEY])
             val absoluteSilence = migrateStoredValue(AbsoluteSilencePrefSpec, prefs[ABSOLUTE_SILENCE_KEY])
             return AppSettings(
                 units = if (units == "metric") Units.METRIC else Units.IMPERIAL,
@@ -70,7 +67,6 @@ class DataStoreSettingsRepository
                     },
                 spokenGuidanceEnabled = spokenGuidance,
                 beaconCuesEnabled = beaconCues,
-                duckAudioEnabled = duck,
                 absoluteSilenceEnabled = absoluteSilence,
             )
         }
@@ -110,11 +106,6 @@ class DataStoreSettingsRepository
                     serializeVersioned(
                         AudioCuesPrefSpec.currentVersion,
                         settings.spokenGuidanceEnabled && settings.beaconCuesEnabled,
-                    )
-                prefs[DUCK_KEY] =
-                    serializeVersioned(
-                        DuckAudioPrefSpec.currentVersion,
-                        settings.duckAudioEnabled,
                     )
                 prefs[ABSOLUTE_SILENCE_KEY] =
                     serializeVersioned(

@@ -32,9 +32,12 @@ import javax.inject.Singleton
  *   → [AudioEngine] streaming tone
  * - [AudioCueEvent.TrailComplete] → [TtsEngine]
  *
- * [AppSettings.duckAudioEnabled] selects between two explicit modes: transient-may-duck focus for
- * exactly the audible cue, or transparent mixing with other media. A denied focus request falls
- * back to mixing so an accessibility cue is never lost solely because focus was unavailable.
+ * Every cue requests transient-may-duck focus (#108) — there's no opt-out, since Android has no
+ * gentler request type and skipping the request entirely means never learning that another app
+ * (e.g. dictation) grabbed exclusive focus. An ordinary denial (someone else just holds ordinary
+ * focus greedily) still falls back to mixing so an accessibility cue is never lost solely because
+ * focus was unavailable; a denial specific to an outstanding known interruption instead suppresses
+ * the cue entirely — see [CueAudioMode.SUPPRESSED_FOCUS_LOST].
  *
  * [AudioEngine] holds one session-scoped [android.media.AudioTrack] across the whole session
  * (#114/#108) rather than reopening one per cue; [AudioFocusController] mirrors that with a
@@ -134,7 +137,6 @@ class AudioCuePlayer
         private suspend fun dispatch(event: AudioCueEvent) {
             firstSettingsLoaded.await()
             val currentSettings = settings.value
-            val duck = currentSettings.duckAudioEnabled
 
             // STOPGAP for #14 (absolute silence mode): earcons don't route through
             // OutputManager/OutputPolicy yet — that unification is tracked in #22. Until then,
@@ -162,12 +164,13 @@ class AudioCuePlayer
                     val shouldAttempt = !silenced && !stale
                     val audioMode =
                         if (shouldAttempt) {
-                            audioFocusController.requestForCue(duck, "DirectionalBeacon")
+                            audioFocusController.requestForCue("DirectionalBeacon")
                         } else {
                             CueAudioMode.SUPPRESSED
                         }
+                    val focusLost = audioMode == CueAudioMode.SUPPRESSED_FOCUS_LOST
                     if (shouldAttempt) {
-                        audioEngine.playDirectionalBeacon(event.pan, event.pitchHz)
+                        if (!focusLost) audioEngine.playDirectionalBeacon(event.pan, event.pitchHz)
                         audioFocusController.releaseAfterCue()
                     }
                     scope.launch {
@@ -208,7 +211,6 @@ class AudioCuePlayer
                                             if (accM != null) append(", accuracy=${"%.1f".format(accM)}m")
                                             if (courseIsSmoothed) append(", smoothed=true")
                                         }.trimStart(',', ' '),
-                                        duck,
                                         audioMode,
                                     ),
                                 outputs = "pan=${"%.3f".format(event.pan)}, pitchHz=${"%.0f".format(event.pitchHz)} Hz",
@@ -222,6 +224,10 @@ class AudioCuePlayer
 
                                         silenced -> {
                                             "Suppressed (silence mode): tone @ ${"%.0f".format(event.pitchHz)} Hz"
+                                        }
+
+                                        focusLost -> {
+                                            "Suppressed (focus lost): tone @ ${"%.0f".format(event.pitchHz)} Hz"
                                         }
 
                                         else -> {
@@ -238,12 +244,15 @@ class AudioCuePlayer
                     val shouldAttempt = !silenced
                     val audioMode =
                         if (shouldAttempt) {
-                            audioFocusController.requestForCue(duck, "AlignmentPing")
+                            audioFocusController.requestForCue("AlignmentPing")
                         } else {
                             CueAudioMode.SUPPRESSED
                         }
+                    // BestEffort cadence (#108): dropping one instance is fine — the scheduler fires
+                    // another in ~1s regardless, so there's nothing to retry here.
+                    val focusLost = audioMode == CueAudioMode.SUPPRESSED_FOCUS_LOST
                     if (shouldAttempt) {
-                        audioEngine.playAlignmentPing(event.pan, event.pitchHz)
+                        if (!focusLost) audioEngine.playAlignmentPing(event.pan, event.pitchHz)
                         audioFocusController.releaseAfterCue()
                     }
                     scope.launch {
@@ -255,15 +264,14 @@ class AudioCuePlayer
                                 inputs =
                                     cueInputs(
                                         relDeg?.let { "relativeDeg=${"%.1f".format(it)}°" } ?: "",
-                                        duck,
                                         audioMode,
                                     ),
                                 outputs = "pan=${"%.3f".format(event.pan)}, pitchHz=${"%.0f".format(event.pitchHz)} Hz",
                                 played =
-                                    if (silenced) {
-                                        "Suppressed (silence mode): alignment ping @ ${"%.0f".format(event.pitchHz)} Hz"
-                                    } else {
-                                        "Alignment ping @ ${"%.0f".format(event.pitchHz)} Hz"
+                                    when {
+                                        silenced -> "Suppressed (silence mode): alignment ping @ ${"%.0f".format(event.pitchHz)} Hz"
+                                        focusLost -> "Suppressed (focus lost): alignment ping @ ${"%.0f".format(event.pitchHz)} Hz"
+                                        else -> "Alignment ping @ ${"%.0f".format(event.pitchHz)} Hz"
                                     },
                             ),
                         )
@@ -293,10 +301,19 @@ class AudioCuePlayer
                     val shouldAttempt = !silenced
                     val audioMode =
                         if (shouldAttempt) {
-                            audioFocusController.requestForCue(duck, "WrongVector")
+                            audioFocusController.requestForCue("WrongVector")
                         } else {
                             CueAudioMode.SUPPRESSED
                         }
+                    // STOPGAP for RetryIfStillValid (#108): unlike AlignmentPing/DirectionalBeacon,
+                    // this is a one-shot push from GpsViewModel with no repeating timer behind it, so
+                    // suppressing it outright during a known focus loss (like the BestEffort cues do)
+                    // would mean this specific safety alert is gone for good instead of merely late.
+                    // Play through the loss instead — same as an ordinary MIX_FOCUS_DENIED denial —
+                    // rather than silently dropping it. Replace with real suppress-and-retry once
+                    // #116 lands (the failure-reporting channel back to GpsViewModel doesn't exist
+                    // yet, so there's nothing to revalidate/replay against).
+                    val focusLost = audioMode == CueAudioMode.SUPPRESSED_FOCUS_LOST
                     if (shouldAttempt) {
                         audioEngine.playWrongVector()
                         audioFocusController.releaseAfterCue()
@@ -310,11 +327,15 @@ class AudioCuePlayer
                                 inputs =
                                     cueInputs(
                                         relDeg?.let { "relativeDeg=${"%.1f".format(it)}°" } ?: "",
-                                        duck,
                                         audioMode,
                                     ),
                                 outputs = "660 Hz → 440 Hz descending",
-                                played = if (silenced) "Suppressed (silence mode): wrong-vector earcon" else "Wrong-vector earcon",
+                                played =
+                                    when {
+                                        silenced -> "Suppressed (silence mode): wrong-vector earcon"
+                                        focusLost -> "Wrong-vector earcon (played through known focus loss — not yet suppress-and-retried, #116)"
+                                        else -> "Wrong-vector earcon"
+                                    },
                             ),
                         )
                     }
@@ -325,12 +346,10 @@ class AudioCuePlayer
 
 private fun cueInputs(
     inputs: String,
-    duckAudioEnabled: Boolean,
     audioMode: CueAudioMode,
 ): String =
     listOf(
         inputs.takeIf(String::isNotEmpty),
-        "duckAudioEnabled=$duckAudioEnabled",
         "audioMode=${audioMode.logValue}",
     ).filterNotNull().joinToString(", ")
 

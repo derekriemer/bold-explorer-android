@@ -167,24 +167,6 @@ val BeaconCuesPrefSpec =
         migrations = AudioCuesPrefSpec.migrations,
     )
 
-val DuckAudioPrefSpec =
-    PrefSpec(
-        key = "duck_audio",
-        currentVersion = 1,
-        default = false,
-        validate = { it is Boolean },
-        migrations =
-            mapOf(
-                0 to { old ->
-                    when (old) {
-                        "true", true -> true
-                        "false", false -> false
-                        else -> false
-                    }
-                },
-            ),
-    )
-
 val AbsoluteSilencePrefSpec =
     PrefSpec(
         key = "absolute_silence",

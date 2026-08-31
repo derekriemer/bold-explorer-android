@@ -153,15 +153,6 @@ fun SettingsScreen(
         )
 
         HorizontalDivider()
-
-        // Duck audio
-        SwitchRow(
-            label = "Duck Music During Beacons",
-            checked = settings.duckAudioEnabled,
-            onCheckedChange = { viewModel.setDuckAudio(it) },
-        )
-
-        HorizontalDivider()
     }
 }
 
