@@ -1512,6 +1512,10 @@ class GpsViewModel
                         // the end still finishes the trail, and neither route to it fires before
                         // the user has walked (ADR 0001, S5).
                         completion = completion,
+                        // The endpoint radial route completes on raw GPS distance regardless of
+                        // match state, so a non-Matched state at arrival needs the same hedge poor
+                        // accuracy gets (#67).
+                        matchState = match?.state,
                     )
             ) {
                 is TrailFollowerEvent.TrailComplete -> {
