@@ -329,8 +329,6 @@ class TrailGuidanceCoordinator(
         lastOrdinaryGuidanceAtMs = sample.timestamp
         lastOrdinaryGuidanceLocation = current
         return OrdinaryGuidanceDecision(
-            checkpointN = guidance.targetIndex + 1,
-            total = guidance.total,
             distanceToTargetM = guidance.distanceToTargetM,
             relativeDeg = relative,
         )
@@ -830,10 +828,13 @@ private data class BacktrackTrackResult(
     val wouldFire: Boolean,
 )
 
-/** A routine trail-guidance cue is due; the caller formats + speaks it. */
+/**
+ * A routine trail-guidance cue is due; the caller formats + speaks it.
+ *
+ * No longer carries a checkpoint ordinal (S7): "Checkpoint N of M" is retired in favour of the
+ * merged distance/confidence row (#66) and this cue's own distance + direction wording.
+ */
 data class OrdinaryGuidanceDecision(
-    val checkpointN: Int,
-    val total: Int,
     val distanceToTargetM: Double,
     val relativeDeg: Double,
 )

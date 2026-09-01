@@ -56,12 +56,16 @@ import com.boldexplorer.shared.navigation.CollectionExplorerState
 import com.boldexplorer.shared.navigation.CollectionPoint
 import com.boldexplorer.shared.navigation.DirectionDescriptor
 import com.boldexplorer.shared.navigation.FollowOption
+import com.boldexplorer.shared.navigation.MatchState
 import com.boldexplorer.shared.navigation.NavMode
 import com.boldexplorer.shared.navigation.TrailEndAction
+import com.boldexplorer.shared.navigation.TrailFollowerState
 import com.boldexplorer.shared.navigation.TrailRecordingState
 import com.boldexplorer.shared.settings.AppSettings
+import com.boldexplorer.shared.settings.Units
 import com.boldexplorer.ui.common.CollectionDropdown
 import com.boldexplorer.ui.common.CreateItemDialog
+import kotlin.math.roundToInt
 
 @Composable
 fun GpsRoute(
@@ -408,6 +412,15 @@ private fun TelemetryCard(
                     BearingComputer.formatDistance(it, state.settings.units) + staleSuffix
                 } ?: "—"
             TelemetryRow(label = "Distance to target", value = distText)
+
+            // #66: merged trail-follow row, distinct from "Distance to target" above (that one is
+            // straight-line to whatever waypoint/POI is targeted; this is distance remaining
+            // *along* the trail, only meaningful during an active follow). Not a live region —
+            // readable on demand, same as the rows around it.
+            if (state.trailFollowState is TrailFollowerState.Active) {
+                val trailText = trailRowText(state.trailRemainingM, state.trailMatchState, state.settings.units)
+                TelemetryRow(label = "Trail", value = trailText)
+            }
 
             val accText =
                 state.accuracyM?.let {
@@ -897,6 +910,30 @@ private fun RecordNewTrailButton(
                     }
                 },
     ) { Text("Record New Trail") }
+}
+
+/**
+ * Merged trail-follow status text for the "Trail" row (#66).
+ *
+ * Rounds to the nearest 10 m per #66's own churn rule — nobody acts on 337 vs. 340 metres, and a
+ * value that only changes when it means something is worth reading on a swipe-to row that isn't a
+ * live region. [matchState] hedges the wording rather than the number: [remainingM] is derived from
+ * `TrailMatch.confirmedAlongM`, which freezes for the whole Uncertain/Lost span, so a non-Matched
+ * state means this number is a last-confirmed reading, not a live one (#67).
+ */
+private fun trailRowText(
+    remainingM: Double?,
+    matchState: MatchState?,
+    units: Units,
+): String {
+    if (remainingM == null) return "Not yet tracking position"
+    val rounded = (remainingM / 10.0).roundToInt() * 10.0
+    val distText = BearingComputer.formatDistance(rounded, units)
+    return when (matchState) {
+        null, MatchState.Matched -> "$distText remaining"
+        MatchState.Uncertain, MatchState.Unconfirmed -> "roughly $distText remaining"
+        MatchState.Lost -> "trail signal lost, last confirmed $distText remaining"
+    }
 }
 
 @Composable

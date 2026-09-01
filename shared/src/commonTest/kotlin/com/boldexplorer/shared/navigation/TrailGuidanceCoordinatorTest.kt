@@ -323,7 +323,8 @@ class TrailGuidanceCoordinatorTest {
         // Past interval AND moved ~111 m north (0.001°) → fires.
         val fired = c.evaluateOrdinaryGuidance(active, sample(141_000, lat = 0.001), guidance(relativeDeg = 90.0))
         assertNotNull(fired)
-        assertEquals(2, fired.checkpointN)
+        // Checkpoint ordinal retired (S7, #66) — the decision now only carries distance/relativeDeg.
+        assertEquals(50.0, fired.distanceToTargetM)
 
         // Immediately again at the new spot → throttled by the 30 s interval.
         assertNull(c.evaluateOrdinaryGuidance(active, sample(142_000, lat = 0.001), guidance(relativeDeg = 90.0)))

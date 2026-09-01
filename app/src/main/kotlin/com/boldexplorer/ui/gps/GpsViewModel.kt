@@ -138,6 +138,10 @@ data class GpsUiState(
     val relativeDeg: Double? = null,
     val trailBearingDeg: Double? = null,
     val trailLost: Boolean = false,
+    // #66: distance remaining along the followed trail, and the match confidence to hedge it
+    // with — both null unless a trail is actively being followed and has confirmed a position.
+    val trailRemainingM: Double? = null,
+    val trailMatchState: MatchState? = null,
     val locationStale: Boolean = false,
     val alignmentActive: Boolean = false,
     val alignmentBearingDeg: Double? = null,
@@ -313,6 +317,8 @@ private data class BearingGroup(
     val alignmentActive: Boolean,
     val locationStale: Boolean = false,
     val trailLost: Boolean = false,
+    val trailRemainingM: Double? = null,
+    val trailMatchState: MatchState? = null,
 )
 
 private data class AudioAlignmentGroup(
@@ -723,6 +729,15 @@ class GpsViewModel
         private val _trailLost = MutableStateFlow(false)
         private val trailLost: StateFlow<Boolean> = _trailLost.asStateFlow()
 
+        // #66: distance remaining along the followed trail + the match confidence to hedge it
+        // with, surfaced for the merged trail-info row. Both freeze during an Uncertain/Lost span
+        // the same way confirmedAlongM does (they are derived from it) — that staleness is exactly
+        // what trailMatchState lets the row hedge against, e.g. "roughly 340 m (last confirmed)".
+        private val _trailRemainingM = MutableStateFlow<Double?>(null)
+        private val trailRemainingM: StateFlow<Double?> = _trailRemainingM.asStateFlow()
+        private val _trailMatchState = MutableStateFlow<MatchState?>(null)
+        private val trailMatchState: StateFlow<MatchState?> = _trailMatchState.asStateFlow()
+
         // ── Combined UI state ─────────────────────────────────────────────────────────
 
         private val telemetryGroup =
@@ -753,12 +768,15 @@ class GpsViewModel
                 },
                 locationStale,
                 trailLost,
-            ) { group, (aa, trailActive, guidance), stale, lost ->
+                combine(trailRemainingM, trailMatchState) { remaining, match -> remaining to match },
+            ) { group, (aa, trailActive, guidance), stale, lost, (remaining, match) ->
                 group.copy(
                     relativeDeg = if (trailActive) guidance?.relativeDeg else group.relativeDeg,
                     alignmentActive = aa,
                     locationStale = stale,
                     trailLost = lost,
+                    trailRemainingM = remaining,
+                    trailMatchState = match,
                 )
             }
         private val interactionGroup =
@@ -804,6 +822,8 @@ class GpsViewModel
                     relativeDeg = bear.relativeDeg,
                     trailBearingDeg = bear.trailBearingDeg,
                     trailLost = bear.trailLost,
+                    trailRemainingM = bear.trailRemainingM,
+                    trailMatchState = bear.trailMatchState,
                     locationStale = bear.locationStale,
                     alignmentActive = bear.alignmentActive,
                     alignmentBearingDeg = inter.alignmentBearingDeg,
@@ -1183,7 +1203,6 @@ class GpsViewModel
             announce(
                 buildTrailStartAnnouncement(
                     "Following $name${if (reversed) " in reverse" else ""}",
-                    points,
                     loc,
                 ),
                 kind = OutputKind.TRAIL_STARTED,
@@ -1228,16 +1247,16 @@ class GpsViewModel
 
         private fun buildTrailStartAnnouncement(
             prefix: String,
-            points: List<TrailPoint>,
             loc: LatLng?,
         ): String {
             val active = trailFollower.state.value as? TrailFollowerState.Active
-            val firstWp = active?.waypoints?.getOrNull(active.currentIndex)
-            val total = active?.waypoints?.size ?: points.size
+            val firstWp = active?.currentTarget
             val guidance = guidanceCoordinator.guidance.value
             return buildString {
-                val checkpointN = active?.currentIndex?.plus(1) ?: 1
-                append("$prefix. Checkpoint $checkpointN of $total.")
+                // "Checkpoint N of M" retired (S7, #66) — ordinal position isn't meaningful
+                // trail-follow feedback; the merged trail-info row now carries distance instead.
+                append(prefix)
+                append(".")
                 if (firstWp != null && loc != null) {
                     val dist = haversineDistanceMeters(loc, LatLng(firstWp.lat, firstWp.lon))
                     val distLabel = formatSpokenDistance(dist, settings.value.units)
@@ -1283,6 +1302,8 @@ class GpsViewModel
             guidanceCoordinator.clear()
             followCues = null
             _trailLost.value = false
+            _trailMatchState.value = null
+            _trailRemainingM.value = null
             backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, false)
             stopLocationServiceIfIdle()
             announce(
@@ -1490,6 +1511,7 @@ class GpsViewModel
             match: TrailMatch?,
         ) {
             _trailLost.value = match?.state == MatchState.Lost
+            _trailMatchState.value = match?.state
 
             // Computed once and reused below for the progress cue's zero-distance guard (#91) —
             // both readings must agree on the same fix's evidence, not two calls that happen to
@@ -1522,6 +1544,8 @@ class GpsViewModel
                     guidanceCoordinator.clear()
                     followCues = null
                     _trailLost.value = false
+                    _trailMatchState.value = null
+                    _trailRemainingM.value = null
                     announce(
                         // Hedged when accuracy was too poor to assert arrival. Saying "trail
                         // complete" to someone who is not there is worse than saying nothing
@@ -1650,6 +1674,7 @@ class GpsViewModel
             // confirmed fix would read as "due" regardless of how long the follow had already run.
             if (session != null) {
                 val remainingM = alongTrackM?.let { session.remainingM(it) }
+                _trailRemainingM.value = remainingM
                 val cue =
                     cues.progress.onFix(
                         nowMs = sample.timestamp,
@@ -1714,7 +1739,8 @@ class GpsViewModel
             val decision = guidanceCoordinator.evaluateOrdinaryGuidance(followState, sample, guidance) ?: return
             val distLabel = formatSpokenDistance(decision.distanceToTargetM, settings.value.units)
             announce(
-                "Checkpoint ${decision.checkpointN} of ${decision.total}. $distLabel, ${directionHint(decision.relativeDeg)}.",
+                // "Checkpoint N of M" retired (S7, #66) — see buildTrailStartAnnouncement.
+                "$distLabel, ${directionHint(decision.relativeDeg)}.",
                 kind = OutputKind.ORDINARY_GUIDANCE,
                 category = OutputCategory.NAVIGATION,
                 origin = OutputOrigin.AUTOMATIC,

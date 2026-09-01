@@ -27,7 +27,16 @@ sealed class TrailFollowerState {
         val waypoints: List<TrailPoint>,
         val currentIndex: Int,
         val thresholdM: Double,
-    ) : TrailFollowerState()
+    ) : TrailFollowerState() {
+        /**
+         * The waypoint currently being advanced toward. Target-resolution callers (S7:
+         * [NavigationTargetResolver], [TrailGuidance]) should read this instead of indexing
+         * [waypoints] by [currentIndex] themselves — [currentIndex] stays public for the
+         * follower's own diagnostics/logging, which legitimately need the ordinal position, but
+         * "what is the target" should have exactly one implementation.
+         */
+        val currentTarget: TrailPoint get() = waypoints[currentIndex]
+    }
 
     object Complete : TrailFollowerState()
 }
