@@ -37,6 +37,7 @@ import com.boldexplorer.shared.model.TrailEndRow
 import com.boldexplorer.shared.model.Waypoint
 import com.boldexplorer.shared.navigation.AnchorOption
 import com.boldexplorer.shared.navigation.AnnotationCueProducer
+import com.boldexplorer.shared.navigation.BendCueProducer
 import com.boldexplorer.shared.navigation.ArmingResult
 import com.boldexplorer.shared.navigation.CollectionExplorer
 import com.boldexplorer.shared.navigation.CollectionExplorerEvent
@@ -365,6 +366,7 @@ private class FollowCueProducers(
     val progress: ProgressCueProducer,
     val annotation: AnnotationCueProducer,
     val matchState: MatchStateCueProducer,
+    val bend: BendCueProducer,
 ) {
     var alongTrackMBeforeThisFix: Double? = null
     var previousMatch: TrailMatch? = null
@@ -1210,6 +1212,7 @@ class GpsViewModel
                     progress = ProgressCueProducer(),
                     annotation = AnnotationCueProducer(annotations, direction),
                     matchState = MatchStateCueProducer(),
+                    bend = BendCueProducer(),
                 )
             trailFollower.start(points, fromIndex = followerIndexFor(polyline, anchor, direction))
             refreshTrailGuidanceFromLatestLocation(resetOrdinaryThrottle = true)
@@ -1734,6 +1737,33 @@ class GpsViewModel
                     announce(
                         text,
                         kind = OutputKind.PROGRESS,
+                        category = OutputCategory.NAVIGATION,
+                        origin = OutputOrigin.AUTOMATIC,
+                        sample = sample,
+                    )
+                }
+
+                // S8 (#65): distance and direction to the next turn. Sourced from the same
+                // confirmed alongTrackM as the progress cue above -- never TrailFollower's
+                // currentIndex -- so a matcher correction or a backtrack self-corrects this the
+                // same way it self-corrects remaining distance.
+                val bendCue = cues.bend.onFix(sample.timestamp, session.polyline, alongTrackM, session.direction, units)
+                viewModelScope.launch {
+                    audioEventLog.append(
+                        AudioLogEntry(
+                            timestampMs = sample.timestamp,
+                            kind = AudioLogEntry.Kind.DETECTION_STATE,
+                            trigger = "BendCheck",
+                            inputs = "alongTrack=${alongTrackM.metresOrNull()}",
+                            outputs = "",
+                            played = bendCue.disposition,
+                        ),
+                    )
+                }
+                bendCue.speech?.let { text ->
+                    announce(
+                        text,
+                        kind = OutputKind.NEXT_TURN,
                         category = OutputCategory.NAVIGATION,
                         origin = OutputOrigin.AUTOMATIC,
                         sample = sample,

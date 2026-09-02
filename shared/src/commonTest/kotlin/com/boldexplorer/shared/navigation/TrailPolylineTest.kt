@@ -104,4 +104,45 @@ class TrailPolylineTest {
         assertEquals(shared.origin.lat, polyA.frame.origin.lat, 1e-12, "frame is shared, not rebuilt")
         assertEquals(shared.origin.lat, polyB.frame.origin.lat, 1e-12, "frame is shared, not rebuilt")
     }
+
+    // ── worstDepartureOver (ADR 0001, S8) ───────────────────────────────────────────────────────
+
+    private fun cornerLatFor(m: Double) = 40.0 + m / 111_194.9
+
+    private fun cornerLonOffsetFor(m: Double) = m / 111_194.9
+
+    @Test
+    fun worstDepartureOver_isNullOnAStraightStretch() {
+        val poly = TrailPolyline((0..20).map { LatLng(cornerLatFor(it * 20.0), -105.0) })
+        assertEquals(null, poly.worstDepartureOver(0.0, 200.0), "nothing departs from a straight line")
+    }
+
+    @Test
+    fun worstDepartureOver_anchorsToTheCornerVertexAndSignsLeftForARightTurn() {
+        // 200 m north, then 200 m east — a right turn when walked in recorded order. The corner
+        // vertex sits on the *left* of the straight start-to-end chord: cutting the corner (going
+        // further before turning to reach the same endpoint) always bulges opposite the turn's own
+        // direction, so a right turn's apex is left-of-chord and vice versa. crossTrackRightM is
+        // right-positive for the chord, so that apex is negative here.
+        val north = (0..10).map { LatLng(cornerLatFor(it * 20.0), -105.0) }
+        val east = (1..10).map { LatLng(cornerLatFor(200.0), -105.0 + cornerLonOffsetFor(it * 20.0)) }
+        val poly = TrailPolyline(north + east)
+
+        val bend = poly.worstDepartureOver(0.0, 400.0)
+        assertTrue(bend != null, "the corner departs from the start-to-end chord")
+        assertEquals(200.0, bend!!.alongTrackM, 1.0, "anchors to the corner vertex, not merely somewhere in range")
+        assertTrue(bend.departureM < 0.0, "a right turn's apex is left of the chord (negative)")
+    }
+
+    @Test
+    fun worstDepartureOver_signsPositiveForALeftTurn() {
+        // Mirror image of the corner above: 200 m north, then 200 m west.
+        val north = (0..10).map { LatLng(cornerLatFor(it * 20.0), -105.0) }
+        val west = (1..10).map { LatLng(cornerLatFor(200.0), -105.0 - cornerLonOffsetFor(it * 20.0)) }
+        val poly = TrailPolyline(north + west)
+
+        val bend = poly.worstDepartureOver(0.0, 400.0)
+        assertTrue(bend != null)
+        assertTrue(bend!!.departureM > 0.0, "a left turn's apex is right of the chord (positive)")
+    }
 }

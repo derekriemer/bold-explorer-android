@@ -43,6 +43,7 @@ enum class OutputKind {
     PROGRESS,
     ANNOTATION_PASSED,
     MATCH_STATE,
+    NEXT_TURN,
 }
 
 /**

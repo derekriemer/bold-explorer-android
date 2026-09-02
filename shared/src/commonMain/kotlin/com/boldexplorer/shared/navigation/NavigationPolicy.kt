@@ -518,4 +518,51 @@ object NavigationPolicy {
      * A rejoin elsewhere on the trail makes "you passed the bench" false rather than late.
      */
     const val REJOIN_TRUSTED_ERROR_M = 30.0
+
+    // ── S8: next-turn detection (#65) ─────────────────────────────────────────────────────────
+
+    /**
+     * How far ahead (along-track metres) [BendDetector] scans for the next turn.
+     *
+     * Deliberately its own constant, not shared with the matcher's window ([MatchTuning] / #62):
+     * at a switchback the two windows are about the same size but serve opposite purposes — this
+     * one must *include* the far arm so the turn is found before it's reached, the matching
+     * window must *exclude* it so the matcher never snaps onto it.
+     */
+    const val TURN_SCAN_RANGE_M = 150.0
+
+    /**
+     * Sagitta (metres of departure from a straight chord) above which a vertex counts as a
+     * candidate bend. Sagitta, not summed `|Δbearing|` per vertex (grows without bound with
+     * recording density) and not signed net turn alone (reads zero across an S-bend that returns
+     * to its original heading) — see [TrailPolyline.sagittaOver]'s own rationale, which this
+     * detector shares via [TrailPolyline.worstDepartureOver].
+     *
+     * **Suspect**: an invented starting value approximating ADR 0001 S8's ~15° hypothesis over a
+     * [TURN_BASELINE_M]-wide window, not yet field-tuned. The degree figure itself is measured
+     * and reported separately, via [TURN_BASELINE_M] — this constant only decides *whether*
+     * something ahead is worth measuring.
+     */
+    const val TURN_SAGITTA_THRESHOLD_M = 3.0
+
+    /** Physical baseline for the entry/exit chord bearing measured at a detected bend's anchor. */
+    const val TURN_BASELINE_M = 15.0
+
+    /**
+     * Net turn (degrees) at a detected anchor below which it is not worth announcing — "this
+     * bends a little" isn't a turn. **Suspect**: ADR 0001 S8's own starting hypothesis.
+     */
+    const val TURN_ANGLE_THRESHOLD_DEG = 15.0
+
+    /**
+     * Minimum gap between next-turn announcements, mirroring [PROGRESS_SPEECH_INTERVAL_MS]'s role
+     * for the progress cue. Defence in depth alongside the anchor dedup, not a substitute for it:
+     * found in the field (2026-09-02) re-announcing every few seconds for over three minutes on a
+     * stretch with two close turns, because an unstable anchor (fixed alongside this) kept
+     * defeating the dedup by reporting a slightly different "next" turn on consecutive fixes.
+     */
+    const val TURN_SPEECH_INTERVAL_MS = 20_000L
+
+    /** How close two anchors' along-track positions must be to count as the same turn (dedup). */
+    const val TURN_ANCHOR_TOLERANCE_M = 5.0
 }
