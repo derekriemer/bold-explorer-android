@@ -27,7 +27,16 @@ sealed class TrailFollowerState {
         val waypoints: List<TrailPoint>,
         val currentIndex: Int,
         val thresholdM: Double,
-    ) : TrailFollowerState()
+    ) : TrailFollowerState() {
+        /**
+         * The waypoint currently being advanced toward. Target-resolution callers (S7:
+         * [NavigationTargetResolver], [TrailGuidance]) should read this instead of indexing
+         * [waypoints] by [currentIndex] themselves — [currentIndex] stays public for the
+         * follower's own diagnostics/logging, which legitimately need the ordinal position, but
+         * "what is the target" should have exactly one implementation.
+         */
+        val currentTarget: TrailPoint get() = waypoints[currentIndex]
+    }
 
     object Complete : TrailFollowerState()
 }
@@ -36,8 +45,14 @@ sealed class TrailFollowerEvent {
     /**
      * The trail's endpoint has been reached.
      *
-     * @property hedged true when GPS accuracy was too poor to assert arrival plainly, so the
-     *   caller should phrase this as "you should be at the end" rather than "trail complete".
+     * @property hedged true when GPS accuracy was too poor, or the trail match was not
+     *   [MatchState.Matched] at the moment of arrival, to assert arrival plainly — so the caller
+     *   should phrase this as "you should be at the end" rather than "trail complete". The radial
+     *   completion route (`fireAdvance`'s "endpoint" mechanism) checks raw GPS distance to the last
+     *   waypoint regardless of match state, so a walker who is off-trail but geometrically close to
+     *   the endpoint's coordinates (a shortcut, a dead-reckoned drift) can trigger it with an
+     *   otherwise-confident fix; a match confidence weaker than `Matched` needs the same hedge
+     *   accuracy alone gives (#67).
      */
     data class TrailComplete(val hedged: Boolean) : TrailFollowerEvent()
 }
@@ -105,6 +120,11 @@ class TrailFollower(
      * @param completion        What the session knows about finishing. Defaults to
      *                          [CompletionEvidence.None], which completes nothing: a caller that
      *                          says nothing about travel does not get a completion by accident.
+     * @param matchState        The trail matcher's [MatchState] for this fix, if a match is active.
+     *                          Only consulted for [TrailComplete.hedged] — the radial "endpoint"
+     *                          completion route checks raw GPS distance, not match confidence, so a
+     *                          state other than [MatchState.Matched] needs the same hedge poor
+     *                          accuracy gets (#67). Pass null when no matcher is in play.
      */
     fun onLocationUpdate(
         location: LatLng,
@@ -113,6 +133,7 @@ class TrailFollower(
         smoothedBearingDeg: Float? = null,
         accuracyM: Double? = null,
         completion: CompletionEvidence = CompletionEvidence.None,
+        matchState: MatchState? = null,
     ): TrailFollowerEvent? {
         val current = _state.value as? TrailFollowerState.Active ?: return null
         val target = current.waypoints[current.currentIndex]
@@ -143,7 +164,14 @@ class TrailFollower(
         if (completion.completesTheTrail) {
             val atEnd = current.copy(currentIndex = current.waypoints.size - 1)
             _state.value = atEnd
-            return fireAdvance(atEnd, location, altitudeM, mechanism = "endpoint_alongtrack", accuracyM = accuracyM)
+            return fireAdvance(
+                atEnd,
+                location,
+                altitudeM,
+                mechanism = "endpoint_alongtrack",
+                accuracyM = accuracyM,
+                matchState = matchState,
+            )
         }
 
         // 0b. Endpoint completion is a policy of its own, not a side effect of advancing off the
@@ -159,7 +187,17 @@ class TrailFollower(
         //    first fix, before a step has been taken.
         if (current.currentIndex == current.waypoints.size - 1) {
             return if (completion.travelled && d <= NavigationPolicy.completionRadiusM(accuracyM)) {
-                fireAdvance(current, location, altitudeM, null, null, null, "endpoint", accuracyM = accuracyM)
+                fireAdvance(
+                    current,
+                    location,
+                    altitudeM,
+                    null,
+                    null,
+                    null,
+                    "endpoint",
+                    accuracyM = accuracyM,
+                    matchState = matchState,
+                )
             } else {
                 null
             }
@@ -223,6 +261,7 @@ class TrailFollower(
         mechanism: String = "radial",
         smoothedBearingUsed: Boolean = false,
         accuracyM: Double? = null,
+        matchState: MatchState? = null,
     ): TrailFollowerEvent? {
         val capturedClosest = closestApproachM
         val dToTarget =
@@ -249,13 +288,22 @@ class TrailFollower(
         } else {
             emitCallback()
             _state.value = TrailFollowerState.Complete
-            TrailFollowerEvent.TrailComplete(hedged = shouldHedgeCompletion(accuracyM))
+            TrailFollowerEvent.TrailComplete(hedged = shouldHedgeCompletion(accuracyM, matchState))
         }
     }
 
-    /** Whether the fix is too uncertain to assert arrival plainly. */
-    private fun shouldHedgeCompletion(accuracyM: Double?): Boolean =
-        accuracyM != null && accuracyM > NavigationPolicy.COMPLETION_HEDGE_ABOVE_M
+    /**
+     * Whether the fix is too uncertain to assert arrival plainly — either the GPS fix itself was
+     * poor, or the trail match was not [MatchState.Matched] at the moment of arrival (#67). The
+     * latter matters because the "endpoint" radial route above completes on raw GPS distance to the
+     * last waypoint regardless of match state.
+     */
+    private fun shouldHedgeCompletion(
+        accuracyM: Double?,
+        matchState: MatchState?,
+    ): Boolean =
+        (accuracyM != null && accuracyM > NavigationPolicy.COMPLETION_HEDGE_ABOVE_M) ||
+            (matchState != null && matchState != MatchState.Matched)
 }
 
 /**

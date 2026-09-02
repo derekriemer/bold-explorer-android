@@ -36,7 +36,7 @@ class NavigationTargetResolver(
 ) {
     val targetCoord: StateFlow<LatLng?> =
         combine(trailFollowState, explorerState) { fs, explorer ->
-            val trailWp = (fs as? TrailFollowerState.Active)?.waypoints?.getOrNull(fs.currentIndex)
+            val trailWp = (fs as? TrailFollowerState.Active)?.currentTarget
             if (trailWp != null) {
                 LatLng(trailWp.lat, trailWp.lon)
             } else {
@@ -46,7 +46,7 @@ class NavigationTargetResolver(
 
     val targetName: StateFlow<String?> =
         combine(trailFollowState, explorerState) { fs, explorer ->
-            val trailWp = (fs as? TrailFollowerState.Active)?.waypoints?.getOrNull(fs.currentIndex)
+            val trailWp = (fs as? TrailFollowerState.Active)?.currentTarget
             if (trailWp != null) {
                 trailWp.name
             } else {

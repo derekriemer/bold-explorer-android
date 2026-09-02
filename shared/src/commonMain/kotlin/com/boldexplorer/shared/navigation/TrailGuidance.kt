@@ -76,7 +76,7 @@ object TrailGuidance {
         direction: TravelDirection = TravelDirection.Forward,
     ): TrailGuidanceState? {
         val active = followState as? TrailFollowerState.Active ?: return null
-        val target = active.waypoints.getOrNull(active.currentIndex) ?: return null
+        val target = active.currentTarget
         val location = LatLng(sample.lat, sample.lon)
         val targetLocation = LatLng(target.lat, target.lon)
         val desiredCourse = desiredTrailCourseDeg(polyline, alongTrackM, direction)

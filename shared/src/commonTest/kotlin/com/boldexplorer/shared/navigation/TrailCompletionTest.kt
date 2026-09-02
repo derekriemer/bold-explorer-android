@@ -147,4 +147,46 @@ class TrailCompletionTest {
             "arriving at the endpoint completes",
         )
     }
+
+    // #67: the radial "endpoint" route above completes on raw GPS distance to the last waypoint —
+    // it does not itself consult the trail match. A walker who is geometrically close to the
+    // endpoint's coordinates but whose match is not Matched (a shortcut, a dead-reckoned drift)
+    // must not hear a flat "trail complete" just because the fix itself was accurate.
+
+    @Test
+    fun uncertainMatchHedgesEvenWithGoodAccuracy() {
+        val f = followerAtFinalLeg()
+        val event =
+            f.onLocationUpdate(beforeEnd(1.0), accuracyM = 3.0, completion = walked, matchState = MatchState.Uncertain)
+        assertIs<TrailFollowerEvent.TrailComplete>(event)
+        assertTrue(event.hedged, "a non-Matched state must hedge even when accuracy alone would not")
+    }
+
+    @Test
+    fun lostMatchHedgesEvenWithGoodAccuracy() {
+        val f = followerAtFinalLeg()
+        val event =
+            f.onLocationUpdate(beforeEnd(1.0), accuracyM = 3.0, completion = walked, matchState = MatchState.Lost)
+        assertIs<TrailFollowerEvent.TrailComplete>(event)
+        assertTrue(event.hedged, "Lost must hedge even when accuracy alone would not")
+    }
+
+    @Test
+    fun matchedStateWithGoodAccuracyStillAssertsPlainly() {
+        val f = followerAtFinalLeg()
+        val event =
+            f.onLocationUpdate(beforeEnd(1.0), accuracyM = 3.0, completion = walked, matchState = MatchState.Matched)
+        assertIs<TrailFollowerEvent.TrailComplete>(event)
+        assertTrue(!event.hedged, "Matched plus good accuracy can still state arrival plainly")
+    }
+
+    @Test
+    fun noMatchStateDoesNotHedgeOnItsOwn() {
+        // Callers with no matcher in play (matchState = null, the default) get the old,
+        // accuracy-only behaviour unchanged.
+        val f = followerAtFinalLeg()
+        val event = f.onLocationUpdate(beforeEnd(1.0), accuracyM = 3.0, completion = walked)
+        assertIs<TrailFollowerEvent.TrailComplete>(event)
+        assertTrue(!event.hedged, "null matchState must not itself force a hedge")
+    }
 }
