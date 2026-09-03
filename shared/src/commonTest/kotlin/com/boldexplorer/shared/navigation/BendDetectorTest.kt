@@ -1,6 +1,9 @@
 package com.boldexplorer.shared.navigation
 
 import com.boldexplorer.shared.geo.LatLng
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -10,6 +13,12 @@ class BendDetectorTest {
     private fun latFor(m: Double) = 40.0 + m / 111_194.9
 
     private fun lonOffsetFor(m: Double) = m / 111_194.9
+
+    // Corrected for longitude degrees shrinking with cos(latitude) at 40N -- lonOffsetFor above
+    // reuses latFor's per-metre scale unchanged, which is fine for the purely-cardinal corners
+    // elsewhere in this file (direction survives the distortion) but not for a corner with a
+    // genuinely diagonal leg, where it would silently change the real bearing produced.
+    private fun lonOffsetForDiagonal(m: Double) = m / (111_194.9 * cos(40.0 * PI / 180.0))
 
     // Corner at along-track 100 m: comfortably inside BendTuning.DEFAULT's 150 m scan range plus
     // its 15 m baseline window, and far enough from either end for chordBearingAt's before/after
@@ -104,5 +113,35 @@ class BendDetectorTest {
         assertTrue(bend != null)
         assertEquals(60.0, bend!!.anchorAlongTrackM, 15.0, "the nearer corner (60) must win, not the farther one (160)")
         assertTrue(bend.turnDeg > 0, "the nearer corner is the right turn")
+    }
+
+    @Test
+    fun findsAGentleTurnTheOldSagittaProxyWouldHaveMissed() {
+        // Field-motivated (2026-09-02, #125): the old metres-based gate (3 m sagitta over a 15 m
+        // baseline) only reliably crossed for turns approaching ~47 degrees -- for a single-vertex
+        // turn with 7.5 m (half-baseline) legs on each side, sagitta = 7.5 * sin(turnDeg / 2), so
+        // 3 m requires roughly a 47 degree turn. A real, gentler turn underfoot -- comfortably past
+        // BendTuning.DEFAULT's 11 degree angle gate, but nowhere near 47 degrees -- used to be
+        // silently skipped in favour of whatever sharper, farther bend qualified on sagitta alone.
+        val turnDeg = 25.0
+        val legM = 15.0
+        val thetaRad = turnDeg * PI / 180.0
+        val vertexNorthM = legM
+        val afterNorthM = vertexNorthM + legM * cos(thetaRad)
+        val afterEastM = legM * sin(thetaRad)
+        val poly =
+            TrailPolyline(
+                listOf(
+                    LatLng(latFor(0.0), -105.0),
+                    LatLng(latFor(vertexNorthM), -105.0),
+                    LatLng(latFor(afterNorthM), -105.0 + lonOffsetForDiagonal(afterEastM)),
+                ),
+            )
+
+        val bend = BendDetector.findNextBend(poly, 0.0, TravelDirection.Forward)
+        assertTrue(bend != null, "a $turnDeg degree turn must clear the angle-based gate")
+        assertTrue(bend!!.turnDeg > NavigationPolicy.TURN_ANGLE_THRESHOLD_DEG, "clears the new gate: ${bend.turnDeg}")
+        assertTrue(bend.turnDeg < 47.0, "under where the old sagitta proxy would have fired: ${bend.turnDeg}")
+        assertTrue(bend.turnDeg > 0, "a north-then-right-of-north corner is a right turn")
     }
 }

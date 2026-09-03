@@ -13,8 +13,7 @@ import kotlin.math.abs
  * @property distanceAheadM how far from the current position to [anchorAlongTrackM], always ≥ 0
  *   regardless of [TravelDirection].
  * @property turnDeg signed net turn in the walker's own direction of travel — positive = right,
- *   negative = left, in [deltaAngle]'s convention. Directly usable with
- *   [BearingComputer.toRelative].
+ *   negative = left, in [deltaAngle]'s convention. Directly usable with [TurnSeverity.of].
  */
 data class Bend(
     val anchorAlongTrackM: Double,
@@ -29,7 +28,6 @@ data class Bend(
  */
 data class BendTuning(
     val scanRangeM: Double = NavigationPolicy.TURN_SCAN_RANGE_M,
-    val sagittaThresholdM: Double = NavigationPolicy.TURN_SAGITTA_THRESHOLD_M,
     val baselineM: Double = NavigationPolicy.TURN_BASELINE_M,
     val angleThresholdDeg: Double = NavigationPolicy.TURN_ANGLE_THRESHOLD_DEG,
     val anchorToleranceM: Double = NavigationPolicy.TURN_ANCHOR_TOLERANCE_M,
@@ -60,10 +58,16 @@ data class BendTuning(
  *
  * Departure (sagitta), not summed `|Δbearing|` per vertex (grows without bound with recording
  * density) and not signed net turn alone (reads zero across an S-bend that returns to its original
- * heading) — matching [TrailPolyline.sagittaOver]'s own rationale. Once a qualifying vertex is
- * found, the reported turn's magnitude and direction are measured separately, as the signed net
- * turn between the chords just before and just after it — a human-meaningful "how much, which way"
- * answer, distinct from the metres-based qualifying test.
+ * heading) — matching [TrailPolyline.sagittaOver]'s own rationale — is what finds *which* vertex is
+ * a genuine local curvature peak (the self-check above). Once a peak vertex is found, whether it's
+ * worth reporting at all, and its reported magnitude and direction, are both measured the human way:
+ * the signed net turn between the chords just before and just after it, gated against
+ * [BendTuning.angleThresholdDeg]. Earlier this qualified vertices on the sagitta's own metres
+ * instead (an arbitrary proxy tied to [BendTuning.baselineM]); field data (2026-09-02) showed that
+ * proxy only reliably crossed for turns approaching ~90°, silently skipping real, gentler turns
+ * underfoot in favour of a farther, already-announced one. Gating on the angle directly — the same
+ * quantity already computed to report the turn's direction — removes the mismatch, and means a
+ * sub-threshold vertex is skipped in favour of the next candidate rather than blocking it.
  *
  * Deliberately stateless and side-effect-free: it always answers "what is the next turn from here"
  * for whatever [alongTrackM] it is given. Deciding whether that turn has already been announced —
@@ -105,7 +109,6 @@ object BendDetector {
             // behind us in this scan (nearer, so it would have qualified first) or still ahead
             // (farther, and will get its own turn to self-check when the scan reaches it).
             if (candidate.alongTrackM != vertexM) continue
-            if (abs(candidate.departureM) < tuning.sagittaThresholdM) continue
 
             val before = polyline.chordBearingAt(vertexM - half, tuning.baselineM)
             val after = polyline.chordBearingAt(vertexM + half, tuning.baselineM)
@@ -121,6 +124,7 @@ object BendDetector {
                     candidate.departureM > 0 -> -90.0
                     else -> 90.0
                 }
+            if (abs(recordedTurnDeg) < tuning.angleThresholdDeg) continue
 
             // Recorded order is the walker's own direction under Forward; Reverse walks it
             // backwards, which mirrors every turn — see desiredTrailCourseDeg's identical
