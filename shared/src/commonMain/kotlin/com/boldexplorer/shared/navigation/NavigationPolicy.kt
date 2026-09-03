@@ -531,28 +531,22 @@ object NavigationPolicy {
      */
     const val TURN_SCAN_RANGE_M = 150.0
 
-    /**
-     * Sagitta (metres of departure from a straight chord) above which a vertex counts as a
-     * candidate bend. Sagitta, not summed `|Δbearing|` per vertex (grows without bound with
-     * recording density) and not signed net turn alone (reads zero across an S-bend that returns
-     * to its original heading) — see [TrailPolyline.sagittaOver]'s own rationale, which this
-     * detector shares via [TrailPolyline.worstDepartureOver].
-     *
-     * **Suspect**: an invented starting value approximating ADR 0001 S8's ~15° hypothesis over a
-     * [TURN_BASELINE_M]-wide window, not yet field-tuned. The degree figure itself is measured
-     * and reported separately, via [TURN_BASELINE_M] — this constant only decides *whether*
-     * something ahead is worth measuring.
-     */
-    const val TURN_SAGITTA_THRESHOLD_M = 3.0
-
-    /** Physical baseline for the entry/exit chord bearing measured at a detected bend's anchor. */
+    /** Physical baseline for the entry/exit chord bearing measured at a candidate bend vertex. */
     const val TURN_BASELINE_M = 15.0
 
     /**
-     * Net turn (degrees) at a detected anchor below which it is not worth announcing — "this
-     * bends a little" isn't a turn. **Suspect**: ADR 0001 S8's own starting hypothesis.
+     * Net turn (degrees) at a candidate vertex below which it doesn't count as a bend at all —
+     * "this bends a little" isn't a turn. [BendDetector] gates on this directly (skipping past a
+     * sub-threshold vertex to keep looking, rather than reporting it); a vertex [BendDetector]
+     * returns is guaranteed to already clear this, so nothing downstream needs to re-check it.
+     *
+     * 11° matches Valhalla's production turn classifier (`src/baldr/turn.cc`)'s "not straight"
+     * cutoff — closer to ADR 0001 S8's original ~15° hypothesis than this app's own first attempt
+     * at gating on a metres-based sagitta proxy tied to [TURN_BASELINE_M], which field data
+     * (2026-09-02) showed only reliably fired for turns approaching ~90°. Gating on the angle
+     * directly — already computed for the reported turn anyway — removes the mismatch.
      */
-    const val TURN_ANGLE_THRESHOLD_DEG = 15.0
+    const val TURN_ANGLE_THRESHOLD_DEG = 11.0
 
     /**
      * Minimum gap between next-turn announcements, mirroring [PROGRESS_SPEECH_INTERVAL_MS]'s role

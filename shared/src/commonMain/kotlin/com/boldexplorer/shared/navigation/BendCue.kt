@@ -72,13 +72,6 @@ class BendCueProducer(
             BendDetector.findNextBend(polyline, alongTrackM, direction, tuning)
                 ?: return BendCue(null, "bail:no_bend_ahead")
 
-        if (abs(bend.turnDeg) < tuning.angleThresholdDeg) {
-            return BendCue(
-                null,
-                "bail:turn_${bend.turnDeg.roundToInt()}deg_under_${tuning.angleThresholdDeg.roundToInt()}deg",
-            )
-        }
-
         val alreadyAnnounced =
             announcedAnchorM?.let { abs(it - bend.anchorAlongTrackM) <= tuning.anchorToleranceM } ?: false
         if (alreadyAnnounced) return BendCue(null, "bail:already_announced")
@@ -94,7 +87,7 @@ class BendCueProducer(
         announcedAnchorM = bend.anchorAlongTrackM
         lastSpeechAtMs = nowMs
         val distLabel = formatSpokenDistance(bend.distanceAheadM, units)
-        val dirLabel = BearingComputer.toRelative(bend.turnDeg)
+        val dirLabel = TurnSeverity.of(bend.turnDeg).label()
         return BendCue(
             speech = "$distLabel until a $dirLabel turn",
             disposition = "speak:turn_${bend.distanceAheadM.roundToInt()}m_${bend.turnDeg.roundToInt()}deg",
