@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import com.boldexplorer.BuildConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -57,14 +58,41 @@ class AudioEventLog
         val entries: StateFlow<List<AudioLogEntry>> = _entries.asStateFlow()
 
         init {
+            // Sequenced in one coroutine, restore before append: appending first would risk the
+            // restore's unconditional `_entries.value = parsed` (this file's own read) clobbering
+            // it if the two ran out of order.
             scope.launch {
                 fileMutex.withLock {
-                    if (!logFile.exists()) return@withLock
-                    val lines = logFile.readLines()
-                    val parsed = lines.mapNotNull { parseLine(it) }.reversed() // newest-first
-                    _entries.value = parsed.take(MAX_IN_MEMORY_ENTRIES)
+                    if (logFile.exists()) {
+                        val lines = logFile.readLines()
+                        val parsed = lines.mapNotNull { parseLine(it) }.reversed() // newest-first
+                        _entries.value = parsed.take(MAX_IN_MEMORY_ENTRIES)
+                    }
                 }
+                append(buildInfoEntry())
             }
+        }
+
+        /**
+         * Which build produced everything logged after this line (#65 field walk, 2026-09-03) --
+         * written once per process start, so a log spanning a reinstall or an app update carries
+         * its own answer to "was the fix actually running for this walk" instead of relying on
+         * memory.
+         */
+        private fun buildInfoEntry(): AudioLogEntry {
+            val builtAt =
+                SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                    .format(Date(BuildConfig.BUILD_TIMESTAMP_MS))
+            return AudioLogEntry(
+                timestampMs = System.currentTimeMillis(),
+                kind = AudioLogEntry.Kind.BUILD_INFO,
+                trigger = "process_start",
+                inputs = "",
+                outputs =
+                    "version=${BuildConfig.VERSION_NAME}(${BuildConfig.VERSION_CODE})" +
+                        ", flavor=${BuildConfig.FLAVOR}, buildType=${BuildConfig.BUILD_TYPE}, builtAt=$builtAt",
+                played = "",
+            )
         }
 
         override fun append(entry: AudioLogEntry) {
