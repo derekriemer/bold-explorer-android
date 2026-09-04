@@ -32,6 +32,8 @@ data class BendTuning(
     val angleThresholdDeg: Double = NavigationPolicy.TURN_ANGLE_THRESHOLD_DEG,
     val anchorToleranceM: Double = NavigationPolicy.TURN_ANCHOR_TOLERANCE_M,
     val speechIntervalMs: Long = NavigationPolicy.TURN_SPEECH_INTERVAL_MS,
+    val closeRangeM: Double = NavigationPolicy.TURN_CLOSE_RANGE_M,
+    val atAnchorM: Double = NavigationPolicy.TURN_AT_ANCHOR_M,
 ) {
     companion object {
         val DEFAULT = BendTuning()
