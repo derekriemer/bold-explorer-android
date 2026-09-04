@@ -549,14 +549,38 @@ object NavigationPolicy {
     const val TURN_ANGLE_THRESHOLD_DEG = 11.0
 
     /**
-     * Minimum gap between next-turn announcements, mirroring [PROGRESS_SPEECH_INTERVAL_MS]'s role
-     * for the progress cue. Defence in depth alongside the anchor dedup, not a substitute for it:
-     * found in the field (2026-09-02) re-announcing every few seconds for over three minutes on a
-     * stretch with two close turns, because an unstable anchor (fixed alongside this) kept
-     * defeating the dedup by reporting a slightly different "next" turn on consecutive fixes.
+     * Minimum gap before announcing a *newly found* anchor, mirroring
+     * [PROGRESS_SPEECH_INTERVAL_MS]'s role for the progress cue. Defence in depth alongside the
+     * anchor dedup, not a substitute for it: found in the field (2026-09-02) re-announcing every
+     * few seconds for over three minutes on a stretch with two close turns, because an unstable
+     * anchor (fixed alongside this) kept defeating the dedup by reporting a slightly different
+     * "next" turn on consecutive fixes.
+     *
+     * Only gates the first ([BendStage.APPROACH]) cue for an anchor [BendCueProducer] has never
+     * tracked before — [BendStage.CLOSE] and [BendStage.AT_TURN] for an anchor already being
+     * tracked are exempt, since those are a deliberate, tightly-spaced follow-up to something
+     * already announced, not a rival interruption this throttle exists to prevent.
      */
     const val TURN_SPEECH_INTERVAL_MS = 20_000L
 
     /** How close two anchors' along-track positions must be to count as the same turn (dedup). */
     const val TURN_ANCHOR_TOLERANCE_M = 5.0
+
+    /**
+     * Distance ahead of an anchor at which [BendCueProducer] gives its [BendStage.CLOSE]
+     * confirmation — "this turn is coming up now," distinct from the original approach announcement
+     * made much farther out. Field-motivated (2026-09-02/03, #124): the approach cue alone left
+     * nothing confirming the turn as the walker actually reached it, which read as a missed
+     * announcement even though detection and the original cue were both correct.
+     */
+    const val TURN_CLOSE_RANGE_M = 8.0
+
+    /**
+     * Distance ahead of (or past) an anchor within which [BendCueProducer] gives its
+     * [BendStage.AT_TURN] cue — spoken right at the corner itself, "if we can" per the design
+     * request: a fix might land past this window entirely (sparse fixes at a fast pace), in which
+     * case [BendStage.AT_TURN] is skipped straight to from [BendStage.APPROACH] since there is
+     * nothing to gain from a stage the walker has already physically passed.
+     */
+    const val TURN_AT_ANCHOR_M = 2.0
 }

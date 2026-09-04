@@ -117,6 +117,25 @@ class BendCueProducerTest {
     }
 
     @Test
+    fun selfCorrectsEvenAfterReachingTheAtTurnStage() {
+        // The reset-on-fall-behind guarantee (class doc) must hold no matter how far a corner's
+        // staged announcement got -- a full re-approach after backtracking past it starts the whole
+        // sequence over, not resume mid-stage.
+        val producer = BendCueProducer()
+        val poly = corner()
+
+        producer.onFix(0L, poly, 0.0, TravelDirection.Forward, Units.IMPERIAL)
+        val atTurn = producer.onFix(30_000L, poly, 99.0, TravelDirection.Forward, Units.IMPERIAL)
+        assertTrue(atTurn.disposition.startsWith("speak:at_turn_"), "reached the final stage first")
+
+        // Walk well past the corner, then backtrack to before it again.
+        producer.onFix(60_000L, poly, 250.0, TravelDirection.Forward, Units.IMPERIAL)
+        val reapproaching = producer.onFix(90_000L, poly, 0.0, TravelDirection.Forward, Units.IMPERIAL)
+        assertTrue(reapproaching.speech != null, "a genuine re-approach starts the sequence over")
+        assertTrue(reapproaching.disposition.startsWith("speak:approach_"), reapproaching.disposition)
+    }
+
+    @Test
     fun resetForgetsTheAnnouncedAnchor() {
         val producer = BendCueProducer()
         val poly = corner()
@@ -124,6 +143,55 @@ class BendCueProducerTest {
         producer.reset()
         val cue = producer.onFix(1_000L, poly, 0.0, TravelDirection.Forward, Units.IMPERIAL)
         assertTrue(cue.speech != null, "reset clears the dedup mark and the throttle; a new follow announces fresh")
+    }
+
+    @Test
+    fun progressesThroughApproachCloseAndAtTurnForTheSameCorner() {
+        // #124: a single distant approach cue read as "missed" once the walker actually reached the
+        // corner with nothing further said. Close range (8m) and at-anchor (2m) are the defaults.
+        val producer = BendCueProducer()
+        val poly = corner()
+
+        val approach = producer.onFix(0L, poly, 0.0, TravelDirection.Forward, Units.IMPERIAL)
+        assertTrue(approach.speech != null, "approach cue at 100m out")
+        assertTrue(approach.disposition.startsWith("speak:approach_"), approach.disposition)
+
+        // Still approaching, not yet within close range (8m) -- no new stage due.
+        val stillApproaching = producer.onFix(1_000L, poly, 80.0, TravelDirection.Forward, Units.IMPERIAL)
+        assertNull(stillApproaching.speech, "20m out, not within close range yet")
+
+        // Within close range (7m out): the close-confirmation stage, not throttled even though this
+        // is only 2s after the approach cue -- stage progression on an already-tracked anchor is
+        // exempt from the cross-anchor throttle.
+        val close = producer.onFix(2_000L, poly, 93.0, TravelDirection.Forward, Units.IMPERIAL)
+        assertTrue(close.speech != null, "close-range cue must not be throttled")
+        assertTrue(close.disposition.startsWith("speak:close_"), close.disposition)
+        assertTrue(close.speech!!.contains("coming up"), close.speech)
+
+        // Within at-anchor range (1m out): the final stage, also not throttled.
+        val atTurn = producer.onFix(3_000L, poly, 99.0, TravelDirection.Forward, Units.IMPERIAL)
+        assertTrue(atTurn.speech != null, "at-turn cue must not be throttled")
+        assertTrue(atTurn.disposition.startsWith("speak:at_turn_"), atTurn.disposition)
+        assertEquals("Turn right", atTurn.speech)
+
+        // All three stages given -- nothing left to say for this anchor.
+        val done = producer.onFix(4_000L, poly, 100.0, TravelDirection.Forward, Units.IMPERIAL)
+        assertNull(done.speech, "every stage already given for this anchor")
+        assertEquals("bail:already_announced", done.disposition)
+    }
+
+    @Test
+    fun skipsStraightToAtTurnWhenAFixLandsPastCloseRange() {
+        // A sparse fix sequence (fast walking pace, or a dropped fix) can land past the close-range
+        // window entirely -- nothing is gained by a "coming up" cue for a corner already reached, so
+        // this jumps directly from approach to at-turn rather than getting stuck expecting close first.
+        val producer = BendCueProducer()
+        val poly = corner()
+
+        producer.onFix(0L, poly, 0.0, TravelDirection.Forward, Units.IMPERIAL)
+        val jumped = producer.onFix(1_000L, poly, 99.0, TravelDirection.Forward, Units.IMPERIAL)
+        assertTrue(jumped.speech != null)
+        assertTrue(jumped.disposition.startsWith("speak:at_turn_"), jumped.disposition)
     }
 
     @Test
