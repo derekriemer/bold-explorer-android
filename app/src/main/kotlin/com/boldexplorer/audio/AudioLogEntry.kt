@@ -21,6 +21,16 @@ data class AudioLogEntry(
         DETECTION_STATE,
 
         /**
+         * Which build produced this log, written once per process start (`AudioEventLog.init`).
+         *
+         * Exists because a log spans process restarts and app updates -- without this, "was the
+         * fix actually installed for this walk" was a question only the tester's memory could
+         * answer. Field-motivated (2026-09-02/03): a fix had just been installed for that
+         * evening's test and there was no way to confirm from the log alone that it was running.
+         */
+        BUILD_INFO,
+
+        /**
          * A shadow-mode trail match: one entry per GPS fix while following a trail.
          *
          * Emitted by the continuous matcher running beside the live follower, and consumed by

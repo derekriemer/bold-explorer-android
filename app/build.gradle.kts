@@ -18,6 +18,10 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0.0"
+
+        // Burned in at compile time so the audio log can record which build produced it --
+        // otherwise "was the fix actually installed for this walk" has no answer but memory.
+        buildConfigField("long", "BUILD_TIMESTAMP_MS", "${System.currentTimeMillis()}L")
     }
 
     buildFeatures {

@@ -38,6 +38,25 @@ import kotlin.math.sqrt
  *   is a parameter so several polylines can share one — positions from different trails are only
  *   comparable inside a common frame, which junction geometry (#59) will require.
  */
+/**
+ * One candidate bend located by [TrailPolyline.worstDepartureOver]: where it is, and which way.
+ *
+ * @property alongTrackM the curvature-max vertex's along-track position — the anchor a caller
+ *   should report distance-to and should de-duplicate repeated announcements against.
+ * @property departureM signed perpendicular departure from the *chord* (not from the walker's turn
+ *   direction) at that vertex, in [crossTrackRightM]'s sign convention: positive = right of the
+ *   straight line from the window's start to its end, negative = left. This is the opposite sign
+ *   from which way the walker actually turns at the vertex — cutting a corner to reach the same
+ *   endpoint always bulges toward the *outside* of the turn, so a right turn's apex sits left of
+ *   the chord (negative) and a left turn's sits right of it (positive). Callers that want the
+ *   turn direction itself (e.g. [BendDetector]) measure it separately, from the entry/exit
+ *   bearings — this field is for locating and comparing candidates, not for reporting.
+ */
+data class BendCandidate(
+    val alongTrackM: Double,
+    val departureM: Double,
+)
+
 class TrailPolyline(
     points: List<LatLng>,
     val frame: LocalFrame = LocalFrame.centredOn(points),
@@ -417,6 +436,44 @@ class TrailPolyline(
             if (d > worstM) worstM = d
         }
         return worstM
+    }
+
+    /**
+     * The trail's most pronounced departure from straight within
+     * `[alongTrackM, alongTrackM + lookaheadM]`, anchored to where it occurs — the curvature-max
+     * vertex, not just its magnitude (ADR 0001, S8).
+     *
+     * Signed and anchored, where [sagittaOver] is neither: a caller picking the next turn needs to
+     * say *which side* the bend falls on and *where* it is, not only how pronounced it is. Sharing
+     * [sagittaOver]'s vertex walk rather than calling it and re-deriving the anchor separately, since
+     * a second scan could disagree about which vertex is worst under floating-point noise.
+     *
+     * @return `null` when nothing in the window departs from the chord at all (a perfectly straight
+     *   stretch, or a window too short to measure).
+     */
+    fun worstDepartureOver(
+        alongTrackM: Double,
+        lookaheadM: Double,
+    ): BendCandidate? {
+        val startM = alongTrackM.coerceIn(0.0, totalLengthM)
+        val endM = (alongTrackM + lookaheadM).coerceIn(0.0, totalLengthM)
+        if (endM - startM <= DEGENERATE_SEGMENT_M) return null
+
+        val a = localAt(startM)
+        val b = localAt(endM)
+        var worstM = 0.0
+        var worstAtM = startM
+        for (i in 0 until size) {
+            val c = cumulativeM[i]
+            if (c <= startM || c >= endM) continue
+            val signed = crossTrackRightM(Vec2(xs[i], ys[i]), a, b)
+            if (abs(signed) > abs(worstM)) {
+                worstM = signed
+                worstAtM = c
+            }
+        }
+        if (worstM == 0.0) return null
+        return BendCandidate(alongTrackM = worstAtM, departureM = worstM)
     }
 
     private companion object {
