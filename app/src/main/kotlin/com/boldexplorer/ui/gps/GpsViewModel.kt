@@ -2336,8 +2336,18 @@ class GpsViewModel
              */
             private const val EXTERNAL_TARGET_TIMEOUT_MS = 2_000L
 
-            private const val AUTO_RECORD_DISTANCE_M = 10.0
-            private const val AUTO_RECORD_TTS_INTERVAL = 5
+            // 1m, not the original 10m: #125's field data showed a genuinely winding trail's real
+            // shape can turn meaningfully every ~10m, which a 10m recording interval can barely
+            // resolve at all -- BendDetector then has at most one vertex per turn to work with,
+            // no margin to tell a real corner from where the recording interval happened to land.
+            // Denser recording is deliberately not paired with decimation here: TrailPolyline is
+            // already built to carry 10k+ points without it (see its own class doc), and undoing
+            // density later (Douglas-Peucker or similar) is easy -- recovering shape a sparse
+            // recording never captured is not.
+            private const val AUTO_RECORD_DISTANCE_M = 1.0
+            // Scaled with AUTO_RECORD_DISTANCE_M's 10x density increase (was 5 points / 50m) so the
+            // "N track points recorded" cadence stays roughly every 50m, not every 5m.
+            private const val AUTO_RECORD_TTS_INTERVAL = 50
 
             // Minimum speed (m/s) before GPS course-over-ground is trusted for direction-aware selection.
             private const val MIN_TRAVEL_HEADING_SPEED_MPS = 1.0
