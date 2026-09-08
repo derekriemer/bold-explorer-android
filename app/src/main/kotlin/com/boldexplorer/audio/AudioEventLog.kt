@@ -80,8 +80,14 @@ class AudioEventLog
          * memory.
          */
         private fun buildInfoEntry(): AudioLogEntry {
+            // Local wall-clock time (so it reads naturally against memory of when the build was
+            // made) with an explicit numeric offset (so it never gets misread as UTC, or as some
+            // other device's local time, the way a bare "yyyy-MM-dd HH:mm:ss" would) -- see
+            // GpxExporter.formatTime for the same self-describing-timestamp discipline applied the
+            // other way (explicitly UTC, not just implicitly so). Locale.US, not getDefault(), so
+            // the digits themselves stay plain ASCII regardless of the device's language setting.
             val builtAt =
-                SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
                     .format(Date(BuildConfig.BUILD_TIMESTAMP_MS))
             return AudioLogEntry(
                 timestampMs = System.currentTimeMillis(),
