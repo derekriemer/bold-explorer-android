@@ -102,6 +102,23 @@ class TrailPolyline(
     val totalLengthM: Double get() = cumulativeM[size - 1]
 
     /**
+     * Trail remaining ahead of [alongTrackM], toward the end being walked to.
+     *
+     * Direction-signed, so it counts down to the start on a reverse follow. Clamped at zero because
+     * overshooting the end is arrival, not negative progress. The one definition of "how much trail
+     * is left" — [FollowSession.remainingM] and [TrailGuidance.compute]'s `distanceToTargetM` both
+     * call this rather than each keeping their own copy of the two-line direction switch.
+     */
+    fun remainingM(
+        alongTrackM: Double,
+        direction: TravelDirection,
+    ): Double =
+        when (direction) {
+            TravelDirection.Forward -> totalLengthM - alongTrackM
+            TravelDirection.Reverse -> alongTrackM
+        }.coerceAtLeast(0.0)
+
+    /**
      * Projects [point] onto this polyline, returning the nearest position on it.
      *
      * @param window optional restriction on `alongTrackM`. Only segments whose cumulative span

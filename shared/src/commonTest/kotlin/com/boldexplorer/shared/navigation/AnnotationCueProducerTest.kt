@@ -173,3 +173,47 @@ class AnnotationCueProducerTest {
         assertEquals(1, reverse.onFix(105.0, 1.3, Units.IMPERIAL).size)
     }
 }
+
+class NextAnnotationAheadTest {
+    private val bench = RouteAnnotation(1L, "Bench", alongTrackM = 100.0, signedCrossTrackM = 6.0)
+    private val pavilion = RouteAnnotation(2L, "Pavilion", alongTrackM = 300.0, signedCrossTrackM = -80.0)
+
+    @Test
+    fun findsTheNearestOneStrictlyAhead() {
+        val result = nextAnnotationAhead(listOf(bench, pavilion), alongTrackM = 50.0, TravelDirection.Forward)
+
+        assertEquals(bench, result)
+    }
+
+    @Test
+    fun movesOnToTheNextOneOnceTheFirstFallsBehind() {
+        val result = nextAnnotationAhead(listOf(bench, pavilion), alongTrackM = 150.0, TravelDirection.Forward)
+
+        assertEquals(pavilion, result)
+    }
+
+    @Test
+    fun returnsNullPastEveryAnnotation() {
+        val result = nextAnnotationAhead(listOf(bench, pavilion), alongTrackM = 350.0, TravelDirection.Forward)
+
+        assertEquals(null, result)
+    }
+
+    @Test
+    fun unlikeTheProducerItNeverForgetsAnAlreadySpokenOne() {
+        // The whole reason this is a separate, stateless function (see its own doc): a persistent
+        // row must keep showing the same upcoming landmark on every fix, not just the first one.
+        val first = nextAnnotationAhead(listOf(bench), alongTrackM = 50.0, TravelDirection.Forward)
+        val second = nextAnnotationAhead(listOf(bench), alongTrackM = 90.0, TravelDirection.Forward)
+
+        assertEquals(bench, first)
+        assertEquals(bench, second)
+    }
+
+    @Test
+    fun reverseTravelLooksBackward() {
+        val result = nextAnnotationAhead(listOf(bench, pavilion), alongTrackM = 250.0, TravelDirection.Reverse)
+
+        assertEquals(bench, result)
+    }
+}

@@ -1,8 +1,6 @@
 package com.boldexplorer.shared.navigation
 
-import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.deltaAngle
-import com.boldexplorer.shared.geo.haversineDistanceMeters
 import com.boldexplorer.shared.model.LocationSample
 import kotlin.math.abs
 
@@ -16,7 +14,17 @@ data class TrailGuidanceState(
     val targetIndex: Int,
     val targetName: String,
     val total: Int,
-    val distanceToTargetM: Double,
+    /**
+     * Trail remaining ahead of the confirmed along-track position (`TrailPolyline.remainingM`),
+     * never straight-line distance to `TrailFollower.currentIndex`'s waypoint — the same defect
+     * class [desiredCourseDeg]'s doc explains for direction. A spoken cue used to pair this field
+     * (then a raw haversine to whatever track point `currentIndex` happened to be on — as close as
+     * 1 m since the recording-density change) with [relativeDeg]'s course-tangent direction in the
+     * same sentence, which could read as two different answers to "how am I doing" (field-reported
+     * 2026-09-02: "beacon made a 1 o'clock sound but talk did not"). Null under the same condition
+     * [desiredCourseDeg] is null — no confirmed matcher position, no trustworthy distance either.
+     */
+    val distanceToTargetM: Double?,
     /** Null when the matcher has no trustworthy position from which to derive a trail course. */
     val desiredCourseDeg: Double?,
     val relativeDeg: Double?,
@@ -74,11 +82,19 @@ object TrailGuidance {
         polyline: TrailPolyline? = null,
         alongTrackM: Double? = null,
         direction: TravelDirection = TravelDirection.Forward,
+        /**
+         * The match's raw `confirmedAlongM`, unconditional on match state — deliberately not the
+         * same value as [alongTrackM], which the caller already withholds outside Matched/Uncertain
+         * so a stale or wrong-arm position can't steer direction. Distance doesn't carry that same
+         * "which arm" hazard the way a course bearing does, and [TrailGuidanceState.distanceToTargetM]
+         * is meant to survive a Lost span exactly as `confirmedAlongM` itself does elsewhere in this
+         * codebase (`GpsViewModel`'s trail-remaining row, hedged rather than hidden — #67). Defaults
+         * to [alongTrackM] for callers that only ever have the one value.
+         */
+        confirmedAlongM: Double? = alongTrackM,
     ): TrailGuidanceState? {
         val active = followState as? TrailFollowerState.Active ?: return null
         val target = active.currentTarget
-        val location = LatLng(sample.lat, sample.lon)
-        val targetLocation = LatLng(target.lat, target.lon)
         val desiredCourse = desiredTrailCourseDeg(polyline, alongTrackM, direction)
         val freshCourse = freshCourseAt(trustedCourse, sample.timestamp)
 
@@ -86,7 +102,7 @@ object TrailGuidance {
             targetIndex = active.currentIndex,
             targetName = target.name,
             total = active.waypoints.size,
-            distanceToTargetM = haversineDistanceMeters(location, targetLocation),
+            distanceToTargetM = polyline?.let { p -> confirmedAlongM?.let { a -> p.remainingM(a, direction) } },
             desiredCourseDeg = desiredCourse,
             relativeDeg = desiredCourse?.let { course -> freshCourse?.let { deltaAngle(it.deg, course) } },
             courseIsFresh = desiredCourse != null && freshCourse != null,

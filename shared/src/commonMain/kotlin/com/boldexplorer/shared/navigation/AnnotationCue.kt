@@ -68,6 +68,22 @@ fun routeAnnotationsForFollow(
 }
 
 /**
+ * The nearest [RouteAnnotation] still ahead of [alongTrackM] in [direction], or `null` if none
+ * remain — the row-composition analogue of [BendDetector.findNextBend]. Stateless and
+ * side-effect-free on purpose, unlike [AnnotationCueProducer]: that class's `announced` set answers
+ * "what hasn't been spoken yet," which is the wrong question for a persistent on-screen row that
+ * should keep showing the same upcoming landmark even after it has been spoken about.
+ */
+fun nextAnnotationAhead(
+    annotations: List<RouteAnnotation>,
+    alongTrackM: Double,
+    direction: TravelDirection,
+): RouteAnnotation? =
+    annotations
+        .filter { (it.alongTrackM - alongTrackM) * direction.sign > 0.0 }
+        .minByOrNull { (it.alongTrackM - alongTrackM) * direction.sign }
+
+/**
  * Announces annotations as the walker comes up on them.
  *
  * Announced on approach rather than on arrival: these are benches, gates and parking areas — things

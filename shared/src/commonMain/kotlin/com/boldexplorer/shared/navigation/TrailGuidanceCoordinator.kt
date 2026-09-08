@@ -259,6 +259,10 @@ class TrailGuidanceCoordinator(
                 session?.polyline,
                 steerableAlongM,
                 followDirection,
+                // Distance survives Lost the same way confirmedAlongM itself does elsewhere in this
+                // app (#67's "last confirmed" hedge) — unconditional on match state, unlike
+                // steerableAlongM above.
+                confirmedAlongM = match?.confirmedAlongM,
             )
         _guidance.value = guidance
         return guidance
@@ -311,6 +315,10 @@ class TrailGuidanceCoordinator(
     ): OrdinaryGuidanceDecision? {
         if (followState !is TrailFollowerState.Active) return null
         val relative = guidance?.relativeDeg ?: return null
+        // Both come from the same confirmed alongTrackM (TrailGuidance.compute) and are null
+        // together — this is defence in depth against that invariant drifting, not a case expected
+        // to trip on its own.
+        val distanceM = guidance.distanceToTargetM ?: return null
         if (!TrailGuidance.isMajorCorrection(relative)) return null
         // Null means nothing has been spoken this session, so no throttle applies — the first
         // qualifying fix may always speak. See the field comment on the property for why this is a
@@ -329,7 +337,7 @@ class TrailGuidanceCoordinator(
         lastOrdinaryGuidanceAtMs = sample.timestamp
         lastOrdinaryGuidanceLocation = current
         return OrdinaryGuidanceDecision(
-            distanceToTargetM = guidance.distanceToTargetM,
+            distanceToTargetM = distanceM,
             relativeDeg = relative,
         )
     }

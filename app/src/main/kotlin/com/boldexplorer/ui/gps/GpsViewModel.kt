@@ -27,6 +27,7 @@ import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.deltaAngle
 import com.boldexplorer.shared.geo.distanceToSegmentMeters
 import com.boldexplorer.shared.geo.haversineDistanceMeters
+import com.boldexplorer.shared.geo.initialBearingDeg
 import com.boldexplorer.shared.geo.segmentFraction
 import com.boldexplorer.shared.location.LocationProvider
 import com.boldexplorer.shared.location.isLocationStale
@@ -37,7 +38,9 @@ import com.boldexplorer.shared.model.TrailEndRow
 import com.boldexplorer.shared.model.Waypoint
 import com.boldexplorer.shared.navigation.AnchorOption
 import com.boldexplorer.shared.navigation.AnnotationCueProducer
+import com.boldexplorer.shared.navigation.Bend
 import com.boldexplorer.shared.navigation.BendCueProducer
+import com.boldexplorer.shared.navigation.BendDetector
 import com.boldexplorer.shared.navigation.ArmingResult
 import com.boldexplorer.shared.navigation.CollectionExplorer
 import com.boldexplorer.shared.navigation.CollectionExplorerEvent
@@ -48,6 +51,8 @@ import com.boldexplorer.shared.navigation.NavMode
 import com.boldexplorer.shared.navigation.NavModeResolver
 import com.boldexplorer.shared.navigation.NavigationPolicy
 import com.boldexplorer.shared.navigation.NavigationTargetResolver
+import com.boldexplorer.shared.navigation.RouteAnnotation
+import com.boldexplorer.shared.navigation.nextAnnotationAhead
 import com.boldexplorer.shared.navigation.ExternalTargetRequest
 import com.boldexplorer.shared.navigation.FollowArming
 import com.boldexplorer.shared.navigation.NearbyTrail
@@ -93,6 +98,7 @@ import com.boldexplorer.shared.repository.WaypointRepository
 import com.boldexplorer.shared.settings.AppSettings
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlin.math.abs
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -116,6 +122,22 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import javax.inject.Inject
+
+/**
+ * The next named waypoint ahead on a followed trail (#104's per-navMode row composition) — distinct
+ * from [Bend] (a geometric turn amount, no name of its own) and from `TrailPoint`/`RouteAnnotation`
+ * (which carry no bearing). [aheadM] is along-track (how far you actually walk to reach it, not a
+ * straight line that could cut across a switchback); [relativeDeg] is the straight-line bearing from
+ * the walker's current raw position to the waypoint's coordinate, relative to current course — a
+ * landmark off the trail's line right here can still be around a bend, so this is "which way to
+ * orient toward it", answering a different question than [aheadM] does. Null when no course is
+ * currently trusted (same reason [TrailGuidanceState.relativeDeg] can be null).
+ */
+data class NextWaypointInfo(
+    val name: String,
+    val aheadM: Double,
+    val relativeDeg: Double?,
+)
 
 data class GpsUiState(
     val location: LocationSample? = null,
@@ -146,6 +168,11 @@ data class GpsUiState(
     // #91's travelled evidence, same reason ProgressCueProducer needs it: a near-zero
     // trailRemainingM right at follow-start isn't trustworthy before the walker has moved.
     val trailTravelled: Boolean = false,
+    // #66/#104's next-turn row-merge: the same Bend BendCueProducer speaks from, computed
+    // independently for display (never gated by its speech throttle/stage) — null unless a trail
+    // is being followed, a position is confirmed, and a turn exists within BendTuning.scanRangeM.
+    val trailNextTurn: Bend? = null,
+    val trailNextWaypoint: NextWaypointInfo? = null,
     val locationStale: Boolean = false,
     val alignmentActive: Boolean = false,
     val alignmentBearingDeg: Double? = null,
@@ -324,6 +351,17 @@ private data class BearingGroup(
     val trailRemainingM: Double? = null,
     val trailMatchState: MatchState? = null,
     val trailTravelled: Boolean = false,
+    val trailNextTurn: Bend? = null,
+    val trailNextWaypoint: NextWaypointInfo? = null,
+)
+
+/** The trail-info row's freeze-together fields, all derived from the same confirmedAlongM. */
+private data class TrailRowGroup(
+    val remainingM: Double?,
+    val matchState: MatchState?,
+    val travelled: Boolean,
+    val nextTurn: Bend?,
+    val nextWaypoint: NextWaypointInfo?,
 )
 
 private data class AudioAlignmentGroup(
@@ -367,6 +405,11 @@ private class FollowCueProducers(
     val annotation: AnnotationCueProducer,
     val matchState: MatchStateCueProducer,
     val bend: BendCueProducer,
+    // The same list `annotation` was built from, kept here too for `nextAnnotationAhead` (#104's
+    // per-navMode row composition): AnnotationCueProducer's own state answers "what hasn't been
+    // spoken yet", not "what is the next one" — display wants the latter, stateless, the same split
+    // BendDetector has from BendCueProducer.
+    val routeAnnotations: List<RouteAnnotation>,
 ) {
     var alongTrackMBeforeThisFix: Double? = null
     var previousMatch: TrailMatch? = null
@@ -751,6 +794,16 @@ class GpsViewModel
         // "0 m remaining."
         private val _trailTravelled = MutableStateFlow(false)
 
+        // #104's next-turn row-merge: BendDetector.findNextBend computed straight from the same
+        // confirmedAlongM as _trailRemainingM (never through BendCueProducer, whose stage/throttle
+        // state answers "should this be spoken now", not "what is the next turn") — same freeze
+        // semantics as _trailRemainingM for the same reason, since both derive from the same value.
+        private val _trailNextTurn = MutableStateFlow<Bend?>(null)
+
+        // Same freeze semantics again, same reason — the next named landmark ahead, independent of
+        // AnnotationCueProducer's speech-announced set.
+        private val _trailNextWaypoint = MutableStateFlow<NextWaypointInfo?>(null)
+
         // ── Combined UI state ─────────────────────────────────────────────────────────
 
         private val telemetryGroup =
@@ -781,18 +834,26 @@ class GpsViewModel
                 },
                 locationStale,
                 trailLost,
-                combine(_trailRemainingM, _trailMatchState, _trailTravelled) { remaining, match, travelled ->
-                    Triple(remaining, match, travelled)
+                combine(
+                    _trailRemainingM,
+                    _trailMatchState,
+                    _trailTravelled,
+                    _trailNextTurn,
+                    _trailNextWaypoint,
+                ) { remaining, match, travelled, nextTurn, nextWaypoint ->
+                    TrailRowGroup(remaining, match, travelled, nextTurn, nextWaypoint)
                 },
-            ) { group, (aa, trailActive, guidance), stale, lost, (remaining, match, travelled) ->
+            ) { group, (aa, trailActive, guidance), stale, lost, trailRow ->
                 group.copy(
                     relativeDeg = if (trailActive) guidance?.relativeDeg else group.relativeDeg,
                     alignmentActive = aa,
                     locationStale = stale,
                     trailLost = lost,
-                    trailRemainingM = remaining,
-                    trailMatchState = match,
-                    trailTravelled = travelled,
+                    trailRemainingM = trailRow.remainingM,
+                    trailMatchState = trailRow.matchState,
+                    trailTravelled = trailRow.travelled,
+                    trailNextTurn = trailRow.nextTurn,
+                    trailNextWaypoint = trailRow.nextWaypoint,
                 )
             }
         private val interactionGroup =
@@ -841,6 +902,8 @@ class GpsViewModel
                     trailRemainingM = bear.trailRemainingM,
                     trailMatchState = bear.trailMatchState,
                     trailTravelled = bear.trailTravelled,
+                    trailNextTurn = bear.trailNextTurn,
+                    trailNextWaypoint = bear.trailNextWaypoint,
                     locationStale = bear.locationStale,
                     alignmentActive = bear.alignmentActive,
                     alignmentBearingDeg = inter.alignmentBearingDeg,
@@ -1213,6 +1276,7 @@ class GpsViewModel
                     annotation = AnnotationCueProducer(annotations, direction),
                     matchState = MatchStateCueProducer(),
                     bend = BendCueProducer(),
+                    routeAnnotations = annotations,
                 )
             trailFollower.start(points, fromIndex = followerIndexFor(polyline, anchor, direction))
             refreshTrailGuidanceFromLatestLocation(resetOrdinaryThrottle = true)
@@ -1221,7 +1285,6 @@ class GpsViewModel
             announce(
                 buildTrailStartAnnouncement(
                     "Following $name${if (reversed) " in reverse" else ""}",
-                    loc,
                 ),
                 kind = OutputKind.TRAIL_STARTED,
                 category = OutputCategory.NAVIGATION,
@@ -1263,27 +1326,33 @@ class GpsViewModel
             recordingMachine.startFollowing()
         }
 
-        private fun buildTrailStartAnnouncement(
-            prefix: String,
-            loc: LatLng?,
-        ): String {
-            val active = trailFollower.state.value as? TrailFollowerState.Active
-            val firstWp = active?.currentTarget
+        /**
+         * Distance/direction here come from the matcher (`guidanceCoordinator.guidance`), never a
+         * raw haversine to whatever waypoint `TrailFollower.currentIndex` happens to be on (#122) —
+         * the same defect class fixed for the ordinary-guidance cue this mirrors (`TrailGuidance`'s
+         * `distanceToTargetM` doc). `refreshTrailGuidanceFromLatestLocation` runs immediately before
+         * every caller of this, so `guidance` reflects the fix that started the follow — but a
+         * position confirmation can still lag arming by a fix or two on a poor first fix, hence the
+         * "unavailable" fallback below rather than assuming it is always populated.
+         */
+        private fun buildTrailStartAnnouncement(prefix: String): String {
             val guidance = guidanceCoordinator.guidance.value
             return buildString {
                 // "Checkpoint N of M" retired (S7, #66) — ordinal position isn't meaningful
                 // trail-follow feedback; the merged trail-info row now carries distance instead.
                 append(prefix)
                 append(".")
-                if (firstWp != null && loc != null) {
-                    val dist = haversineDistanceMeters(loc, LatLng(firstWp.lat, firstWp.lon))
+                val dist = guidance?.distanceToTargetM
+                if (dist != null) {
                     val distLabel = formatSpokenDistance(dist, settings.value.units)
-                    val relDir = guidance?.relativeDeg?.let { directionHint(it) }
+                    val relDir = guidance.relativeDeg?.let { directionHint(it) }
                     if (relDir != null) {
                         append(" $distLabel, $relDir.")
                     } else {
                         append(" $distLabel. Trail direction unavailable until the trail is acquired.")
                     }
+                } else {
+                    append(" Trail distance and direction unavailable until the trail is acquired.")
                 }
             }
         }
@@ -1323,6 +1392,8 @@ class GpsViewModel
             _trailMatchState.value = null
             _trailRemainingM.value = null
             _trailTravelled.value = false
+            _trailNextTurn.value = null
+            _trailNextWaypoint.value = null
             backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, false)
             stopLocationServiceIfIdle()
             announce(
@@ -1566,6 +1637,8 @@ class GpsViewModel
                     _trailMatchState.value = null
                     _trailRemainingM.value = null
                     _trailTravelled.value = false
+                    _trailNextTurn.value = null
+                    _trailNextWaypoint.value = null
                     announce(
                         // Hedged when accuracy was too poor to assert arrival. Saying "trail
                         // complete" to someone who is not there is worse than saying nothing
@@ -1742,6 +1815,35 @@ class GpsViewModel
                         sample = sample,
                     )
                 }
+
+                // #104's row-merge: the same fact BendCueProducer speaks from, computed fresh here
+                // for display rather than read off its internal Progress state, since that state
+                // answers "should this be spoken now" (stage/throttle), not "what is the next turn" —
+                // BendDetector.findNextBend is stateless and answers the latter directly.
+                // alongTrackM is the same confirmed value as remainingM above, so this freezes on
+                // the same schedule during Uncertain/Lost.
+                _trailNextTurn.value =
+                    alongTrackM?.let { BendDetector.findNextBend(session.polyline, it, session.direction) }
+
+                // #104's row-merge: the next named landmark ahead, independent of
+                // AnnotationCueProducer's own announced-set state for the same reason as the turn
+                // above. aheadM is along-track (how far you actually walk); relativeDeg is the
+                // straight-line bearing from the current raw fix to the waypoint's coordinate,
+                // relative to current course -- a landmark can sit around a bend from here, so this
+                // answers "which way to orient toward it" rather than duplicating aheadM's question.
+                _trailNextWaypoint.value =
+                    alongTrackM?.let { a ->
+                        nextAnnotationAhead(cues.routeAnnotations, a, session.direction)?.let { wp ->
+                            val loc = location.value
+                            val relativeDeg =
+                                loc?.let { l ->
+                                    val bearingDeg =
+                                        initialBearingDeg(LatLng(l.lat, l.lon), session.polyline.positionAt(wp.alongTrackM))
+                                    navHeadingDeg.value?.let { h -> deltaAngle(h, bearingDeg) }
+                                }
+                            NextWaypointInfo(wp.name, abs(wp.alongTrackM - a), relativeDeg)
+                        }
+                    }
 
                 // S8 (#65): distance and direction to the next turn. Sourced from the same
                 // confirmed alongTrackM as the progress cue above -- never TrailFollower's
@@ -2005,35 +2107,36 @@ class GpsViewModel
             // Both the plausibility test and the distance throttle live in [TrackPointGate], which
             // holds an anchor for each. They are not the same anchor: see its docs for what sharing
             // one costs, which is the guard evaporating while the user stands still.
-            when (val decision = trackPointGate.consider(LatLng(sample.lat, sample.lon), sample.timestamp, sample.accuracy)) {
-                is TrackPointDecision.TooClose -> return
+            val fromLastRecordedM =
+                when (val decision = trackPointGate.consider(LatLng(sample.lat, sample.lon), sample.timestamp, sample.accuracy)) {
+                    is TrackPointDecision.TooClose -> return
 
-                is TrackPointDecision.Impossible -> {
-                    viewModelScope.launch {
-                        audioEventLog.append(
-                            AudioLogEntry(
-                                timestampMs = sample.timestamp,
-                                kind = AudioLogEntry.Kind.DETECTION_STATE,
-                                trigger = "TrackPointRejected",
-                                inputs = "jumpM=${"%.1f".format(decision.jumpM)}, elapsedMs=${decision.elapsedMs}" +
-                                    ", accuracyM=${sample.accuracy?.let { "%.1f".format(it) } ?: "null"}",
-                                outputs = "budgetM=${"%.1f".format(decision.budgetM)}" +
-                                    ", impliedSpeedMps=${"%.1f".format(decision.impliedSpeedMps)}",
-                                played = "not recorded",
-                            ),
-                        )
+                    is TrackPointDecision.Impossible -> {
+                        viewModelScope.launch {
+                            audioEventLog.append(
+                                AudioLogEntry(
+                                    timestampMs = sample.timestamp,
+                                    kind = AudioLogEntry.Kind.DETECTION_STATE,
+                                    trigger = "TrackPointRejected",
+                                    inputs = "jumpM=${"%.1f".format(decision.jumpM)}, elapsedMs=${decision.elapsedMs}" +
+                                        ", accuracyM=${sample.accuracy?.let { "%.1f".format(it) } ?: "null"}",
+                                    outputs = "budgetM=${"%.1f".format(decision.budgetM)}" +
+                                        ", impliedSpeedMps=${"%.1f".format(decision.impliedSpeedMps)}",
+                                    played = "not recorded",
+                                ),
+                            )
+                        }
+                        return
                     }
-                    return
-                }
 
-                is TrackPointDecision.Record -> Unit
-            }
+                    is TrackPointDecision.Record -> decision.fromLastRecordedM
+                }
 
             val trailId = recording.trailId
             val name = "Track ${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())}"
             viewModelScope.launch {
                 waypointRepo.createTrackPoint(trailId, name, sample.lat, sample.lon, sample.altitude)
-                recordingMachine.addPoint()
+                recordingMachine.addPoint(fromLastRecordedM)
                 val count = (recordingMachine.state.value as? TrailRecordingState.Recording)?.pointCount ?: 0
                 if (count % AUTO_RECORD_TTS_INTERVAL == 0) {
                     // Previously called spokenGuidancePlayer.speak() directly, bypassing the live
