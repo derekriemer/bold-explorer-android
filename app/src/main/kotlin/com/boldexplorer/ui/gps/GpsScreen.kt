@@ -418,7 +418,14 @@ private fun TelemetryCard(
             // *along* the trail, only meaningful during an active follow). Not a live region —
             // readable on demand, same as the rows around it.
             if (state.trailFollowState is TrailFollowerState.Active) {
-                val trailText = trailRowText(state.trailRemainingM, state.trailMatchState, state.settings.units)
+                val trailText =
+                    trailRowText(
+                        state.trailRemainingM,
+                        state.trailMatchState,
+                        state.trailTravelled,
+                        state.locationStale,
+                        state.settings.units,
+                    )
                 TelemetryRow(label = "Trail", value = trailText)
             }
 
@@ -924,15 +931,25 @@ private fun RecordNewTrailButton(
 private fun trailRowText(
     remainingM: Double?,
     matchState: MatchState?,
+    travelled: Boolean,
+    locationStale: Boolean,
     units: Units,
 ): String {
     if (remainingM == null) return "Not yet tracking position"
     val rounded = (remainingM / 10.0).roundToInt() * 10.0
     val distText = BearingComputer.formatDistance(rounded, units)
-    return when (matchState) {
-        null, MatchState.Matched -> "$distText remaining"
-        MatchState.Uncertain, MatchState.Unconfirmed -> "roughly $distText remaining"
-        MatchState.Lost -> "trail signal lost, last confirmed $distText remaining"
+    // #23: matchState alone can't detect GPS callbacks stopping outright — the matcher only
+    // reassesses on a new fix, so it can stay Matched while the number goes stale. Same hedge the
+    // Bearing/Distance rows above already give for the same reason.
+    val staleSuffix = if (locationStale) " (GPS signal weak, may be outdated)" else ""
+    return when {
+        matchState == MatchState.Lost -> "trail signal lost, last confirmed $distText remaining"
+        matchState != MatchState.Matched -> "roughly $distText remaining$staleSuffix"
+        // #91: the same evidence completion routes require — a near-zero reading right at
+        // follow-start, before the walker has moved, isn't trustworthy as a confident "0 m
+        // remaining" even though the match itself is genuinely Matched.
+        !travelled -> "not yet confirmed, roughly $distText remaining$staleSuffix"
+        else -> "$distText remaining$staleSuffix"
     }
 }
 

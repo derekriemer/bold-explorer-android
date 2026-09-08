@@ -142,6 +142,9 @@ data class GpsUiState(
     // with — both null unless a trail is actively being followed and has confirmed a position.
     val trailRemainingM: Double? = null,
     val trailMatchState: MatchState? = null,
+    // #91's travelled evidence, same reason ProgressCueProducer needs it: a near-zero
+    // trailRemainingM right at follow-start isn't trustworthy before the walker has moved.
+    val trailTravelled: Boolean = false,
     val locationStale: Boolean = false,
     val alignmentActive: Boolean = false,
     val alignmentBearingDeg: Double? = null,
@@ -319,6 +322,7 @@ private data class BearingGroup(
     val trailLost: Boolean = false,
     val trailRemainingM: Double? = null,
     val trailMatchState: MatchState? = null,
+    val trailTravelled: Boolean = false,
 )
 
 private data class AudioAlignmentGroup(
@@ -733,10 +737,17 @@ class GpsViewModel
         // with, surfaced for the merged trail-info row. Both freeze during an Uncertain/Lost span
         // the same way confirmedAlongM does (they are derived from it) — that staleness is exactly
         // what trailMatchState lets the row hedge against, e.g. "roughly 340 m (last confirmed)".
+        // No read-only wrapper — unlike every StateFlow above that's exposed outside this class,
+        // these three are only ever read by this class's own combine() below, so a wrapper only
+        // exposed to nothing.
         private val _trailRemainingM = MutableStateFlow<Double?>(null)
-        private val trailRemainingM: StateFlow<Double?> = _trailRemainingM.asStateFlow()
         private val _trailMatchState = MutableStateFlow<MatchState?>(null)
-        private val trailMatchState: StateFlow<MatchState?> = _trailMatchState.asStateFlow()
+
+        // Same evidence completion routes require (#91) — a near-zero remaining reading right at
+        // follow-start, before the walker has actually moved, is not trustworthy, and the row must
+        // hedge it the same way ProgressCueProducer already does rather than showing a confident
+        // "0 m remaining."
+        private val _trailTravelled = MutableStateFlow(false)
 
         // ── Combined UI state ─────────────────────────────────────────────────────────
 
@@ -768,8 +779,10 @@ class GpsViewModel
                 },
                 locationStale,
                 trailLost,
-                combine(trailRemainingM, trailMatchState) { remaining, match -> remaining to match },
-            ) { group, (aa, trailActive, guidance), stale, lost, (remaining, match) ->
+                combine(_trailRemainingM, _trailMatchState, _trailTravelled) { remaining, match, travelled ->
+                    Triple(remaining, match, travelled)
+                },
+            ) { group, (aa, trailActive, guidance), stale, lost, (remaining, match, travelled) ->
                 group.copy(
                     relativeDeg = if (trailActive) guidance?.relativeDeg else group.relativeDeg,
                     alignmentActive = aa,
@@ -777,6 +790,7 @@ class GpsViewModel
                     trailLost = lost,
                     trailRemainingM = remaining,
                     trailMatchState = match,
+                    trailTravelled = travelled,
                 )
             }
         private val interactionGroup =
@@ -824,6 +838,7 @@ class GpsViewModel
                     trailLost = bear.trailLost,
                     trailRemainingM = bear.trailRemainingM,
                     trailMatchState = bear.trailMatchState,
+                    trailTravelled = bear.trailTravelled,
                     locationStale = bear.locationStale,
                     alignmentActive = bear.alignmentActive,
                     alignmentBearingDeg = inter.alignmentBearingDeg,
@@ -1304,6 +1319,7 @@ class GpsViewModel
             _trailLost.value = false
             _trailMatchState.value = null
             _trailRemainingM.value = null
+            _trailTravelled.value = false
             backgroundSession.setModeActive(GpsBackgroundMode.TrailFollow, false)
             stopLocationServiceIfIdle()
             announce(
@@ -1546,6 +1562,7 @@ class GpsViewModel
                     _trailLost.value = false
                     _trailMatchState.value = null
                     _trailRemainingM.value = null
+                    _trailTravelled.value = false
                     announce(
                         // Hedged when accuracy was too poor to assert arrival. Saying "trail
                         // complete" to someone who is not there is worse than saying nothing
@@ -1675,6 +1692,7 @@ class GpsViewModel
             if (session != null) {
                 val remainingM = alongTrackM?.let { session.remainingM(it) }
                 _trailRemainingM.value = remainingM
+                _trailTravelled.value = completion.travelled
                 val cue =
                     cues.progress.onFix(
                         nowMs = sample.timestamp,
