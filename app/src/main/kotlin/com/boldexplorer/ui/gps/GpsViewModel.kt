@@ -1747,7 +1747,19 @@ class GpsViewModel
                 // confirmed alongTrackM as the progress cue above -- never TrailFollower's
                 // currentIndex -- so a matcher correction or a backtrack self-corrects this the
                 // same way it self-corrects remaining distance.
-                val bendCue = cues.bend.onFix(sample.timestamp, session.polyline, alongTrackM, session.direction, units)
+                val bendCue =
+                    cues.bend.onFix(
+                        nowMs = sample.timestamp,
+                        polyline = session.polyline,
+                        alongTrackM = alongTrackM,
+                        direction = session.direction,
+                        units = units,
+                        // Same yield-to-whatever-just-spoke reasoning as the progress cue above —
+                        // this call already runs after it in the established match-state, then
+                        // annotations, then progress ordering, so lastSpokeAtMs here already
+                        // reflects anything all three just said this fix (review finding, PR #134).
+                        lastSpokeAtMs = lastSpokeAtMs,
+                    )
                 viewModelScope.launch {
                     audioEventLog.append(
                         AudioLogEntry(

@@ -49,7 +49,14 @@ enum class BendStage { APPROACH, CLOSE, AT_TURN }
 class BendCueProducer(
     private val tuning: BendTuning = BendTuning.DEFAULT,
 ) {
-    private data class Progress(val anchorM: Double, val stage: BendStage)
+    /**
+     * @property turnDeg carried alongside the anchor so a tracked anchor's remaining stages can be
+     *   evaluated directly from this remembered position (see [onFix]) — never by asking
+     *   [BendDetector] to re-find the same anchor, which only ever returns vertices strictly ahead
+     *   of the current position and would silently drop this anchor, and its still-owed stages, the
+     *   moment a fix lands even slightly past it (review finding, PR #134).
+     */
+    private data class Progress(val anchorM: Double, val turnDeg: Double, val stage: BendStage)
 
     private var progress: Progress? = null
     private var lastSpeechAtMs: Long? = null
@@ -66,6 +73,12 @@ class BendCueProducer(
      * @param alongTrackM the confirmed along-track position (`TrailMatch.confirmedAlongM`), never
      *   `TrailFollower.currentIndex` — see the class doc for why that distinction is load-bearing.
      *   Null before the match has ever confirmed a position; speech is suppressed until it is not.
+     * @param lastSpokeAtMs when *anything* (any cue, any producer) last actually spoke, shared
+     *   across the whole follow — not [lastSpeechAtMs], which is this producer's own, bend-specific
+     *   cadence. Yielding here mirrors [ProgressCue.onFix]'s identical parameter (review finding,
+     *   PR #134): without it, a bend cue evaluated the same fix as a more important alert (an
+     *   off-trail warning, a match-state change) had no way to know something else had just spoken,
+     *   and could queue right behind it instead of waiting its turn.
      */
     fun onFix(
         nowMs: Long,
@@ -73,6 +86,7 @@ class BendCueProducer(
         alongTrackM: Double?,
         direction: TravelDirection,
         units: Units,
+        lastSpokeAtMs: Long,
     ): BendCue {
         if (alongTrackM == null) return BendCue(null, "bail:unconfirmed")
 
@@ -85,23 +99,37 @@ class BendCueProducer(
             if (!stillAhead) progress = null
         }
 
+        // Checked after self-correction (bookkeeping, not speech) but before anything that could
+        // produce a cue -- yielding must suppress every stage equally, not just a brand-new anchor.
+        val yieldElapsedMs = elapsedSinceMs(nowMs, lastSpokeAtMs)
+        if (yieldElapsedMs < NavigationPolicy.PROGRESS_YIELD_MS) {
+            return BendCue(null, "bail:yield_${yieldElapsedMs}ms")
+        }
+
+        // An anchor already being tracked is evaluated directly from its own remembered position --
+        // never through BendDetector, which only returns vertices strictly ahead of alongTrackM and
+        // would drop this one (and its still-owed CLOSE/AT_TURN stages) the instant a fix lands past
+        // it, before stillAhead's tolerance would have cleared it (review finding, PR #134).
+        val tracked = progress
+        if (tracked != null && tracked.stage != BendStage.AT_TURN) {
+            val distanceAheadM = abs(alongTrackM - tracked.anchorM)
+            val targetStage = stageFor(distanceAheadM)
+            if (targetStage.ordinal <= tracked.stage.ordinal) {
+                return BendCue(null, "bail:already_announced")
+            }
+            return speak(tracked.anchorM, tracked.turnDeg, targetStage, distanceAheadM, units, nowMs)
+        }
+
         val bend =
             BendDetector.findNextBend(polyline, alongTrackM, direction, tuning)
                 ?: return BendCue(null, "bail:no_bend_ahead")
 
-        val current = progress
         val isTrackedAnchor =
-            current != null && abs(current.anchorM - bend.anchorAlongTrackM) <= tuning.anchorToleranceM
-
-        val targetStage =
-            when {
-                bend.distanceAheadM <= tuning.atAnchorM -> BendStage.AT_TURN
-                bend.distanceAheadM <= tuning.closeRangeM -> BendStage.CLOSE
-                else -> BendStage.APPROACH
-            }
-        val currentStage = if (isTrackedAnchor) current!!.stage else null
-
-        if (currentStage != null && targetStage.ordinal <= currentStage.ordinal) {
+            tracked != null && abs(tracked.anchorM - bend.anchorAlongTrackM) <= tuning.anchorToleranceM
+        if (isTrackedAnchor) {
+            // Only reachable once tracked.stage == AT_TURN (the branch above already handles every
+            // other case) -- fully announced, and still ahead by index even though nothing more is
+            // owed for it.
             return BendCue(null, "bail:already_announced")
         }
 
@@ -109,26 +137,42 @@ class BendCueProducer(
         // defence in depth; a stage advance on an anchor already being tracked is never throttled --
         // it is the deliberate, tightly-spaced follow-up the whole design exists to give, not a rival
         // interruption.
-        if (!isTrackedAnchor) {
-            val sinceLastSpeechMs = lastSpeechAtMs?.let { nowMs - it }
-            if (sinceLastSpeechMs != null && sinceLastSpeechMs < tuning.speechIntervalMs) {
-                return BendCue(null, "bail:throttled_${sinceLastSpeechMs}ms")
-            }
+        val sinceLastSpeechMs = lastSpeechAtMs?.let { nowMs - it }
+        if (sinceLastSpeechMs != null && sinceLastSpeechMs < tuning.speechIntervalMs) {
+            return BendCue(null, "bail:throttled_${sinceLastSpeechMs}ms")
         }
 
-        progress = Progress(bend.anchorAlongTrackM, targetStage)
+        val targetStage = stageFor(bend.distanceAheadM)
+        return speak(bend.anchorAlongTrackM, bend.turnDeg, targetStage, bend.distanceAheadM, units, nowMs)
+    }
+
+    private fun stageFor(distanceAheadM: Double): BendStage =
+        when {
+            distanceAheadM <= tuning.atAnchorM -> BendStage.AT_TURN
+            distanceAheadM <= tuning.closeRangeM -> BendStage.CLOSE
+            else -> BendStage.APPROACH
+        }
+
+    private fun speak(
+        anchorM: Double,
+        turnDeg: Double,
+        stage: BendStage,
+        distanceAheadM: Double,
+        units: Units,
+        nowMs: Long,
+    ): BendCue {
+        progress = Progress(anchorM, turnDeg, stage)
         lastSpeechAtMs = nowMs
-        val dirLabel = TurnSeverity.of(bend.turnDeg).label()
+        val dirLabel = TurnSeverity.of(turnDeg).label()
         val speech =
-            when (targetStage) {
-                BendStage.APPROACH -> "${formatSpokenDistance(bend.distanceAheadM, units)} until a $dirLabel turn"
+            when (stage) {
+                BendStage.APPROACH -> "${formatSpokenDistance(distanceAheadM, units)} until a $dirLabel turn"
                 BendStage.CLOSE -> "Turn coming up, $dirLabel"
                 BendStage.AT_TURN -> "Turn $dirLabel"
             }
-        val stageTag = targetStage.name.lowercase()
         return BendCue(
             speech = speech,
-            disposition = "speak:${stageTag}_${bend.distanceAheadM.roundToInt()}m_${bend.turnDeg.roundToInt()}deg",
+            disposition = "speak:${stage.name.lowercase()}_${distanceAheadM.roundToInt()}m_${turnDeg.roundToInt()}deg",
         )
     }
 
@@ -138,3 +182,16 @@ class BendCueProducer(
         lastSpeechAtMs = null
     }
 }
+
+/**
+ * Milliseconds elapsed since [atMs], treating the "never yet" sentinel `Long.MIN_VALUE` as
+ * arbitrarily long ago rather than subtracting it directly (`nowMs - Long.MIN_VALUE` overflows).
+ * Same idiom as `ProgressCue.kt`'s private copy of this exact function — file-local rather than
+ * shared because each is small enough that the duplication costs less than the coupling would; see
+ * that copy's own doc for the fuller overflow explanation and a third occurrence of the same
+ * hazard, `TrailGuidanceCoordinator.lastOrdinaryGuidanceAtMs`.
+ */
+private fun elapsedSinceMs(
+    nowMs: Long,
+    atMs: Long,
+): Long = if (atMs == Long.MIN_VALUE) Long.MAX_VALUE else nowMs - atMs

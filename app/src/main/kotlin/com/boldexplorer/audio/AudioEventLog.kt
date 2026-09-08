@@ -69,7 +69,7 @@ class AudioEventLog
                         _entries.value = parsed.take(MAX_IN_MEMORY_ENTRIES)
                     }
                 }
-                append(buildInfoEntry())
+                append(buildInfoEntry(trigger = "process_start"))
             }
         }
 
@@ -77,9 +77,11 @@ class AudioEventLog
          * Which build produced everything logged after this line (#65 field walk, 2026-09-03) --
          * written once per process start, so a log spanning a reinstall or an app update carries
          * its own answer to "was the fix actually running for this walk" instead of relying on
-         * memory.
+         * memory. Also re-written by [newSession] (review finding, PR #134): a tester who clears
+         * the log right before a walk, without also restarting the process, used to get a session
+         * with no marker at all -- exactly the field-motivated scenario this feature exists for.
          */
-        private fun buildInfoEntry(): AudioLogEntry {
+        private fun buildInfoEntry(trigger: String): AudioLogEntry {
             // Local wall-clock time (so it reads naturally against memory of when the build was
             // made) with an explicit numeric offset (so it never gets misread as UTC, or as some
             // other device's local time, the way a bare "yyyy-MM-dd HH:mm:ss" would) -- see
@@ -92,7 +94,7 @@ class AudioEventLog
             return AudioLogEntry(
                 timestampMs = System.currentTimeMillis(),
                 kind = AudioLogEntry.Kind.BUILD_INFO,
-                trigger = "process_start",
+                trigger = trigger,
                 inputs = "",
                 outputs =
                     "version=${BuildConfig.VERSION_NAME}(${BuildConfig.VERSION_CODE})" +
@@ -121,6 +123,7 @@ class AudioEventLog
                 fileMutex.withLock {
                     logFile.writeText("")
                 }
+                append(buildInfoEntry(trigger = "new_session"))
             }
         }
 
