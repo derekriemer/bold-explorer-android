@@ -56,8 +56,9 @@ class SensorCompassProvider
                 val orientation = FloatArray(3)
 
                 // Low-pass filter state — fresh per callbackFlow invocation.
-                // Alpha ≈ 0.15: smooth enough for audio cues, responsive enough for walking pace.
-                val alpha = 0.15f
+                // Alpha ≈ 0.35 at SENSOR_DELAY_GAME (~20ms/sample): time constant ~60ms,
+                // fast enough to track a quick body turn while still damping jitter.
+                val alpha = 0.35f
                 val filtered = FloatArray(4) // x, y, z, w quaternion components
                 var hasFilter = false
 
@@ -67,13 +68,22 @@ class SensorCompassProvider
                             val values = event.values
                             val len = minOf(values.size, filtered.size)
 
-                            // Low-pass on quaternion components (linear approx valid for small deltas)
                             if (!hasFilter) {
                                 for (i in 0 until len) filtered[i] = values[i]
                                 hasFilter = true
                             } else {
+                                // A unit quaternion q and -q represent the same rotation. The
+                                // sensor can flip sign between samples; blending components
+                                // straight across that flip would average two opposite
+                                // rotations and briefly send the heading (and beacon pan) to
+                                // the wrong side. Detect the flip via the dot product and
+                                // negate the incoming sample to match the filter's hemisphere
+                                // before blending.
+                                var dot = 0f
+                                for (i in 0 until len) dot += values[i] * filtered[i]
+                                val sign = if (dot < 0f) -1f else 1f
                                 for (i in 0 until len) {
-                                    filtered[i] = alpha * values[i] + (1f - alpha) * filtered[i]
+                                    filtered[i] = alpha * (sign * values[i]) + (1f - alpha) * filtered[i]
                                 }
                             }
 
@@ -114,7 +124,7 @@ class SensorCompassProvider
                         ) = Unit
                     }
 
-                sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_UI)
+                sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_GAME)
                 awaitClose { sensorManager.unregisterListener(listener) }
             }.shareIn(scope, SharingStarted.WhileSubscribed(5_000L), replay = 1)
 
