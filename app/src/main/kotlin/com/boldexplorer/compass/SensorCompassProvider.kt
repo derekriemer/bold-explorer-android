@@ -24,7 +24,7 @@ import javax.inject.Singleton
  * Provides true-north and magnetic heading via TYPE_ROTATION_VECTOR.
  *
  * Replaces the Capacitor Heading plugin entirely.
- * - Low-pass filter on raw quaternion components avoids heading jitter.
+ * - No extra smoothing: TYPE_ROTATION_VECTOR is already Android's fused sensor output.
  * - GeomagneticField.declination converts magnetic to true north once a GPS fix is available.
  * - setLocation() should be called whenever the LocationViewModel receives a new fix.
  */
@@ -55,39 +55,18 @@ class SensorCompassProvider
                 val rotationMatrix = FloatArray(9)
                 val orientation = FloatArray(3)
 
-                // Low-pass filter state — fresh per callbackFlow invocation.
-                // Alpha ≈ 0.35 at SENSOR_DELAY_GAME (~20ms/sample): time constant ~60ms,
-                // fast enough to track a quick body turn while still damping jitter.
-                val alpha = 0.35f
-                val filtered = FloatArray(4) // x, y, z, w quaternion components
-                var hasFilter = false
-
                 val listener =
                     object : SensorEventListener {
                         override fun onSensorChanged(event: SensorEvent) {
-                            val values = event.values
-                            val len = minOf(values.size, filtered.size)
-
-                            if (!hasFilter) {
-                                for (i in 0 until len) filtered[i] = values[i]
-                                hasFilter = true
-                            } else {
-                                // A unit quaternion q and -q represent the same rotation. The
-                                // sensor can flip sign between samples; blending components
-                                // straight across that flip would average two opposite
-                                // rotations and briefly send the heading (and beacon pan) to
-                                // the wrong side. Detect the flip via the dot product and
-                                // negate the incoming sample to match the filter's hemisphere
-                                // before blending.
-                                var dot = 0f
-                                for (i in 0 until len) dot += values[i] * filtered[i]
-                                val sign = if (dot < 0f) -1f else 1f
-                                for (i in 0 until len) {
-                                    filtered[i] = alpha * (sign * values[i]) + (1f - alpha) * filtered[i]
-                                }
-                            }
-
-                            SensorManager.getRotationMatrixFromVector(rotationMatrix, filtered)
+                            // TYPE_ROTATION_VECTOR is already Android's fused output (gyro +
+                            // accelerometer + magnetometer), so it doesn't need a second
+                            // low-pass filter on top. An earlier version smoothed the raw
+                            // quaternion components with an EMA, which both lagged behind
+                            // fast turns and could briefly invert the heading when a sample
+                            // crossed the quaternion's sign ambiguity (q and -q are the same
+                            // rotation). Feeding the sensor's output straight through avoids
+                            // both problems.
+                            SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
                             SensorManager.getOrientation(rotationMatrix, orientation)
 
                             // orientation[0] = azimuth in radians; normalise to [0, 360)
