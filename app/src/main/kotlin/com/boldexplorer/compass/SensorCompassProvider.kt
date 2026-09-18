@@ -24,7 +24,7 @@ import javax.inject.Singleton
  * Provides true-north and magnetic heading via TYPE_ROTATION_VECTOR.
  *
  * Replaces the Capacitor Heading plugin entirely.
- * - Low-pass filter on raw quaternion components avoids heading jitter.
+ * - No extra smoothing: TYPE_ROTATION_VECTOR is already Android's fused sensor output.
  * - GeomagneticField.declination converts magnetic to true north once a GPS fix is available.
  * - setLocation() should be called whenever the LocationViewModel receives a new fix.
  */
@@ -41,6 +41,18 @@ class SensorCompassProvider
         // Updated by the ViewModel when a new GPS fix arrives; used for declination computation.
         private val _location = MutableStateFlow<Triple<Double, Double, Double>?>(null)
 
+        // The location a declination was last computed for, and that declination — GeomagneticField
+        // construction is a real World Magnetic Model computation, not a cheap lookup, and
+        // onSensorChanged runs at up to ~50 Hz (SENSOR_DELAY_GAME) while setLocation() only updates
+        // at GPS fix rate (~1 Hz) — recomputing on every sensor callback was rebuilding the identical
+        // answer ~49 times out of every 50 (review finding, PR #145). Triple has structural equality,
+        // so this still invalidates on genuine GPS jitter between fixes (the cache isn't distance-
+        // thresholded) -- it just stops paying the cost again for the ~50 sensor callbacks that land
+        // between one GPS fix and the next. The timestamp GeomagneticField also takes is not part of
+        // the cache key: secular magnetic drift is a fraction of a degree per *year*, immaterial
+        // against compass sensor noise within one navigation session.
+        private var declinationCache: Pair<Triple<Double, Double, Double>, Double>? = null
+
         private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
         val headingFlow: SharedFlow<HeadingReading> =
@@ -55,29 +67,18 @@ class SensorCompassProvider
                 val rotationMatrix = FloatArray(9)
                 val orientation = FloatArray(3)
 
-                // Low-pass filter state — fresh per callbackFlow invocation.
-                // Alpha ≈ 0.15: smooth enough for audio cues, responsive enough for walking pace.
-                val alpha = 0.15f
-                val filtered = FloatArray(4) // x, y, z, w quaternion components
-                var hasFilter = false
-
                 val listener =
                     object : SensorEventListener {
                         override fun onSensorChanged(event: SensorEvent) {
-                            val values = event.values
-                            val len = minOf(values.size, filtered.size)
-
-                            // Low-pass on quaternion components (linear approx valid for small deltas)
-                            if (!hasFilter) {
-                                for (i in 0 until len) filtered[i] = values[i]
-                                hasFilter = true
-                            } else {
-                                for (i in 0 until len) {
-                                    filtered[i] = alpha * values[i] + (1f - alpha) * filtered[i]
-                                }
-                            }
-
-                            SensorManager.getRotationMatrixFromVector(rotationMatrix, filtered)
+                            // TYPE_ROTATION_VECTOR is already Android's fused output (gyro +
+                            // accelerometer + magnetometer), so it doesn't need a second
+                            // low-pass filter on top. An earlier version smoothed the raw
+                            // quaternion components with an EMA, which both lagged behind
+                            // fast turns and could briefly invert the heading when a sample
+                            // crossed the quaternion's sign ambiguity (q and -q are the same
+                            // rotation). Feeding the sensor's output straight through avoids
+                            // both problems.
+                            SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
                             SensorManager.getOrientation(rotationMatrix, orientation)
 
                             // orientation[0] = azimuth in radians; normalise to [0, 360)
@@ -85,19 +86,7 @@ class SensorCompassProvider
 
                             val loc = _location.value
                             val trueDeg: Double? =
-                                if (loc != null) {
-                                    val (lat, lon, alt) = loc
-                                    val declination =
-                                        GeomagneticField(
-                                            lat.toFloat(),
-                                            lon.toFloat(),
-                                            alt.toFloat(),
-                                            System.currentTimeMillis(),
-                                        ).declination.toDouble()
-                                    ((magneticDeg + declination) % 360 + 360) % 360
-                                } else {
-                                    null
-                                }
+                                loc?.let { ((magneticDeg + declinationFor(it)) % 360 + 360) % 360 }
 
                             trySend(
                                 HeadingReading(
@@ -114,7 +103,7 @@ class SensorCompassProvider
                         ) = Unit
                     }
 
-                sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_UI)
+                sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_GAME)
                 awaitClose { sensorManager.unregisterListener(listener) }
             }.shareIn(scope, SharingStarted.WhileSubscribed(5_000L), replay = 1)
 
@@ -128,5 +117,28 @@ class SensorCompassProvider
             altM: Double = 0.0,
         ) {
             _location.value = Triple(lat, lon, altM)
+        }
+
+        /**
+         * Magnetic declination at [loc], degrees — cached against the last location it was computed
+         * for (see [declinationCache]'s own doc). Only ever called from the sensor listener's
+         * `onSensorChanged` callback above, so no explicit synchronization: it shares that callback's
+         * already-single-threaded-in-practice assumption (the same one its own `rotationMatrix`/
+         * `orientation` scratch arrays rely on), not a new one.
+         */
+        private fun declinationFor(loc: Triple<Double, Double, Double>): Double {
+            declinationCache?.let { (cachedLoc, cachedDeclination) ->
+                if (cachedLoc == loc) return cachedDeclination
+            }
+            val (lat, lon, alt) = loc
+            val declination =
+                GeomagneticField(
+                    lat.toFloat(),
+                    lon.toFloat(),
+                    alt.toFloat(),
+                    System.currentTimeMillis(),
+                ).declination.toDouble()
+            declinationCache = loc to declination
+            return declination
         }
     }
