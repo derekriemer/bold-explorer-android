@@ -228,7 +228,22 @@ class TrailGuidanceCoordinator(
                     TravelDirection.Reverse -> position.alongTrackM <= END_EPSILON_M
                 }
 
-        return CompletionEvidence(pastTheEnd = pastTheEnd, travelled = travelled)
+        // A weaker, more available cousin of pastTheEnd for TrailFollower's radial ("0b") route to
+        // veto itself with — any confirmed along-track position, not specifically an
+        // EndpointClamped one, so it still applies to a fix pastTheEnd itself would decline to
+        // judge. Review finding, PR #144: raw GPS proximity to the endpoint's coordinates alone
+        // cannot tell "genuinely arriving" apart from a self-intersecting route's earlier pass
+        // sitting physically near those same coordinates.
+        val endAlongM =
+            when (followSession.direction) {
+                TravelDirection.Forward -> totalLengthM
+                TravelDirection.Reverse -> 0.0
+            }
+        val matchConfidentlyElsewhere =
+            match.state == MatchState.Matched &&
+                match.confirmedAlongM?.let { abs(it - endAlongM) > NavigationPolicy.COMPLETION_CEILING_M } == true
+
+        return CompletionEvidence(pastTheEnd = pastTheEnd, travelled = travelled, matchConfidentlyElsewhere = matchConfidentlyElsewhere)
     }
 
     /** Recompute and publish guidance for [sample] against [followState]; returns the new value. */

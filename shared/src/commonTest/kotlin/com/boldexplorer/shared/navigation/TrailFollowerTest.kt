@@ -153,6 +153,28 @@ class TrailFollowerTest {
     }
 
     @Test
+    fun radialEndpointIsVetoedWhenTheMatchConfidentlyPlacesTheWalkerElsewhere() {
+        // Review finding, PR #144: raw GPS proximity to the endpoint's coordinates alone cannot
+        // distinguish genuine arrival from a self-intersecting route (a loop or lollipop whose
+        // stick crosses back near its own trailhead) physically passing close to those same
+        // coordinates while the walker is really somewhere else along-track. Standing at wp3's
+        // coordinates would otherwise satisfy 0b exactly as in
+        // radialEndpointCompletes_evenWithTheIndexNowhereNearTheEnd -- the only difference here is
+        // a confident match saying the walker is actually elsewhere, which must veto it.
+        val f = TrailFollower()
+        f.start(listOf(wp1, wp2, wp3), thresholdM = 15.0)
+
+        val event =
+            f.onLocationUpdate(
+                LatLng(wp3.lat, wp3.lon),
+                completion = CompletionEvidence(pastTheEnd = false, travelled = true, matchConfidentlyElsewhere = true),
+            )
+
+        assertNull(event, "a confident match placing the walker elsewhere must veto the radial route")
+        assertIs<TrailFollowerState.Active>(f.state.value)
+    }
+
+    @Test
     fun pastTheEndWithoutTravelDoesNotComplete() {
         // Being at the end is not evidence of having walked to it — a loop's start is also its end.
         val f = TrailFollower()

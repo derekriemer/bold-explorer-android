@@ -190,9 +190,15 @@ class TrailFollower(
         //    can anchor at the walker's actual position, so a follow begun at a loop's trailhead —
         //    which is also its final track point — starts with the user inside a 5–6 m radius of it.
         //    Ungated, that announces the trail complete on the first fix, before a step has been taken.
+        //
+        //    Also vetoed by completion.matchConfidentlyElsewhere: raw GPS distance to the endpoint's
+        //    coordinates alone cannot tell genuine arrival apart from a self-intersecting route (a
+        //    loop or lollipop whose stick crosses back near its own trailhead) physically passing
+        //    close to those same coordinates somewhere else along the walk, while the matcher
+        //    confidently places the walker along-track elsewhere. Review finding, PR #144.
         val endWaypoint = current.waypoints.last()
         val dToEnd = haversineDistanceMeters(location, LatLng(endWaypoint.lat, endWaypoint.lon))
-        if (completion.travelled && dToEnd <= NavigationPolicy.completionRadiusM(accuracyM)) {
+        if (completion.travelled && !completion.matchConfidentlyElsewhere && dToEnd <= NavigationPolicy.completionRadiusM(accuracyM)) {
             val atEnd = current.copy(currentIndex = current.waypoints.size - 1)
             _state.value = atEnd
             return fireAdvance(
