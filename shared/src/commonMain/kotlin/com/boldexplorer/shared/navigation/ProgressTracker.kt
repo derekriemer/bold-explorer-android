@@ -101,8 +101,28 @@ class ProgressTracker(
     /** Reckoned distance since the last confirmed match — one half of the horizon. */
     private var reckonedM: Double = 0.0
 
-    /** Confirmed, contiguous along-track travel this session. Gates completion. */
-    private var travelledM: Double = 0.0
+    /**
+     * Net along-track range covered by confirmed positions this session (`max - min`), not
+     * cumulative path length — gates completion via [TrailMatch.travelledM].
+     *
+     * A running `sum += abs(delta)` (the original implementation) counts oscillation as travel: a
+     * mis-acquisition or a windowed matcher's vertex-pinning jitter that walks `alongTrackM` back
+     * and forth by a few metres for a few minutes accumulates real "distance" without the walker
+     * having gone anywhere net. Field-confirmed (#81, 2026-08-17): a 51-point loop announced "Trail
+     * complete" 3.5 minutes in, having net-walked ~20 m, because the sum had reached 87 m from
+     * ~40 m of vertex oscillation alone. `max - min` is immune to this by construction — oscillating
+     * within an already-covered range can't move either bound.
+     */
+    private var minConfirmedAlongM: Double? = null
+    private var maxConfirmedAlongM: Double? = null
+
+    /** [TrailMatch.travelledM]'s value — net range, zero before any confirmed position. */
+    private val travelledM: Double
+        get() {
+            val loM = minConfirmedAlongM ?: return 0.0
+            val hiM = maxConfirmedAlongM ?: return 0.0
+            return hiM - loM
+        }
 
     private var unmatchedCount: Int = 0
     private var lastFixMs: Long? = null
@@ -488,7 +508,23 @@ class ProgressTracker(
         disposition: String,
     ): TrailMatch {
         val previous = confirmedAlongM
-        if (contiguous && previous != null) travelledM += abs(position.alongTrackM - previous)
+        // Same contiguous gate the old sum used, and for the same reason: `contiguous = false`
+        // marks a reacquisition or initial acquisition specifically *because* it is a jump, not
+        // walking (see attemptCorroboration's and acquire's own doc comments) — a matcher's
+        // "confirmed" position is not, on its own, proof the walker actually covered the ground
+        // between there and wherever they were last confirmed. A first attempt at this fix folded
+        // every confirmed position in unconditionally, reasoning that widening [min, max] could only
+        // ever credit genuine coverage — that missed exactly this: a *wrong* reacquisition (mis-
+        // acquired onto the wrong branch, then self-corrected) would still have widened the range on
+        // its own say-so, letting one bad jump satisfy the completion guard outright. Caught by
+        // ProgressTrackerLadderTest.promotionAfterReacquisition_doesNotCountAsTravel. Folding in both
+        // `previous` and `position.alongTrackM` (not just the latter) means the very first contiguous
+        // step after a jump still seeds the range from the jump's landing point, exactly as the old
+        // sum's first post-jump `abs(new - previous)` term did.
+        if (contiguous && previous != null) {
+            minConfirmedAlongM = minOf(minConfirmedAlongM ?: previous, previous, position.alongTrackM)
+            maxConfirmedAlongM = maxOf(maxConfirmedAlongM ?: previous, previous, position.alongTrackM)
+        }
 
         // Only meaningful where geometry has just returned after an absence; a steady run of
         // matches resets prediction every fix, so the error would be trivially ~0.
