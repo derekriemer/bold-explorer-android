@@ -40,7 +40,6 @@ import com.boldexplorer.shared.navigation.AnchorOption
 import com.boldexplorer.shared.navigation.AnnotationCueProducer
 import com.boldexplorer.shared.navigation.Bend
 import com.boldexplorer.shared.navigation.BendCueProducer
-import com.boldexplorer.shared.navigation.BendDetector
 import com.boldexplorer.shared.navigation.ArmingResult
 import com.boldexplorer.shared.navigation.CollectionExplorer
 import com.boldexplorer.shared.navigation.CollectionExplorerEvent
@@ -794,10 +793,10 @@ class GpsViewModel
         // "0 m remaining."
         private val _trailTravelled = MutableStateFlow(false)
 
-        // #104's next-turn row-merge: BendDetector.findNextBend computed straight from the same
-        // confirmedAlongM as _trailRemainingM (never through BendCueProducer, whose stage/throttle
-        // state answers "should this be spoken now", not "what is the next turn") — same freeze
-        // semantics as _trailRemainingM for the same reason, since both derive from the same value.
+        // #104's next-turn row-merge: the same fact BendCueProducer resolves for speech
+        // (BendCue.bend), reused rather than recomputed here to avoid a second BendDetector scan
+        // per fix (review finding, PR #144). Same freeze semantics as _trailRemainingM for the same
+        // reason, since both derive from the same confirmedAlongM.
         private val _trailNextTurn = MutableStateFlow<Bend?>(null)
 
         // Same freeze semantics again, same reason — the next named landmark ahead, independent of
@@ -1816,15 +1815,6 @@ class GpsViewModel
                     )
                 }
 
-                // #104's row-merge: the same fact BendCueProducer speaks from, computed fresh here
-                // for display rather than read off its internal Progress state, since that state
-                // answers "should this be spoken now" (stage/throttle), not "what is the next turn" —
-                // BendDetector.findNextBend is stateless and answers the latter directly.
-                // alongTrackM is the same confirmed value as remainingM above, so this freezes on
-                // the same schedule during Uncertain/Lost.
-                _trailNextTurn.value =
-                    alongTrackM?.let { BendDetector.findNextBend(session.polyline, it, session.direction) }
-
                 // #104's row-merge: the next named landmark ahead, independent of
                 // AnnotationCueProducer's own announced-set state for the same reason as the turn
                 // above. aheadM is along-track (how far you actually walk); relativeDeg is the
@@ -1837,8 +1827,11 @@ class GpsViewModel
                             val loc = location.value
                             val relativeDeg =
                                 loc?.let { l ->
-                                    val bearingDeg =
-                                        initialBearingDeg(LatLng(l.lat, l.lon), session.polyline.positionAt(wp.alongTrackM))
+                                    // wp.coordinate, not a reprojection back onto the polyline
+                                    // (positionAt ignores cross-track entirely) — an annotation
+                                    // placed beside the trail needs a bearing to where it actually
+                                    // is, not to the trail's nearest point (review finding, PR #144).
+                                    val bearingDeg = initialBearingDeg(LatLng(l.lat, l.lon), wp.coordinate)
                                     navHeadingDeg.value?.let { h -> deltaAngle(h, bearingDeg) }
                                 }
                             NextWaypointInfo(wp.name, abs(wp.alongTrackM - a), relativeDeg)
@@ -1862,6 +1855,12 @@ class GpsViewModel
                         // reflects anything all three just said this fix (review finding, PR #134).
                         lastSpokeAtMs = lastSpokeAtMs,
                     )
+                // #104's row-merge: BendCue.bend carries the same fact BendCueProducer just
+                // resolved above, whether or not it spoke this fix — reusing it here means the
+                // producer's internal scan (or its O(1) tracked-anchor shortcut) runs once per fix,
+                // not twice (review finding, PR #144: this used to be a second, unconditional
+                // BendDetector.findNextBend call here, duplicating work onFix already does).
+                _trailNextTurn.value = bendCue.bend
                 viewModelScope.launch {
                     audioEventLog.append(
                         AudioLogEntry(

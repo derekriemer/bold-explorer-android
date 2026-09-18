@@ -9,10 +9,19 @@ import kotlin.math.roundToInt
  *
  * A value, not an effect — same split as [ProgressCue], added beside it as that type's own doc
  * anticipated.
+ *
+ * @property bend the next turn as of this fix, whenever one exists — set on every return from
+ *   [BendCueProducer.onFix], not only when [speech] is non-null. Speech is gated by cadence
+ *   (yield/throttle/dedup); a display consumer wanting "what is the next turn right now" needs the
+ *   fact independent of whether this particular fix was allowed to speak it, and independent of
+ *   running its own separate `BendDetector.findNextBend` scan to get it (#104 review finding, PR
+ *   #144 — `GpsViewModel` was doing exactly that, once per fix, unconditionally, duplicating the
+ *   scan [BendCueProducer] already does internally for the tracked-anchor case).
  */
 data class BendCue(
     val speech: String?,
     val disposition: String,
+    val bend: Bend?,
 )
 
 /**
@@ -88,7 +97,7 @@ class BendCueProducer(
         units: Units,
         lastSpokeAtMs: Long,
     ): BendCue {
-        if (alongTrackM == null) return BendCue(null, "bail:unconfirmed")
+        if (alongTrackM == null) return BendCue(null, "bail:unconfirmed", null)
 
         progress?.let { p ->
             val stillAhead =
@@ -99,11 +108,18 @@ class BendCueProducer(
             if (!stillAhead) progress = null
         }
 
+        // Resolved once and carried on every return via BendCue.bend, whether or not this fix ends
+        // up speaking -- a display consumer needs "what is the next turn right now" independent of
+        // speech cadence, and must not run its own separate findNextBend scan to get it (see
+        // BendCue.bend's doc). Deliberately computed before the yield check below: yielding governs
+        // speech only, and the fact itself must not go stale on a fix that yielded to something else.
+        val bend = resolveBend(alongTrackM, polyline, direction)
+
         // Checked after self-correction (bookkeeping, not speech) but before anything that could
         // produce a cue -- yielding must suppress every stage equally, not just a brand-new anchor.
         val yieldElapsedMs = elapsedSinceMs(nowMs, lastSpokeAtMs)
         if (yieldElapsedMs < NavigationPolicy.PROGRESS_YIELD_MS) {
-            return BendCue(null, "bail:yield_${yieldElapsedMs}ms")
+            return BendCue(null, "bail:yield_${yieldElapsedMs}ms", bend)
         }
 
         // An anchor already being tracked is evaluated directly from its own remembered position --
@@ -115,14 +131,12 @@ class BendCueProducer(
             val distanceAheadM = abs(alongTrackM - tracked.anchorM)
             val targetStage = stageFor(distanceAheadM)
             if (targetStage.ordinal <= tracked.stage.ordinal) {
-                return BendCue(null, "bail:already_announced")
+                return BendCue(null, "bail:already_announced", bend)
             }
-            return speak(tracked.anchorM, tracked.turnDeg, targetStage, distanceAheadM, units, nowMs)
+            return speak(tracked.anchorM, tracked.turnDeg, targetStage, distanceAheadM, units, nowMs, bend)
         }
 
-        val bend =
-            BendDetector.findNextBend(polyline, alongTrackM, direction, tuning)
-                ?: return BendCue(null, "bail:no_bend_ahead")
+        if (bend == null) return BendCue(null, "bail:no_bend_ahead", null)
 
         val isTrackedAnchor =
             tracked != null && abs(tracked.anchorM - bend.anchorAlongTrackM) <= tuning.anchorToleranceM
@@ -130,7 +144,7 @@ class BendCueProducer(
             // Only reachable once tracked.stage == AT_TURN (the branch above already handles every
             // other case) -- fully announced, and still ahead by index even though nothing more is
             // owed for it.
-            return BendCue(null, "bail:already_announced")
+            return BendCue(null, "bail:already_announced", bend)
         }
 
         // A brand-new anchor's very first cue is throttled against whatever last spoke, cross-anchor
@@ -139,11 +153,31 @@ class BendCueProducer(
         // interruption.
         val sinceLastSpeechMs = lastSpeechAtMs?.let { nowMs - it }
         if (sinceLastSpeechMs != null && sinceLastSpeechMs < tuning.speechIntervalMs) {
-            return BendCue(null, "bail:throttled_${sinceLastSpeechMs}ms")
+            return BendCue(null, "bail:throttled_${sinceLastSpeechMs}ms", bend)
         }
 
         val targetStage = stageFor(bend.distanceAheadM)
-        return speak(bend.anchorAlongTrackM, bend.turnDeg, targetStage, bend.distanceAheadM, units, nowMs)
+        return speak(bend.anchorAlongTrackM, bend.turnDeg, targetStage, bend.distanceAheadM, units, nowMs, bend)
+    }
+
+    /**
+     * The next turn as of [alongTrackM], resolved the cheap way whenever possible: a tracked
+     * anchor not yet [BendStage.AT_TURN] is reconstructed directly from its own remembered
+     * position (O(1)), never by asking [BendDetector] to re-scan for the same anchor it would only
+     * find again at scan cost. Falls through to a real scan once there is nothing tracked, or once
+     * the tracked anchor has been fully announced (`AT_TURN`) and the search must move on to
+     * whatever comes after it.
+     */
+    private fun resolveBend(
+        alongTrackM: Double,
+        polyline: TrailPolyline,
+        direction: TravelDirection,
+    ): Bend? {
+        val tracked = progress
+        if (tracked != null && tracked.stage != BendStage.AT_TURN) {
+            return Bend(tracked.anchorM, abs(alongTrackM - tracked.anchorM), tracked.turnDeg)
+        }
+        return BendDetector.findNextBend(polyline, alongTrackM, direction, tuning)
     }
 
     private fun stageFor(distanceAheadM: Double): BendStage =
@@ -160,6 +194,7 @@ class BendCueProducer(
         distanceAheadM: Double,
         units: Units,
         nowMs: Long,
+        bend: Bend?,
     ): BendCue {
         progress = Progress(anchorM, turnDeg, stage)
         lastSpeechAtMs = nowMs
@@ -173,6 +208,7 @@ class BendCueProducer(
         return BendCue(
             speech = speech,
             disposition = "speak:${stage.name.lowercase()}_${distanceAheadM.roundToInt()}m_${turnDeg.roundToInt()}deg",
+            bend = bend,
         )
     }
 
