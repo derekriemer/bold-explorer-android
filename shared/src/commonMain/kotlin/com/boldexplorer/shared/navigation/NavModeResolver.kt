@@ -73,7 +73,7 @@ class NavModeResolver(
     ): NavMode {
         when (rec) {
             is TrailRecordingState.Following -> return NavMode.FollowingTrail(rec.trailId)
-            is TrailRecordingState.Recording -> return NavMode.RecordingTrail(rec.trailId, rec.pointCount)
+            is TrailRecordingState.Recording -> return NavMode.RecordingTrail(rec.trailId, rec.pointCount, rec.distanceM)
             else -> Unit // Selected/Idle are never projected; fall through to the explorer target.
         }
 

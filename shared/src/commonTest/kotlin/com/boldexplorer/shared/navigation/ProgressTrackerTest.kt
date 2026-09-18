@@ -142,6 +142,27 @@ class ProgressTrackerTest {
     }
 
     @Test
+    fun travelledM_isNetRangeNotCumulativePathLength() {
+        // #81, field-confirmed 2026-08-17: a windowed matcher's vertex-pinning jitter oscillated
+        // `alongTrackM` back and forth for three minutes on a stationary-ish stretch, and a
+        // cumulative sum of every step's absolute delta reached 87 m from ~20 m of real net
+        // progress -- clearing the (~50 m) completion guard on a trail the walker had barely
+        // started. max-min is immune to this: oscillating inside an already-covered range cannot
+        // move either bound.
+        val tracker = ProgressTracker(straightTrail())
+        tracker.onFix(sampleAt(northM = 100.0, eastM = 0.0, timestampMs = 0))
+        tracker.onFix(sampleAt(northM = 120.0, eastM = 0.0, timestampMs = 5_000))
+
+        // Oscillate within [100, 120] for several fixes -- a cumulative-sum implementation would
+        // add each of these steps' absolute distance; net range must not move at all.
+        tracker.onFix(sampleAt(northM = 110.0, eastM = 0.0, timestampMs = 10_000))
+        tracker.onFix(sampleAt(northM = 118.0, eastM = 0.0, timestampMs = 15_000))
+        val oscillated = tracker.onFix(sampleAt(northM = 112.0, eastM = 0.0, timestampMs = 20_000))
+
+        assertEquals(20.0, oscillated.travelledM, 2.0, "net range stays 120 - 100, oscillation is not travel")
+    }
+
+    @Test
     fun beforeAnyFix_thereIsNoMatch() {
         val tracker = ProgressTracker(straightTrail())
 

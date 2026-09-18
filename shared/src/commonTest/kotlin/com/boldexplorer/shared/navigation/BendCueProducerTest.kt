@@ -4,6 +4,7 @@ import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.settings.Units
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -67,6 +68,32 @@ class BendCueProducerTest {
 
         val third = producer.fix(2_000L, poly, 80.0, TravelDirection.Forward, Units.IMPERIAL)
         assertNull(third.speech, "still the same corner, still already announced")
+    }
+
+    @Test
+    fun bendIsPopulatedOnEveryReturnNotOnlyWhenItSpeaks() {
+        // BendCue.bend exists so a display consumer never has to run its own separate
+        // BendDetector.findNextBend scan (review finding, PR #144) -- it must be present on a
+        // "bail" return exactly as reliably as on a "speak" one, since a display row has no
+        // business going stale just because this fix's cue was dedup'd or throttled away.
+        val producer = BendCueProducer()
+        val poly = corner()
+
+        val first = producer.fix(0L, poly, 0.0, TravelDirection.Forward, Units.IMPERIAL)
+        val firstBend = assertNotNull(first.bend, "a fresh scan finds the corner")
+        assertEquals(100.0, firstBend.anchorAlongTrackM, 1.0)
+
+        // Tracked now -- this fix bails ("already_announced") without a fresh scan, reconstructing
+        // the same fact from the remembered anchor (BendCueProducer.resolveBend's O(1) path).
+        val second = producer.fix(1_000L, poly, 20.0, TravelDirection.Forward, Units.IMPERIAL)
+        assertNull(second.speech)
+        val secondBend = assertNotNull(second.bend, "the tracked-anchor path still populates bend")
+        assertEquals(100.0, secondBend.anchorAlongTrackM, 1.0)
+
+        // Yielding suppresses speech but must not suppress the fact itself.
+        val yielded = producer.fix(1_500L, poly, 40.0, TravelDirection.Forward, Units.IMPERIAL, lastSpokeAtMs = 1_400L)
+        assertEquals("bail:yield_100ms", yielded.disposition)
+        assertNotNull(yielded.bend, "a yielded fix still reports the current bend")
     }
 
     /** A right turn at along-track 60, then a left turn at along-track 160 -- two real bends. */

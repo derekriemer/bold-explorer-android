@@ -30,6 +30,8 @@ sealed class TrailRecordingState {
     data class Recording(
         val trailId: Long,
         val pointCount: Int,
+        /** Cumulative recorded length so far — the sum of each accepted point's step from the last. */
+        val distanceM: Double = 0.0,
     ) : TrailRecordingState()
 }
 
@@ -63,10 +65,16 @@ class TrailRecordingMachine {
         _state.value = TrailRecordingState.Recording(s.trailId, pointCount = 0)
     }
 
-    /** Record one captured track point. Only valid while recording. */
-    fun addPoint() {
+    /**
+     * Record one captured track point. Only valid while recording.
+     *
+     * @param deltaM the step from the last recorded point — `TrackPointDecision.Record
+     *   .fromLastRecordedM` at the call site — accumulated into [TrailRecordingState.Recording
+     *   .distanceM]. Defaults to zero so a caller that only cares about the count is unaffected.
+     */
+    fun addPoint(deltaM: Double = 0.0) {
         val s = _state.value as? TrailRecordingState.Recording ?: return reject("addPoint")
-        _state.value = s.copy(pointCount = s.pointCount + 1)
+        _state.value = s.copy(pointCount = s.pointCount + 1, distanceM = s.distanceM + deltaM)
     }
 
     /** Stop any active session, returning to [Selected]. Idempotent from idle/selected. */

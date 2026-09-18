@@ -1,5 +1,6 @@
 package com.boldexplorer.shared.navigation
 
+import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.model.TrailAnnotation
 import com.boldexplorer.shared.model.Waypoint
 import com.boldexplorer.shared.settings.Units
@@ -8,8 +9,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class AnnotationCueProducerTest {
-    private val bench = RouteAnnotation(1L, "Bench", alongTrackM = 100.0, signedCrossTrackM = 6.0)
-    private val pavilion = RouteAnnotation(2L, "Pavilion", alongTrackM = 300.0, signedCrossTrackM = -80.0)
+    // coordinate is unused by every test in this class (none exercise bearing-to-landmark) — a
+    // fixed placeholder, not a geometrically meaningful position for these along-track/cross-track
+    // cue-wording tests.
+    private val bench = RouteAnnotation(1L, "Bench", alongTrackM = 100.0, signedCrossTrackM = 6.0, coordinate = LatLng(0.0, 0.0))
+    private val pavilion = RouteAnnotation(2L, "Pavilion", alongTrackM = 300.0, signedCrossTrackM = -80.0, coordinate = LatLng(0.0, 0.0))
 
     private fun producer(vararg a: RouteAnnotation) =
         AnnotationCueProducer(a.toList(), TravelDirection.Forward)
@@ -171,5 +175,86 @@ class AnnotationCueProducerTest {
         val reverse = AnnotationCueProducer(landmarks, TravelDirection.Reverse)
         assertEquals(1, forward.onFix(95.0, 1.3, Units.IMPERIAL).size)
         assertEquals(1, reverse.onFix(105.0, 1.3, Units.IMPERIAL).size)
+    }
+
+    @Test
+    fun anOffTrailAnnotationsCoordinateIsItsOwnPositionNotTheTrailsNearestPoint() {
+        // A due-north trail, so eastM reads directly as cross-track offset (TrailFixtures.offsetFromOrigin's
+        // own doc). The waypoint sits 30 m east of the line -- polyline.positionAt(100.0) would
+        // instead return the on-line point at (100N, 0E), which is where this regression showed up
+        // (review finding, PR #144): the "Ahead" row's bearing pointed along the trail rather than
+        // at the actual landmark for any annotation placed beside it, not on it.
+        val polyline = TrailPolyline(listOf(offsetFromOrigin(0.0, 0.0), offsetFromOrigin(200.0, 0.0)))
+        val bench =
+            Waypoint(
+                id = 5L,
+                name = "Bench",
+                lat = offsetFromOrigin(northM = 100.0, eastM = 30.0).lat,
+                lon = offsetFromOrigin(northM = 100.0, eastM = 30.0).lon,
+                elevM = null,
+                description = null,
+                createdAt = 0L,
+            )
+        val landmarks =
+            routeAnnotationsForFollow(
+                polyline = polyline,
+                annotations = listOf(TrailAnnotation(1L, 1L, bench, segmentIndex = 0, offsetM = 0.0, createdAt = 0L)),
+                recordedPoints = emptyList(),
+                isRecorded = true,
+            )
+
+        val landmark = landmarks.single()
+        assertTrue(kotlin.math.abs(landmark.coordinate.lat - bench.lat) < 1e-9, "coordinate must be the annotation's own lat")
+        assertTrue(kotlin.math.abs(landmark.coordinate.lon - bench.lon) < 1e-9, "coordinate must be the annotation's own lon")
+        val onLinePoint = polyline.positionAt(landmark.alongTrackM)
+        assertTrue(
+            kotlin.math.abs(landmark.coordinate.lon - onLinePoint.lon) > 1e-6,
+            "coordinate must differ from the on-line reprojection for an off-trail annotation",
+        )
+    }
+}
+
+class NextAnnotationAheadTest {
+    // coordinate is unused here too — these tests only exercise along-track ordering.
+    private val bench = RouteAnnotation(1L, "Bench", alongTrackM = 100.0, signedCrossTrackM = 6.0, coordinate = LatLng(0.0, 0.0))
+    private val pavilion = RouteAnnotation(2L, "Pavilion", alongTrackM = 300.0, signedCrossTrackM = -80.0, coordinate = LatLng(0.0, 0.0))
+
+    @Test
+    fun findsTheNearestOneStrictlyAhead() {
+        val result = nextAnnotationAhead(listOf(bench, pavilion), alongTrackM = 50.0, TravelDirection.Forward)
+
+        assertEquals(bench, result)
+    }
+
+    @Test
+    fun movesOnToTheNextOneOnceTheFirstFallsBehind() {
+        val result = nextAnnotationAhead(listOf(bench, pavilion), alongTrackM = 150.0, TravelDirection.Forward)
+
+        assertEquals(pavilion, result)
+    }
+
+    @Test
+    fun returnsNullPastEveryAnnotation() {
+        val result = nextAnnotationAhead(listOf(bench, pavilion), alongTrackM = 350.0, TravelDirection.Forward)
+
+        assertEquals(null, result)
+    }
+
+    @Test
+    fun unlikeTheProducerItNeverForgetsAnAlreadySpokenOne() {
+        // The whole reason this is a separate, stateless function (see its own doc): a persistent
+        // row must keep showing the same upcoming landmark on every fix, not just the first one.
+        val first = nextAnnotationAhead(listOf(bench), alongTrackM = 50.0, TravelDirection.Forward)
+        val second = nextAnnotationAhead(listOf(bench), alongTrackM = 90.0, TravelDirection.Forward)
+
+        assertEquals(bench, first)
+        assertEquals(bench, second)
+    }
+
+    @Test
+    fun reverseTravelLooksBackward() {
+        val result = nextAnnotationAhead(listOf(bench, pavilion), alongTrackM = 250.0, TravelDirection.Reverse)
+
+        assertEquals(bench, result)
     }
 }

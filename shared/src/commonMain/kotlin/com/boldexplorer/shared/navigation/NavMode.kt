@@ -56,6 +56,7 @@ sealed class NavMode {
     data class RecordingTrail(
         val trailId: Long,
         val pointCount: Int,
+        val distanceM: Double,
     ) : NavMode()
 }
 

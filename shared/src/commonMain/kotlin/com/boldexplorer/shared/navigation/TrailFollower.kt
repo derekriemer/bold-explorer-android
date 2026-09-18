@@ -180,27 +180,40 @@ class TrailFollower(
         //    out (the ~65 ft field report). Completion instead uses a radius that tightens with
         //    good GPS and is capped so poor GPS can never widen it.
         //
+        //    Checked against the trail's fixed last point (#122), not `current.waypoints[currentIndex]`
+        //    — currentIndex only advances when one of checks 1-3 below fires, so a walker who reaches
+        //    the endpoint's coordinates without ever tripping one of those (several closely-spaced
+        //    points skipped, or a follow armed mid-trail near the end) could stand at the endpoint
+        //    indefinitely with the index still short of it, and this route would never fire for them.
+        //
         //    Gated on the *same* travel evidence as 0a, and for the same reason. Arming (ADR 0002)
         //    can anchor at the walker's actual position, so a follow begun at a loop's trailhead —
-        //    which is also its final track point — starts with the index already at the end and the
-        //    user inside a 5–6 m radius of it. Ungated, that announces the trail complete on the
-        //    first fix, before a step has been taken.
+        //    which is also its final track point — starts with the user inside a 5–6 m radius of it.
+        //    Ungated, that announces the trail complete on the first fix, before a step has been taken.
+        val endWaypoint = current.waypoints.last()
+        val dToEnd = haversineDistanceMeters(location, LatLng(endWaypoint.lat, endWaypoint.lon))
+        if (completion.travelled && dToEnd <= NavigationPolicy.completionRadiusM(accuracyM)) {
+            val atEnd = current.copy(currentIndex = current.waypoints.size - 1)
+            _state.value = atEnd
+            return fireAdvance(
+                atEnd,
+                location,
+                altitudeM,
+                null,
+                null,
+                null,
+                "endpoint",
+                accuracyM = accuracyM,
+                matchState = matchState,
+            )
+        }
+        // Once the index itself reaches the last waypoint, checks 1-3 below must not run — they are
+        // ungated on `completion.travelled`, and the same arming scenario above can leave the walker
+        // within a plain radial/projection distance of it before a step has been taken. The check
+        // just above already covers genuine arrival; anything else at the last index means "not
+        // there yet," so wait rather than fall through to a check that knows nothing about travel.
         if (current.currentIndex == current.waypoints.size - 1) {
-            return if (completion.travelled && d <= NavigationPolicy.completionRadiusM(accuracyM)) {
-                fireAdvance(
-                    current,
-                    location,
-                    altitudeM,
-                    null,
-                    null,
-                    null,
-                    "endpoint",
-                    accuracyM = accuracyM,
-                    matchState = matchState,
-                )
-            } else {
-                null
-            }
+            return null
         }
 
         // 1. Radial threshold — the primary, fast-path check.

@@ -113,6 +113,46 @@ class TrailFollowerTest {
     }
 
     @Test
+    fun radialEndpointCompletes_evenWithTheIndexNowhereNearTheEnd() {
+        // The "0b" completion route (#122): previously gated on `currentIndex == waypoints.size -
+        // 1`, so a walker who reached wp3's coordinates without ever tripping the radial/projection
+        // check that would have advanced the index there (several closely-spaced points skipped, or
+        // a follow armed mid-trail) could stand at the endpoint indefinitely and never complete —
+        // this route is distinct from `pastTheEnd_completesEvenWithTheIndexNowhereNearTheEnd` above,
+        // which covers matcher-geometry completion (0a); this one is the *radial* endpoint route,
+        // keyed on raw GPS distance to the trail's actual last point.
+        val f = TrailFollower()
+        f.start(listOf(wp1, wp2, wp3), thresholdM = 15.0)
+        assertEquals(0, (f.state.value as TrailFollowerState.Active).currentIndex, "precondition: index at the start")
+
+        // At wp3 itself: ~20 m from wp1 (index 0's target, outside the 15 m radial threshold, so
+        // check 1 cannot fire), and index 0 skips the projection check (requires currentIndex > 0)
+        // entirely — so only the new unconditional endpoint check can produce this event.
+        val event = f.onLocationUpdate(LatLng(wp3.lat, wp3.lon), completion = walked)
+
+        assertIs<TrailFollowerEvent.TrailComplete>(event)
+        assertIs<TrailFollowerState.Complete>(f.state.value)
+    }
+
+    @Test
+    fun radialEndpointWithoutTravelDoesNotComplete() {
+        // Same gate as pastTheEndWithoutTravelDoesNotComplete, for the radial (0b) route rather than
+        // the geometry (0a) one — arming can anchor a loop's trailhead, also its final track point,
+        // inside this same radius before a step has been taken.
+        val f = TrailFollower()
+        f.start(listOf(wp1, wp2, wp3), thresholdM = 15.0)
+
+        val event =
+            f.onLocationUpdate(
+                LatLng(wp3.lat, wp3.lon),
+                completion = CompletionEvidence(pastTheEnd = false, travelled = false),
+            )
+
+        assertNull(event, "completed a trail the session had not walked")
+        assertIs<TrailFollowerState.Active>(f.state.value)
+    }
+
+    @Test
     fun pastTheEndWithoutTravelDoesNotComplete() {
         // Being at the end is not evidence of having walked to it — a loop's start is also its end.
         val f = TrailFollower()

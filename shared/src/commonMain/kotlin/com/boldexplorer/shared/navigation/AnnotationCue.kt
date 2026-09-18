@@ -11,13 +11,20 @@ import kotlin.math.abs
  *
  * [alongTrackM] comes from `TrailPolyline.alongTrackFor` over the stored `(segment, offset)` pair;
  * [signedCrossTrackM] is positive to the right of recorded order, so the *walker's* left and right
- * follow from the travel direction rather than from the recording.
+ * follow from the travel direction rather than from the recording. [coordinate] is the annotation's
+ * own real position — deliberately kept alongside the along-track pair rather than derived from it:
+ * `TrailPolyline.positionAt(alongTrackM)` returns only the on-line point, ignoring cross-track
+ * entirely, so any caller needing "where this landmark actually is" (not "where the trail is level
+ * with it") needs the real coordinate, not a reprojection (#104 review finding, PR #144 — the
+ * "Ahead" row's bearing was pointing along the trail rather than at the landmark for any annotation
+ * placed beside it, e.g. a bench found via `candidates()` with a nonzero `signedCrossTrackM`).
  */
 data class RouteAnnotation(
     val id: Long,
     val name: String,
     val alongTrackM: Double,
     val signedCrossTrackM: Double,
+    val coordinate: LatLng,
 )
 
 /**
@@ -48,6 +55,7 @@ fun routeAnnotationsForFollow(
                     name = annotation.waypoint.name,
                     alongTrackM = position.alongTrackM,
                     signedCrossTrackM = position.crossTrackM,
+                    coordinate = point,
                 )
             }
         }
@@ -62,10 +70,27 @@ fun routeAnnotationsForFollow(
                 name = point.name,
                 alongTrackM = polyline.cumulativeM[index],
                 signedCrossTrackM = 0.0,
+                coordinate = LatLng(point.lat, point.lon),
             )
         }
     return attached + vertices
 }
+
+/**
+ * The nearest [RouteAnnotation] still ahead of [alongTrackM] in [direction], or `null` if none
+ * remain — the row-composition analogue of [BendDetector.findNextBend]. Stateless and
+ * side-effect-free on purpose, unlike [AnnotationCueProducer]: that class's `announced` set answers
+ * "what hasn't been spoken yet," which is the wrong question for a persistent on-screen row that
+ * should keep showing the same upcoming landmark even after it has been spoken about.
+ */
+fun nextAnnotationAhead(
+    annotations: List<RouteAnnotation>,
+    alongTrackM: Double,
+    direction: TravelDirection,
+): RouteAnnotation? =
+    annotations
+        .filter { (it.alongTrackM - alongTrackM) * direction.sign > 0.0 }
+        .minByOrNull { (it.alongTrackM - alongTrackM) * direction.sign }
 
 /**
  * Announces annotations as the walker comes up on them.

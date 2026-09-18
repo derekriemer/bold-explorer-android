@@ -141,10 +141,10 @@ class NavModeResolverTest {
     fun recording_winsOverTrailEndTarget() =
         runTest(UnconfinedTestDispatcher()) {
             explorerState.value = active(trailEnd(1, isStart = true, lat = 0.0, lon = 0.0), nearTrailEndM = 5.0)
-            recordingState.value = TrailRecordingState.Recording(trailId = 1, pointCount = 7)
+            recordingState.value = TrailRecordingState.Recording(trailId = 1, pointCount = 7, distanceM = 42.0)
             val r = settledResolver()
 
-            assertEquals(NavMode.RecordingTrail(1, 7), r.navMode.value)
+            assertEquals(NavMode.RecordingTrail(1, 7, 42.0), r.navMode.value)
         }
 
     // ── (d) AtTrailEnd geometry: Follow vs Extend ─────────────────────────────────────────────
