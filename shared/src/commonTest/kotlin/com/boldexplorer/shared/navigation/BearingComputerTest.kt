@@ -85,6 +85,15 @@ class BearingComputerTest {
     }
 
     // ---------- computeAlignmentPan ----------
+    //
+    // The old design mapped a sine curve onto ±45° and then hard-clamped flat beyond it: that sine
+    // already went nearly flat approaching its own ±45° edge (well before the clamp even kicked in),
+    // and the clamp pinned pan at +1 approaching 180° from one side but -1 approaching -180° from the
+    // other -- an audible snap when slowly turning past directly-away-from-target. The replacement is
+    // one continuous curve for the whole ±180° range: steeper than plain sin() near dead-ahead (so
+    // centering keeps good resolution), but converging to the same value (0.0) from both sides as it
+    // approaches ±180°, matching how the ordinary beacon's [computePan] already treats "behind" as
+    // centred -- so crossing that point is inaudible instead of a jump.
 
     @Test
     fun computeAlignmentPan_at0deg_isZero() {
@@ -92,21 +101,47 @@ class BearingComputerTest {
     }
 
     @Test
-    fun computeAlignmentPan_at15deg_isHalfRight() {
-        assertEquals(0.5f, BearingComputer.computeAlignmentPan(15.0), absoluteTolerance = 1e-6f)
+    fun computeAlignmentPan_isOddSymmetric() {
+        for (deg in -180..180 step 5) {
+            val pos = BearingComputer.computeAlignmentPan(deg.toDouble())
+            val neg = BearingComputer.computeAlignmentPan(-deg.toDouble())
+            assertEquals(pos, -neg, absoluteTolerance = 1e-6f, message = "asymmetric at $deg°")
+        }
     }
 
     @Test
-    fun computeAlignmentPan_atMinus15deg_isHalfLeft() {
-        assertEquals(-0.5f, BearingComputer.computeAlignmentPan(-15.0), absoluteTolerance = 1e-6f)
+    fun computeAlignmentPan_nearCentre_isSteeperThanPlainSin() {
+        // The whole point of a dedicated alignment curve: more resolution near dead-ahead than the
+        // ordinary beacon's plain sin(relativeDeg) gives.
+        val alignment = BearingComputer.computeAlignmentPan(15.0)
+        val plain = BearingComputer.computePan(15.0)
+        assertTrue(alignment > plain, "expected alignment pan ($alignment) > plain sin pan ($plain) at 15°")
     }
 
     @Test
-    fun computeAlignmentPan_saturatesAt45deg() {
-        assertEquals(1.0f, BearingComputer.computeAlignmentPan(45.0), absoluteTolerance = 1e-6f)
-        assertEquals(-1.0f, BearingComputer.computeAlignmentPan(-45.0), absoluteTolerance = 1e-6f)
-        assertEquals(1.0f, BearingComputer.computeAlignmentPan(180.0), absoluteTolerance = 1e-6f)
-        assertEquals(-1.0f, BearingComputer.computeAlignmentPan(-180.0), absoluteTolerance = 1e-6f)
+    fun computeAlignmentPan_at180deg_isZero() {
+        assertEquals(0.0f, BearingComputer.computeAlignmentPan(180.0), absoluteTolerance = 1e-4f)
+        assertEquals(0.0f, BearingComputer.computeAlignmentPan(-180.0), absoluteTolerance = 1e-4f)
+    }
+
+    @Test
+    fun computeAlignmentPan_hasNoJumpCrossingBehindTarget() {
+        // 179.9° and -179.9° are physically 0.2° apart (both mean "almost directly behind"); a
+        // continuous mapping must treat them almost identically instead of snapping between them.
+        val justPositive = BearingComputer.computeAlignmentPan(179.9)
+        val justNegative = BearingComputer.computeAlignmentPan(-179.9)
+        assertTrue(
+            abs(justPositive - justNegative) < 0.01f,
+            "expected near-identical pan either side of ±180°, got $justPositive vs $justNegative",
+        )
+    }
+
+    @Test
+    fun computeAlignmentPan_neverExceedsBounds() {
+        for (deg in -180..180) {
+            val pan = BearingComputer.computeAlignmentPan(deg.toDouble())
+            assertTrue(pan >= -1.0f && pan <= 1.0f, "pan out of bounds at $deg°: $pan")
+        }
     }
 
     // ---------- toAlignmentRelative ----------

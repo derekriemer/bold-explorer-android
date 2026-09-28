@@ -6,6 +6,7 @@ import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.pow
 import kotlin.math.roundToInt
+import kotlin.math.sign
 import kotlin.math.sin
 
 // Port of src/composables/useBearingDistance.ts pure functions.
@@ -97,11 +98,26 @@ object BearingComputer {
     // sin is bounded to [-1, 1] so no coercion needed.
     fun computePan(relativeDeg: Double): Float = sin(relativeDeg * PI / 180.0).toFloat()
 
-    // Alignment uses the full stereo range within ±45° so small heading errors are easier to hear.
-    // Saturating outside that range preserves turn direction without wrapping back toward centre.
+    // Alignment pan, continuous across the full ±180°: warps the angle through a sub-linear power
+    // curve (ALIGNMENT_PAN_CURVE < 1) before mapping through sin, instead of the old design's sine
+    // scaled to fill ±45° and then hard-clamped flat beyond it. That old design had two real
+    // problems, both field-confirmed: (1) a sine's own slope shrinks to near-zero approaching its
+    // ±1 peak, and the scaled mapping hit that peak exactly at the 45° edge — so pan was already
+    // going flat over roughly the outer half of the "high resolution" cone, well before the edge,
+    // while pitch (unscaled cosine over the full 180°) kept moving; (2) the hard clamp pinned pan at
+    // exactly +1 approaching 180° from one side and -1 approaching -180° from the other, so slowly
+    // turning past directly-away-from-target snapped pan hard left/right in one instant.
+    // This mapping fixes both: it's steepest near 0° (so centering still has plenty of resolution),
+    // never truly flattens in the middle of the range, and — critically — returns to the same value
+    // (0.0) approaching ±180° from both directions, exactly like the ordinary [computePan], so
+    // crossing that point is inaudible instead of a jump. Lower ALIGNMENT_PAN_CURVE = more
+    // resolution weighted toward dead-ahead; 1.0 would reduce this to plain sin(relativeDeg).
+    private const val ALIGNMENT_PAN_CURVE = 0.6
+
     fun computeAlignmentPan(relativeDeg: Double): Float {
-        val normalized = (relativeDeg / 45.0).coerceIn(-1.0, 1.0)
-        return sin(normalized * PI / 2.0).toFloat()
+        val theta = relativeDeg.coerceIn(-180.0, 180.0)
+        val warpedDeg = sign(theta) * 180.0 * (abs(theta) / 180.0).pow(ALIGNMENT_PAN_CURVE)
+        return sin(warpedDeg * PI / 180.0).toFloat()
     }
 
     // Returns the beacon pitch in Hz — logarithmic / musical mapping:
