@@ -98,8 +98,18 @@ enum class ScanKind {
  *   scan found only one place the user could be.
  * @property unmatchedCount consecutive fixes that produced no accepted match.
  * @property uncertainSec seconds since the last confirmed match.
- * @property travelledM confirmed along-track distance accumulated this session. Reckoned and
- *   unconfirmed movement never contribute, and neither does a reacquisition jump.
+ * @property travelledM sum of the net along-track range (`max − min`) covered by each unbroken run
+ *   of confirmed, contiguous positions this session, not cumulative path length — oscillation
+ *   (vertex-pinning jitter, a mis-acquisition that self-corrects) cannot inflate it, because moving
+ *   back and forth within an already-covered range can't widen either bound (#81, field-confirmed
+ *   2026-08-17: a cumulative sum reached 87 m of "travel" from ~20 m of net progress and 40 m of
+ *   oscillation alone). Reckoned and unconfirmed movement never contribute, and neither does a
+ *   reacquisition jump — `contiguous = false` marks exactly that case (see
+ *   `ProgressTracker.attemptCorroboration`'s own doc: "a jump, not walking") — and a jump also
+ *   closes out and permanently banks whatever run preceded it, so a later contiguous step measures
+ *   only ground covered *after* the jump, never against a stale pre-jump bound (review finding,
+ *   PR #144/#145: a session-wide range, rather than one per contiguous run, let an unrelated
+ *   reacquisition re-seed the range without closing the old one).
  * @property windowM the along-track window searched, or `null` for a global or skipped scan.
  * @property budgetM half-width of that window in metres.
  * @property predictionErrorM `predictedAlongM − confirmedAlongM` at the moment geometry returned,

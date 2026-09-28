@@ -101,8 +101,47 @@ class ProgressTracker(
     /** Reckoned distance since the last confirmed match — one half of the horizon. */
     private var reckonedM: Double = 0.0
 
-    /** Confirmed, contiguous along-track travel this session. Gates completion. */
-    private var travelledM: Double = 0.0
+    /**
+     * Net along-track range covered so far by the *current unbroken run* of contiguous confirms
+     * (`max - min` within the run) — gates completion via [TrailMatch.travelledM] together with
+     * [completedRunsM].
+     *
+     * A running `sum += abs(delta)` (the original implementation) counts oscillation as travel: a
+     * mis-acquisition or a windowed matcher's vertex-pinning jitter that walks `alongTrackM` back
+     * and forth by a few metres for a few minutes accumulates real "distance" without the walker
+     * having gone anywhere net. Field-confirmed (#81, 2026-08-17): a 51-point loop announced "Trail
+     * complete" 3.5 minutes in, having net-walked ~20 m, because the sum had reached 87 m from
+     * ~40 m of vertex oscillation alone. `max - min` *within one run* is immune to this by
+     * construction — oscillating within an already-covered range can't move either bound.
+     *
+     * Split into a per-run range plus [completedRunsM] rather than one session-wide range because a
+     * session-wide range has the same defect the old sum did, just relocated: a first attempt at
+     * this fix widened one min/max pair across the *whole* session, gated on `contiguous` only for
+     * whether a given confirm could move the bounds. That still let an unrelated reacquisition jump
+     * poison every contiguous step afterward — walk 0 to 20 m, reacquire (non-contiguous) at 100 m
+     * after a mis-acquisition, then confirm 105 m, and the *next* contiguous step still measures
+     * against the pre-jump minimum of 0, reporting 105 m of "travel" instead of the genuine 25 m
+     * (20 m walked, then 5 m more after the jump) — the reacquisition itself contributed nothing on
+     * its own, but the range it re-seeded kept remembering ground from before the jump forever.
+     * Found in review, PR #144/#145. A non-contiguous confirm now closes out whatever run was
+     * active — banking its net range into [completedRunsM], never to be widened again — and starts
+     * a fresh run seeded at the jump's own landing point, so a later contiguous step measures only
+     * against ground actually covered *after* the jump.
+     */
+    private var runMinAlongM: Double? = null
+    private var runMaxAlongM: Double? = null
+
+    /** Net range of every contiguous run that has already been closed out by a non-contiguous confirm. */
+    private var completedRunsM: Double = 0.0
+
+    /** [TrailMatch.travelledM]'s value: completed runs plus whatever the current run has covered so far. */
+    private val travelledM: Double
+        get() {
+            val loM = runMinAlongM
+            val hiM = runMaxAlongM
+            val currentRunM = if (loM != null && hiM != null) hiM - loM else 0.0
+            return completedRunsM + currentRunM
+        }
 
     private var unmatchedCount: Int = 0
     private var lastFixMs: Long? = null
@@ -488,7 +527,39 @@ class ProgressTracker(
         disposition: String,
     ): TrailMatch {
         val previous = confirmedAlongM
-        if (contiguous && previous != null) travelledM += abs(position.alongTrackM - previous)
+        // Same contiguous gate the old sum used, and for the same reason: `contiguous = false`
+        // marks a reacquisition or initial acquisition specifically *because* it is a jump, not
+        // walking (see attemptCorroboration's and acquire's own doc comments) — a matcher's
+        // "confirmed" position is not, on its own, proof the walker actually covered the ground
+        // between there and wherever they were last confirmed. attemptWindowed (the only
+        // contiguous=true caller) requires a non-null confirmedAlongM to even run, so
+        // `contiguous == false` is the complete complement of "extend the run" here — it covers
+        // both the very first confirm of a session and every reacquisition alike.
+        if (contiguous && previous != null) {
+            // Extend the current run — folding in both `previous` and `position.alongTrackM` (not
+            // just the latter) means the very first contiguous step after a jump still seeds the
+            // run from the jump's landing point, exactly as the old sum's first post-jump
+            // `abs(new - previous)` term did.
+            runMinAlongM = minOf(runMinAlongM ?: previous, previous, position.alongTrackM)
+            runMaxAlongM = maxOf(runMaxAlongM ?: previous, previous, position.alongTrackM)
+        } else {
+            // A jump closes out whatever run was active — banking its net range permanently into
+            // completedRunsM, never to be widened again — and starts a fresh run seeded at the
+            // jump's own landing point. A first attempt at this fix widened one min/max pair across
+            // the *whole* session, gated on `contiguous` only for whether a confirm could move the
+            // bounds — that still let an unrelated reacquisition re-seed the range without closing
+            // the old one, so a later contiguous step kept measuring against ground from before the
+            // jump (review finding, PR #144/#145: walk 0 to 20 m, mis-acquire at 100 m, confirm
+            // 105 m — the next contiguous step reported 105 m of "travel" against the stale 0 m
+            // floor instead of the genuine 25 m). Resetting here is what makes a jump's own bounds
+            // die with it. A degenerate first-ever confirm (previous == null) banks nothing (both
+            // run bounds are still null) before seeding, which is the correct no-op.
+            val loM = runMinAlongM
+            val hiM = runMaxAlongM
+            if (loM != null && hiM != null) completedRunsM += (hiM - loM)
+            runMinAlongM = position.alongTrackM
+            runMaxAlongM = position.alongTrackM
+        }
 
         // Only meaningful where geometry has just returned after an absence; a steady run of
         // matches resets prediction every fix, so the error would be trivially ~0.

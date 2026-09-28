@@ -95,6 +95,31 @@ class TrailGuidanceTest {
     }
 
     @Test
+    fun distanceToTargetM_isAlongTrackRemainingNotStraightLineToTheCurrentIndexWaypoint() {
+        // B sits ~111 m along the trail from A; C sits another ~222 m past B, so the trail totals
+        // ~333 m. The follower's index hasn't advanced off A below (no onLocationUpdate call), so
+        // the old straight-line-to-currentTarget distance would read ~111 m — back toward the
+        // start, behind the walker — while the along-track remaining distance to the actual
+        // endpoint is ~222 m (#122/#127: this is the field-reported "beacon vs. speech disagree"
+        // split — distanceToTargetM used to be this straight-line reading, paired with a
+        // relativeDeg already sourced from the matcher).
+        val far = TrailPoint(3, "C", 0.003, 0.0)
+        val follower = TrailFollower()
+        follower.start(listOf(northA, northB, far), thresholdM = 15.0)
+
+        val sample = sample(lat = northB.lat, lon = northB.lon)
+        val guidance = guidanceFor(follower, sample, trustedCourse = null)
+
+        assertNotNull(guidance)
+        assertEquals(0, guidance.targetIndex, "precondition: index has not advanced off A")
+        val distanceToTargetM = assertNotNull(guidance.distanceToTargetM)
+        assertTrue(
+            distanceToTargetM > 150.0,
+            "expected along-track remaining (~222 m) to the endpoint, not straight-line back to A (~111 m); got $distanceToTargetM",
+        )
+    }
+
+    @Test
     fun singlePointTrail_hasNoTrustworthyTrailCourse() {
         val follower = TrailFollower()
         follower.start(listOf(northA), thresholdM = 1.0)

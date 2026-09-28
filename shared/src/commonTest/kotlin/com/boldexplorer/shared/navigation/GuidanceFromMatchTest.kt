@@ -123,7 +123,8 @@ class GuidanceFromMatchTest {
 
         assertNull(guidance.desiredCourseDeg, "Lost must not produce a course")
         assertNull(guidance.relativeDeg, "a missing course cannot produce a relative direction")
-        assertTrue(guidance.distanceToTargetM > 0.0, "Lost must retain course-independent target context")
+        val distanceToTargetM = assertNotNull(guidance.distanceToTargetM, "Lost must retain course-independent target context")
+        assertTrue(distanceToTargetM > 0.0, "Lost must retain course-independent target context")
     }
 
     @Test

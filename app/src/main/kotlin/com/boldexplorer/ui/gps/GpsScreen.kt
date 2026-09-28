@@ -51,6 +51,7 @@ import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.haversineDistanceMeters
 import com.boldexplorer.shared.model.LocationSample
 import com.boldexplorer.shared.model.Trail
+import com.boldexplorer.shared.navigation.Bend
 import com.boldexplorer.shared.navigation.BearingComputer
 import com.boldexplorer.shared.navigation.CollectionExplorerState
 import com.boldexplorer.shared.navigation.CollectionPoint
@@ -58,10 +59,14 @@ import com.boldexplorer.shared.navigation.DirectionDescriptor
 import com.boldexplorer.shared.navigation.FollowOption
 import com.boldexplorer.shared.navigation.MatchState
 import com.boldexplorer.shared.navigation.NavMode
+import com.boldexplorer.shared.navigation.NavigationPolicy
 import com.boldexplorer.shared.navigation.TrailEndAction
 import com.boldexplorer.shared.navigation.TrailFollowerState
 import com.boldexplorer.shared.navigation.TrailRecordingState
+import com.boldexplorer.shared.navigation.TurnSeverity
+import com.boldexplorer.shared.navigation.label
 import com.boldexplorer.shared.settings.AppSettings
+import com.boldexplorer.shared.settings.BearingDisplayMode
 import com.boldexplorer.shared.settings.Units
 import com.boldexplorer.ui.common.CollectionDropdown
 import com.boldexplorer.ui.common.CreateItemDialog
@@ -370,63 +375,25 @@ private fun TelemetryCard(
                     ),
             )
 
-            val bearingLabel = state.targetName?.let { "Bearing to $it" } ?: "Bearing"
-            val directionText =
-                when (state.settings.bearingDisplayMode) {
-                    com.boldexplorer.shared.settings.BearingDisplayMode.RELATIVE -> {
-                        state.relativeDeg?.let { BearingComputer.toRelative(it) } ?: "—"
-                    }
-
-                    com.boldexplorer.shared.settings.BearingDisplayMode.CLOCK -> {
-                        state.relativeDeg?.let { BearingComputer.toClock(it) } ?: "—"
-                    }
-
-                    com.boldexplorer.shared.settings.BearingDisplayMode.TRUE_NORTH -> {
-                        state.bearingDeg?.let { "${BearingComputer.toCardinal(it)} (${"%.0f".format(it)}°)" } ?: "—"
-                    }
-                }
-            // #23: bearingDeg/distanceM freeze on the last accepted GPS fix when new fixes stop
-            // arriving; hedge instead of silently repeating a frozen number as if it were live.
-            val staleSuffix = if (state.locationStale) " (GPS signal weak, may be outdated)" else ""
-            TelemetryRow(
-                label = bearingLabel,
-                value = if (directionText != "—") directionText + staleSuffix else directionText,
-                // #37: on the row's own merged node (like "Open alignment" on Heading above) rather
-                // than the Card's customActions, which sits beside several already-merged rows and
-                // isn't reliably reachable as its own TalkBack stop.
-                customActions =
-                    if ((state.collectionExplorerState as? CollectionExplorerState.Active)?.target != null) {
-                        listOf(
-                            CustomAccessibilityAction("Clear waypoint target") {
-                                onAction(GpsAction.ClearCollectionTarget)
-                                true
-                            },
-                        )
-                    } else {
-                        emptyList()
-                    },
-            )
-
-            val distText =
-                state.distanceM?.let {
-                    BearingComputer.formatDistance(it, state.settings.units) + staleSuffix
-                } ?: "—"
-            TelemetryRow(label = "Distance to target", value = distText)
-
-            // #66: merged trail-follow row, distinct from "Distance to target" above (that one is
-            // straight-line to whatever waypoint/POI is targeted; this is distance remaining
-            // *along* the trail, only meaningful during an active follow). Not a live region —
-            // readable on demand, same as the rows around it.
-            if (state.trailFollowState is TrailFollowerState.Active) {
-                val trailText =
-                    trailRowText(
-                        state.trailRemainingM,
-                        state.trailMatchState,
-                        state.trailTravelled,
-                        state.locationStale,
-                        state.settings.units,
-                    )
-                TelemetryRow(label = "Trail", value = trailText)
+            // #104: which rows make sense here is a function of *what the user is doing*, not a
+            // fixed set hedged down to "—" when it doesn't apply — that soup (a "Bearing"/
+            // "Distance to target" pair permanently visible and blank whenever nothing is
+            // targeted) is what this composition replaces.
+            //
+            // The waypoint rows are keyed on whether NavigationTargetResolver actually has a
+            // target (targetName != null), not on which NavMode variant is active (bug found in
+            // the field, 2026-09-10: keying on `is NavMode.CollectionTarget` missed a real,
+            // still-targeted waypoint whenever NavModeResolver's own precedence chose NearTrail or
+            // an actionless AtTrailEnd instead — e.g. simply being near *any* followable trail in
+            // the collection while a plain waypoint elsewhere was still the explorer's target).
+            // NavigationTargetResolver reads trailFollowState/explorerState directly and doesn't
+            // go through NavMode at all, so it stays correct regardless of which NavMode variant
+            // NavModeResolver's separate (and separately-precedenced) button-affordance logic
+            // lands on.
+            when (val mode = state.navMode) {
+                is NavMode.FollowingTrail -> FollowTrailRows(state)
+                is NavMode.RecordingTrail -> RecordingRows(state, mode, onAction)
+                else -> if (state.targetName != null) WaypointTargetRows(state, onAction)
             }
 
             val accText =
@@ -443,6 +410,107 @@ private fun TelemetryCard(
                 } ?: "—"
             TelemetryRow(label = "Last announcement", value = lastOutputText)
         }
+    }
+}
+
+/**
+ * One terse row for the straight-line target — collapsed from the former "Bearing to X" /
+ * "Distance to target" pair (owner, 2026-09-10: "get rid of the distance to target and just make
+ * it much shorter text... important information, no filler words"). "530 ft, 2 o'clock, Bob's
+ * house" rather than "Bearing to Bob's house: 2 o'clock" + "Distance to target: 530 ft" — the name
+ * only needs saying once, and a dedicated label for each half was overhead once both live in one
+ * row. Distance is deliberately *not* rounded to the nearest 10 m the way the trail-follow rows
+ * are (#66's churn rule) — this target is stationary, not a continuously advancing along-track
+ * figure, so there is no per-fix jitter to round away, and the un-rounded reading is the more
+ * useful one to act on.
+ *
+ * [TelemetryCard] slots this in wherever [GpsUiState.targetName] is actually set, regardless of
+ * which [NavMode] NavModeResolver's separate button-affordance logic landed on — and, since
+ * recording doesn't clear an explorer target, optionally alongside [RecordingRows] too.
+ */
+@Composable
+private fun WaypointTargetRows(
+    state: GpsUiState,
+    onAction: (GpsAction) -> Unit,
+) {
+    val name = state.targetName ?: return
+    val directionText =
+        when (state.settings.bearingDisplayMode) {
+            BearingDisplayMode.RELATIVE -> state.relativeDeg?.let { BearingComputer.toRelative(it) }
+            BearingDisplayMode.CLOCK -> state.relativeDeg?.let { BearingComputer.toClock(it) }
+            // TRUE_NORTH keeps its own absolute-bearing meaning here (unlike the Turn/Ahead rows'
+            // fallback to a relative label) — an actual compass bearing to a stationary point is a
+            // coherent answer this mode has always given, not a case with no absolute analogue.
+            BearingDisplayMode.TRUE_NORTH -> state.bearingDeg?.let { "${BearingComputer.toCardinal(it)} (${"%.0f".format(it)}°)" }
+        }
+    val distText = state.distanceM?.let { BearingComputer.formatDistance(it, state.settings.units) }
+    // #23: bearingDeg/distanceM freeze on the last accepted GPS fix when new fixes stop arriving;
+    // hedge instead of silently repeating a frozen number as if it were live.
+    val staleSuffix = if (state.locationStale) " (GPS signal weak, may be outdated)" else ""
+    val value =
+        listOfNotNull(distText, directionText, name).joinToString(", ") + staleSuffix
+    TelemetryRow(
+        label = "Target",
+        value = value,
+        // #37: on the row's own merged node (like "Open alignment" on Heading) rather than the
+        // Card's customActions, which sits beside several already-merged rows and isn't reliably
+        // reachable as its own TalkBack stop.
+        customActions =
+            if ((state.collectionExplorerState as? CollectionExplorerState.Active)?.target != null) {
+                listOf(
+                    CustomAccessibilityAction("Clear waypoint target") {
+                        onAction(GpsAction.ClearCollectionTarget)
+                        true
+                    },
+                )
+            } else {
+                emptyList()
+            },
+    )
+}
+
+/**
+ * Rows for [NavMode.FollowingTrail] (#104): the next turn, distance remaining to the trail's end,
+ * and the next named landmark ahead if there is one — replacing the straight-line "Bearing to X" /
+ * "Distance to target" pair, which during a follow used to point at whatever waypoint
+ * `TrailFollower.currentIndex` happened to be on rather than anything a walker asked about.
+ */
+@Composable
+private fun FollowTrailRows(state: GpsUiState) {
+    state.trailNextTurn?.let { bend ->
+        TelemetryRow(label = "Turn", value = turnRowValue(bend, state.settings.bearingDisplayMode, state.settings.units))
+    }
+    TelemetryRow(
+        label = "Trail",
+        value =
+            trailRemainingRowText(
+                state.trailRemainingM,
+                state.trailMatchState,
+                state.trailTravelled,
+                state.locationStale,
+                state.settings.units,
+            ),
+    )
+    state.trailNextWaypoint?.let { wp ->
+        TelemetryRow(label = "Ahead", value = nextWaypointRowValue(wp, state.settings.bearingDisplayMode, state.settings.units))
+    }
+}
+
+/**
+ * Rows for [NavMode.RecordingTrail] (#104): points recorded and distance covered so far, plus the
+ * usual waypoint rows if an explorer target is still set — recording and the explorer target are
+ * independent state, so heading toward a landmark while laying down a new trail is a real case, not
+ * a leftover.
+ */
+@Composable
+private fun RecordingRows(
+    state: GpsUiState,
+    mode: NavMode.RecordingTrail,
+    onAction: (GpsAction) -> Unit,
+) {
+    TelemetryRow(label = "Recording", value = recordingRowValue(mode.distanceM, mode.pointCount, state.settings.units))
+    if (state.targetName != null) {
+        WaypointTargetRows(state, onAction)
     }
 }
 
@@ -920,15 +988,15 @@ private fun RecordNewTrailButton(
 }
 
 /**
- * Merged trail-follow status text for the "Trail" row (#66).
+ * Distance-remaining text for the "Trail" row (#66/#104) — no longer carries the next turn, which
+ * is its own row now ([turnRowValue]) since #104's per-navMode composition gave it room to.
  *
- * Rounds to the nearest 10 m per #66's own churn rule — nobody acts on 337 vs. 340 metres, and a
- * value that only changes when it means something is worth reading on a swipe-to row that isn't a
- * live region. [matchState] hedges the wording rather than the number: [remainingM] is derived from
- * `TrailMatch.confirmedAlongM`, which freezes for the whole Uncertain/Lost span, so a non-Matched
- * state means this number is a last-confirmed reading, not a live one (#67).
+ * Rounds per [roundedDistanceText]'s churn rule. [matchState] hedges the wording rather than the
+ * number: [remainingM] is derived from `TrailMatch.confirmedAlongM`, which freezes for the whole
+ * Uncertain/Lost span, so a non-Matched state means this number is a last-confirmed reading, not a
+ * live one (#67).
  */
-private fun trailRowText(
+private fun trailRemainingRowText(
     remainingM: Double?,
     matchState: MatchState?,
     travelled: Boolean,
@@ -936,8 +1004,7 @@ private fun trailRowText(
     units: Units,
 ): String {
     if (remainingM == null) return "Not yet tracking position"
-    val rounded = (remainingM / 10.0).roundToInt() * 10.0
-    val distText = BearingComputer.formatDistance(rounded, units)
+    val distText = roundedDistanceText(remainingM, units)
     // #23: matchState alone can't detect GPS callbacks stopping outright — the matcher only
     // reassesses on a new fix, so it can stay Matched while the number goes stale. Same hedge the
     // Bearing/Distance rows above already give for the same reason.
@@ -951,6 +1018,91 @@ private fun trailRowText(
         !travelled -> "not yet confirmed, roughly $distText remaining$staleSuffix"
         else -> "$distText remaining$staleSuffix"
     }
+}
+
+/**
+ * "10 feet, slight right" while approaching; just "slight right" (or "2 o'clock" in CLOCK mode)
+ * once within [NavigationPolicy.TURN_AT_ANCHOR_M] — a distance figure at that range is noise, not
+ * information, mirroring `BendCueProducer`'s own AT_TURN wording, which drops distance for the same
+ * reason.
+ *
+ * [BearingDisplayMode.CLOCK]'s clock position is deliberately *not* used while still approaching
+ * (owner correction, 2026-09-09): from a distance, a clock position answers "where is something
+ * relative to me right now", which isn't what a turn amount up ahead means — the severity label
+ * ("slight right") is the only sensible preview. Once actually at the turn, "2 o'clock" reads as a
+ * live turn instruction the same way a bearing does, so the preference applies there. [TurnSeverity]
+ * (not [BearingComputer.toRelative]) supplies the label either way — it is the one place this app's
+ * turn-severity wording lives (#126), separate from `toRelative`'s real-time steering buckets.
+ * TRUE_NORTH has no absolute-bearing analogue for "how much does the trail turn", so it falls back
+ * to the severity label too, at the turn as well as approaching it.
+ */
+private fun turnRowValue(
+    bend: Bend,
+    mode: BearingDisplayMode,
+    units: Units,
+): String {
+    val severityLabel = TurnSeverity.of(bend.turnDeg).label()
+    if (bend.distanceAheadM > NavigationPolicy.TURN_AT_ANCHOR_M) {
+        return "${roundedDistanceText(bend.distanceAheadM, units)}, $severityLabel"
+    }
+    return when (mode) {
+        BearingDisplayMode.CLOCK -> BearingComputer.toClock(bend.turnDeg)
+        BearingDisplayMode.RELATIVE, BearingDisplayMode.TRUE_NORTH -> severityLabel
+    }
+}
+
+/**
+ * Rounds to the nearest 10 m per #66's own churn rule — nobody acts on 337 vs. 340 metres, and a
+ * value that only changes when it means something is worth reading on a swipe-to row that isn't a
+ * live region. Below 10 m that same rule would collapse every close distance into "0" or "10" and
+ * throw away exactly the precision that matters most there: the difference between "basically there"
+ * and "a bit further to go" is the whole point once you're this close (owner correction, 2026-09-09)
+ * — so under 10 m this passes the raw metres through, and [BearingComputer.formatDistance] rounds
+ * only to the nearest whole displayed unit, same as it always does.
+ */
+private fun roundedDistanceText(
+    meters: Double,
+    units: Units,
+): String {
+    val rounded = if (meters < 10.0) meters else (meters / 10.0).roundToInt() * 10.0
+    return BearingComputer.formatDistance(rounded, units)
+}
+
+/**
+ * "1084 ft, 2 o'clock, Bob's house" for the "Ahead" row ([FollowTrailRows]) — [NextWaypointInfo
+ * .aheadM] is along-track (how far you actually walk), [NextWaypointInfo.relativeDeg] the
+ * straight-line bearing to the waypoint's coordinate (it can sit around a bend from here), through
+ * [BearingComputer.toRelative]/[BearingComputer.toClock] — the same classifier the existing
+ * "Bearing to X" row uses for a point target, since this *is* a point target, unlike [turnRowValue]'s
+ * turn amount, so (unlike that row) the display-mode preference applies at any distance here. Null
+ * [NextWaypointInfo.relativeDeg] (no trusted course yet) drops the direction rather than showing a
+ * stale or fabricated one.
+ */
+private fun nextWaypointRowValue(
+    info: NextWaypointInfo,
+    mode: BearingDisplayMode,
+    units: Units,
+): String {
+    val distText = roundedDistanceText(info.aheadM, units)
+    val directionText =
+        info.relativeDeg?.let { deg ->
+            when (mode) {
+                BearingDisplayMode.CLOCK -> BearingComputer.toClock(deg)
+                BearingDisplayMode.RELATIVE, BearingDisplayMode.TRUE_NORTH -> BearingComputer.toRelative(deg)
+            }
+        }
+    return if (directionText != null) "$distText, $directionText, ${info.name}" else "$distText, ${info.name}"
+}
+
+/** "380 ft, about 180 recorded points" for the "Recording" row ([RecordingRows]). */
+private fun recordingRowValue(
+    distanceM: Double,
+    pointCount: Int,
+    units: Units,
+): String {
+    val distText = roundedDistanceText(distanceM, units)
+    val roundedCount = (pointCount / 10.0).roundToInt() * 10
+    return "$distText, about $roundedCount recorded points"
 }
 
 @Composable

@@ -137,4 +137,48 @@ class CompletionFromMatchTest {
 
         assertFalse(c.completionEvidence().completesTheTrail, "completed halfway along the trail")
     }
+
+    @Test
+    fun matchConfidentlyElsewhere_isTrueFarFromTheEnd() {
+        // The veto TrailFollower's radial ("0b") route reads: a confident match halfway along a
+        // 200 m trail is nowhere near either end, so raw GPS proximity to the endpoint's
+        // coordinates elsewhere on a self-intersecting route must not be trusted (review finding,
+        // PR #144).
+        val c = coordinator()
+        val points = densify(northShape(200.0), spacingM = 5.0)
+        c.startFollow(points, TravelDirection.Forward)
+
+        walk(c, lengthM = 200.0, toM = 100.0)
+
+        assertTrue(c.completionEvidence().matchConfidentlyElsewhere, "100 m along a 200 m trail is confidently not the end")
+    }
+
+    @Test
+    fun matchConfidentlyElsewhere_isFalseNearTheEnd() {
+        // Genuinely approaching the end must not veto 0b -- this is the ordinary case the radial
+        // route exists to serve.
+        val c = coordinator()
+        val points = densify(northShape(200.0), spacingM = 5.0)
+        c.startFollow(points, TravelDirection.Forward)
+
+        walk(c, lengthM = 200.0, toM = 198.0)
+
+        assertFalse(c.completionEvidence().matchConfidentlyElsewhere, "within the completion ceiling of the end")
+    }
+
+    @Test
+    fun matchConfidentlyElsewhere_isFalseWithoutAConfirmedMatch() {
+        // No confirmed match means no confident claim to veto with -- 0b's existing radial-only
+        // behaviour is the best available answer for a genuinely poor-confidence fix at the
+        // terminus, which is the scenario 0b was built for.
+        val c = coordinator()
+        val points = densify(northShape(200.0), spacingM = 5.0)
+        c.startFollow(points, TravelDirection.Forward)
+        walk(c, lengthM = 200.0, toM = 100.0)
+
+        // A fix well off the trail: the match cannot confirm a position from it.
+        c.onFix(sampleAt(northM = 100.0, eastM = 120.0, timestampMs = 300_000L, accuracyM = 5.0, speedMps = 1.4))
+
+        assertFalse(c.completionEvidence().matchConfidentlyElsewhere, "an unconfirmed fix has no confident position to veto with")
+    }
 }

@@ -180,6 +180,34 @@ class ProgressTrackerLadderTest {
     }
 
     @Test
+    fun aReacquisitionClosesOutTheRunItInterrupts_priorTravelDoesNotBridgeTheJump() {
+        // Review finding, PR #144/#145: genuine travel *before* a reacquisition must not keep
+        // extending the range once the reacquisition has happened. Walk 180 to 200 (20 m real, the
+        // same magnitude travelledM_accumulatesOnlyConfirmedMovement already proves confirms
+        // cleanly at the default speed/accuracy tuning), then reacquire elsewhere and walk on from
+        // 500 -- travelledM must read the pre-jump 20 m plus only the post-jump steps, never a
+        // session-wide span computed straight across the reacquisition as though the 300 m jump
+        // itself were travel.
+        val tracker = ProgressTracker(straightTrail())
+        tracker.onFix(sampleAt(180.0, eastM = 0.0, timestampMs = 0))
+        val walked = tracker.onFix(sampleAt(200.0, eastM = 0.0, timestampMs = 5_000))
+        assertEquals(20.0, walked.travelledM, 2.0, "precondition: 20 m of genuine pre-jump travel")
+
+        repeat(120) { tracker.onFix(sampleAt(200.0, eastM = 90.0, timestampMs = 5_000 + (it + 1) * 1_000L, speedMps = 0.0)) }
+        tracker.onFix(sampleAt(500.0, eastM = 0.0, timestampMs = 200_000L, speedMps = 5.0))
+
+        var last: TrailMatch? = null
+        for (i in 1..10) {
+            last = tracker.onFix(sampleAt(500.0 + i * 5.0, eastM = 0.0, timestampMs = 200_000L + i * 1_000L, speedMps = 5.0))
+            if (last.state == MatchState.Matched) break
+        }
+
+        val travelledM = assertNotNull(last).travelledM
+        assertTrue(travelledM < 70.0, "the pre-jump 20 m plus a few metres post-jump, never a span across the 300 m jump: $travelledM")
+        assertTrue(travelledM >= 20.0, "the genuine pre-jump 20 m must still be banked, not lost: $travelledM")
+    }
+
+    @Test
     fun failedCorroboration_returnsToLostWithoutRescanning() {
         val tracker = trackerAt200(speedMps = 0.0)
         repeat(120) { tracker.onFix(sampleAt(200.0, eastM = 90.0, timestampMs = (it + 1) * 1_000L, speedMps = 0.0)) }

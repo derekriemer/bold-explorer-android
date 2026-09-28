@@ -228,7 +228,22 @@ class TrailGuidanceCoordinator(
                     TravelDirection.Reverse -> position.alongTrackM <= END_EPSILON_M
                 }
 
-        return CompletionEvidence(pastTheEnd = pastTheEnd, travelled = travelled)
+        // A weaker, more available cousin of pastTheEnd for TrailFollower's radial ("0b") route to
+        // veto itself with — any confirmed along-track position, not specifically an
+        // EndpointClamped one, so it still applies to a fix pastTheEnd itself would decline to
+        // judge. Review finding, PR #144: raw GPS proximity to the endpoint's coordinates alone
+        // cannot tell "genuinely arriving" apart from a self-intersecting route's earlier pass
+        // sitting physically near those same coordinates.
+        val endAlongM =
+            when (followSession.direction) {
+                TravelDirection.Forward -> totalLengthM
+                TravelDirection.Reverse -> 0.0
+            }
+        val matchConfidentlyElsewhere =
+            match.state == MatchState.Matched &&
+                match.confirmedAlongM?.let { abs(it - endAlongM) > NavigationPolicy.COMPLETION_CEILING_M } == true
+
+        return CompletionEvidence(pastTheEnd = pastTheEnd, travelled = travelled, matchConfidentlyElsewhere = matchConfidentlyElsewhere)
     }
 
     /** Recompute and publish guidance for [sample] against [followState]; returns the new value. */
@@ -259,6 +274,10 @@ class TrailGuidanceCoordinator(
                 session?.polyline,
                 steerableAlongM,
                 followDirection,
+                // Distance survives Lost the same way confirmedAlongM itself does elsewhere in this
+                // app (#67's "last confirmed" hedge) — unconditional on match state, unlike
+                // steerableAlongM above.
+                confirmedAlongM = match?.confirmedAlongM,
             )
         _guidance.value = guidance
         return guidance
@@ -311,6 +330,10 @@ class TrailGuidanceCoordinator(
     ): OrdinaryGuidanceDecision? {
         if (followState !is TrailFollowerState.Active) return null
         val relative = guidance?.relativeDeg ?: return null
+        // Both come from the same confirmed alongTrackM (TrailGuidance.compute) and are null
+        // together — this is defence in depth against that invariant drifting, not a case expected
+        // to trip on its own.
+        val distanceM = guidance.distanceToTargetM ?: return null
         if (!TrailGuidance.isMajorCorrection(relative)) return null
         // Null means nothing has been spoken this session, so no throttle applies — the first
         // qualifying fix may always speak. See the field comment on the property for why this is a
@@ -329,7 +352,7 @@ class TrailGuidanceCoordinator(
         lastOrdinaryGuidanceAtMs = sample.timestamp
         lastOrdinaryGuidanceLocation = current
         return OrdinaryGuidanceDecision(
-            distanceToTargetM = guidance.distanceToTargetM,
+            distanceToTargetM = distanceM,
             relativeDeg = relative,
         )
     }

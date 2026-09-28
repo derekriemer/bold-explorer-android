@@ -58,6 +58,16 @@ class TrailRecordingMachineTest {
     }
 
     @Test
+    fun addPoint_accumulatesDistance() {
+        val m = TrailRecordingMachine()
+        m.selectTrail(5, hasPoints = false)
+        m.startRecording()
+        m.addPoint(4.0)
+        m.addPoint(6.5)
+        assertEquals(TrailRecordingState.Recording(5, 2, 10.5), m.state.value)
+    }
+
+    @Test
     fun stop_fromRecording_toSelectedWithPoints() {
         val m = TrailRecordingMachine()
         m.selectTrail(6, hasPoints = false)

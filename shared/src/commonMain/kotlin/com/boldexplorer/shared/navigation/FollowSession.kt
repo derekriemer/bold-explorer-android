@@ -76,17 +76,8 @@ class FollowSession(
         return match
     }
 
-    /**
-     * Trail remaining ahead of [alongTrackM], toward the end being walked to.
-     *
-     * Direction-signed, so it counts down to the start on a reverse follow. Clamped at zero because
-     * overshooting the end is arrival, not negative progress.
-     */
-    fun remainingM(alongTrackM: Double): Double =
-        when (direction) {
-            TravelDirection.Forward -> polyline.totalLengthM - alongTrackM
-            TravelDirection.Reverse -> alongTrackM
-        }.coerceAtLeast(0.0)
+    /** Trail remaining ahead of [alongTrackM], toward the end being walked to. See [TrailPolyline.remainingM]. */
+    fun remainingM(alongTrackM: Double): Double = polyline.remainingM(alongTrackM, direction)
 }
 
 /**
