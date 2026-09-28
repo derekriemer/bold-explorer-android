@@ -17,6 +17,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
@@ -24,6 +25,11 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
+
+// How long to keep frequent mode's focus lease/track alive after activity says it's over, in case
+// it resumes shortly (e.g. an alignment session toggled off and back on) — see the debounce() call
+// in start() for why this exists.
+private const val FREQUENT_MODE_EXIT_GRACE_MS = 5_000L
 
 /**
  * Bridges [AudioCueScheduler] (pure scheduling) to Android playback.
@@ -105,8 +111,18 @@ class AudioCuePlayer
             // but without this the focus lease and AudioEngine's silence filler would otherwise keep
             // running past that point). distinctUntilChanged() preserves the fires-only-on-change
             // guarantee combine() alone doesn't give.
+            //
+            // debounce() delays only the *exit* edge (re-entry is immediate, 0ms): leaving frequent
+            // mode releases the focus lease and lets AudioEngine's silence filler stop, which pauses
+            // the session-scoped track — the next re-entry then pays a fresh warmUpUntilActive() cost
+            // (400ms-2.3s field-observed on the flaky #114 device) before its first real tone. Most
+            // real alignment use is "toggle on, glance, toggle off, toggle back on a few seconds
+            // later," so a brief grace window before actually exiting avoids re-paying that warm-up
+            // on every glance, at the cost of holding the lease/track a little longer than strictly
+            // necessary when the user is actually done.
             combine(frequentCuesActive, beaconCuesEnabled) { active, enabled -> active && enabled }
                 .distinctUntilChanged()
+                .debounce { active -> if (active) 0L else FREQUENT_MODE_EXIT_GRACE_MS }
                 .onEach { audioFocusController.setFrequentMode(it) }
                 .launchIn(scope)
 
