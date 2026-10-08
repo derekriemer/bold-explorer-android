@@ -48,7 +48,8 @@ data class ShadowMatchSnapshot(
 class ShadowMatchMonitor
     @Inject
     constructor() {
-        private val _enabled = MutableStateFlow(true)
+        // Detailed field capture is opt-in; the trail matcher itself still runs.
+        private val _enabled = MutableStateFlow(false)
 
         /** Whether per-fix `TRAIL_MATCH` records are written. The matcher itself always runs. */
         val enabled: StateFlow<Boolean> = _enabled.asStateFlow()

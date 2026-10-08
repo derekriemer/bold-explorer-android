@@ -17,6 +17,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
+import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -64,9 +65,12 @@ class AudioEventLog
             scope.launch {
                 fileMutex.withLock {
                     if (logFile.exists()) {
-                        val lines = logFile.readLines()
-                        val parsed = lines.mapNotNull { parseLine(it) }.reversed() // newest-first
-                        _entries.value = parsed.take(MAX_IN_MEMORY_ENTRIES)
+                        // The disk log can be larger than the app heap. Bound retention while
+                        // reading, rather than materializing every line before taking the tail.
+                        _entries.value =
+                            logFile.useLines { lines ->
+                                AudioLogCodec.restoreRecent(lines, MAX_IN_MEMORY_ENTRIES)
+                            }
                     }
                 }
                 append(buildInfoEntry(trigger = "process_start"))
@@ -131,8 +135,6 @@ class AudioEventLog
             runCatching {
                 val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
                 val filename = "bold_explorer_audio_log_$timestamp.jsonl"
-                val body = fileMutex.withLock { if (logFile.exists()) logFile.readText() else "" }
-                val contents = body
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     val values =
@@ -145,7 +147,7 @@ class AudioEventLog
                     val uri =
                         resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                             ?: error("Could not create file in Downloads")
-                    resolver.openOutputStream(uri)!!.use { it.write(contents.toByteArray()) }
+                    resolver.openOutputStream(uri)!!.use { copyLogTo(it) }
                     values.clear()
                     values.put(MediaStore.Downloads.IS_PENDING, 0)
                     resolver.update(uri, values, null, null)
@@ -153,11 +155,18 @@ class AudioEventLog
                     @Suppress("DEPRECATION")
                     val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
                     dir.mkdirs()
-                    File(dir, filename).writeText(contents)
+                    File(dir, filename).outputStream().use { copyLogTo(it) }
                 }
 
-                "Exported ${_entries.value.size} entries → Downloads/$filename"
+                "Exported log → Downloads/$filename"
             }
+
+        /** Export a consistent file snapshot without loading its contents into the app heap. */
+        private suspend fun copyLogTo(output: OutputStream) {
+            fileMutex.withLock {
+                if (logFile.exists()) logFile.inputStream().use { it.copyTo(output) }
+            }
+        }
 
         // ── Serialization ─────────────────────────────────────────────────────────
         //
@@ -166,8 +175,6 @@ class AudioEventLog
         // after a restart than the file actually held.
 
         private fun formatLine(e: AudioLogEntry): String = AudioLogCodec.format(e)
-
-        private fun parseLine(line: String): AudioLogEntry? = AudioLogCodec.parse(line)
     }
 
 /**
