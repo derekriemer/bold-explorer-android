@@ -14,9 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -25,7 +23,6 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -38,7 +35,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
@@ -51,8 +47,8 @@ import com.boldexplorer.shared.geo.LatLng
 import com.boldexplorer.shared.geo.haversineDistanceMeters
 import com.boldexplorer.shared.model.LocationSample
 import com.boldexplorer.shared.model.Trail
-import com.boldexplorer.shared.navigation.Bend
 import com.boldexplorer.shared.navigation.BearingComputer
+import com.boldexplorer.shared.navigation.Bend
 import com.boldexplorer.shared.navigation.CollectionExplorerState
 import com.boldexplorer.shared.navigation.CollectionPoint
 import com.boldexplorer.shared.navigation.DirectionDescriptor
@@ -61,7 +57,6 @@ import com.boldexplorer.shared.navigation.MatchState
 import com.boldexplorer.shared.navigation.NavMode
 import com.boldexplorer.shared.navigation.NavigationPolicy
 import com.boldexplorer.shared.navigation.TrailEndAction
-import com.boldexplorer.shared.navigation.TrailFollowerState
 import com.boldexplorer.shared.navigation.TrailRecordingState
 import com.boldexplorer.shared.navigation.TurnSeverity
 import com.boldexplorer.shared.navigation.label
@@ -70,6 +65,8 @@ import com.boldexplorer.shared.settings.BearingDisplayMode
 import com.boldexplorer.shared.settings.Units
 import com.boldexplorer.ui.common.CollectionDropdown
 import com.boldexplorer.ui.common.CreateItemDialog
+import com.boldexplorer.ui.common.LabeledSwitchRow
+import com.boldexplorer.ui.common.LabeledValueRow
 import kotlin.math.roundToInt
 
 @Composable
@@ -312,18 +309,11 @@ private fun HudControlsRow(
                 .padding(horizontal = 16.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier =
-                Modifier.toggleable(
-                    value = state.settings.absoluteSilenceEnabled,
-                    onValueChange = { onAction(GpsAction.SetAbsoluteSilence(it)) },
-                    role = Role.Switch,
-                ),
-        ) {
-            Text("Silence Mode")
-            Switch(checked = state.settings.absoluteSilenceEnabled, onCheckedChange = null)
-        }
+        LabeledSwitchRow(
+            label = "Silence Mode",
+            checked = state.settings.absoluteSilenceEnabled,
+            onCheckedChange = { onAction(GpsAction.SetAbsoluteSilence(it)) },
+        )
         Button(
             onClick = {
                 if (state.navigationActive) {
@@ -653,18 +643,11 @@ private fun CollectionTargetList(
                     .padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier =
-                    Modifier.toggleable(
-                        value = active.autoAdvance,
-                        onValueChange = { onAction(GpsAction.SetCollectionAutoAdvance(it)) },
-                        role = Role.Switch,
-                    ),
-            ) {
-                Text("Auto-advance")
-                Switch(checked = active.autoAdvance, onCheckedChange = null)
-            }
+            LabeledSwitchRow(
+                label = "Auto-advance",
+                checked = active.autoAdvance,
+                onCheckedChange = { onAction(GpsAction.SetCollectionAutoAdvance(it)) },
+            )
             TextButton(
                 onClick = { showAllPoints = true },
                 enabled = active.points.size > VISIBLE_POINT_COUNT,
@@ -708,7 +691,7 @@ private fun CollectionTargetList(
 /**
  * One chip in the horizontal quick-access row (#17). Uses [FilterChip]'s native `selected` state
  * for "current target" (TalkBack announces selected/not-selected for free, same reasoning as
- * `Modifier.toggleable`/`Switch` elsewhere in this file — see AGENTS.md's contentDescription
+ * the labeled toggle helpers elsewhere in this file — see AGENTS.md's contentDescription
  * guidance). "Visited" isn't a native chip concept, so it's folded into the visible label text
  * instead, consistent with [PointTargetRow]'s "visible text carries the same state" convention.
  */

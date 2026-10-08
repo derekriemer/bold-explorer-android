@@ -30,9 +30,15 @@ The visible UI and audio interface must work together for a blind user.
   its children.
 - For repeated ambiguous controls, use only the visible label plus the minimum
   disambiguator (for example, `"Delete $name"`).
-- Let native semantics announce selected/checked state. When a separate label
-  and `Switch`/`Checkbox` need one node, wrap them in `toggleable` or
-  `selectable` and make the child control passive (`onCheckedChange = null`).
+- Use `LabeledValueRow` for changing telemetry labels and values: a single Text
+  node supplies the complete current reading without merging sibling texts.
+- Use `LabeledSwitchRow` and `LabeledCheckboxRow` for labeled toggles. Their
+  actionable row owns the accessible label; visual children have redundant
+  semantics cleared, so their parent explicitly supplies `contentDescription`.
+  Keep native `toggleable` role, checked state and action,
+  and keep child controls passive (`onCheckedChange = null`). Do not include
+  manual on/off or checked/unchecked words in the label.
+- Let native semantics announce selected state for selectable controls.
 - Every necessary `contentDescription` needs an adjacent
   `// a11y: <reason>` comment explaining information that visible text and
   native semantics cannot convey. The custom detekt rule enforces this.

@@ -3,32 +3,27 @@ package com.boldexplorer.ui.settings
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.boldexplorer.shared.settings.BearingDisplayMode
 import com.boldexplorer.shared.settings.CompassMode
 import com.boldexplorer.shared.settings.Units
+import com.boldexplorer.ui.common.LabeledSwitchRow
 
 @Composable
 fun SettingsScreen(
@@ -134,7 +129,7 @@ fun SettingsScreen(
             // the label + native on/off state don't convey on their own.
             description =
                 if (settings.absoluteSilenceEnabled) {
-                    "Silence mode, on. No automatic speech, earcons, or announcements until turned off. Explicit requests like Read alignment now still respond."
+                    "No automatic speech, earcons, or announcements until turned off. Explicit requests like Read alignment now still respond."
                 } else {
                     null
                 },
@@ -149,7 +144,7 @@ fun SettingsScreen(
             onCheckedChange = { viewModel.setCompassMode(if (it) CompassMode.TRUE else CompassMode.MAGNETIC) },
             // a11y: explains what "off" actually does (falls back to magnetic north), which the
             // label + native on/off state don't convey.
-            description = if (settings.compassMode == CompassMode.TRUE) null else "Use true north, off, using magnetic north",
+            description = if (settings.compassMode == CompassMode.TRUE) null else "Using magnetic north",
         )
 
         HorizontalDivider()
@@ -198,29 +193,11 @@ private fun SwitchRow(
     onCheckedChange: (Boolean) -> Unit,
     description: String? = null,
 ) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-                .toggleable(
-                    value = checked,
-                    onValueChange = onCheckedChange,
-                    role = Role.Switch,
-                )
-                .then(
-                    if (description != null) {
-                        // a11y: only pass description when the default (native switch state +
-                        // merged label) needs a supplementary explanation — see call site.
-                        Modifier.semantics { contentDescription = description }
-                    } else {
-                        Modifier
-                    },
-                ),
-    ) {
-        Text(label, modifier = Modifier.weight(1f))
-        Spacer(Modifier.width(8.dp))
-        Switch(checked = checked, onCheckedChange = null)
-    }
+    LabeledSwitchRow(
+        label = label,
+        checked = checked,
+        onCheckedChange = onCheckedChange,
+        supportingText = description,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+    )
 }

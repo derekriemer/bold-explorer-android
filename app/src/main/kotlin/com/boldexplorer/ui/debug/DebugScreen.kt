@@ -18,7 +18,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -44,10 +43,12 @@ import com.boldexplorer.audio.spanButtonLabel
 import com.boldexplorer.audio.spanElapsedText
 import com.boldexplorer.location.RawFixEvent
 import com.boldexplorer.shared.location.detailAt
-import kotlinx.coroutines.delay
+import com.boldexplorer.ui.common.LabeledSwitchRow
+import com.boldexplorer.ui.common.LabeledValueRow
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.delay
 
 @Composable
 fun DebugScreen(
@@ -161,32 +162,13 @@ fun DebugScreen(
                 RawFixRow(lastRawFix, nowMs)
 
                 Spacer(Modifier.height(8.dp))
-                Row(
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .semantics(mergeDescendants = true) {
-                                // a11y: explains the tradeoff (sensor fusion vs. raw GNSS) that isn't
-                                // conveyed by the visible labels alone.
-                                contentDescription =
-                                    "Raw GNSS provider ${if (useGnss) "on" else "off"}: bypasses sensor fusion for better outdoor accuracy"
-                            },
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Raw GNSS", style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            if (useGnss) "GPS chip direct · better outdoors" else "Fused · better indoors / cold-start",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(
-                        checked = useGnss,
-                        onCheckedChange = { viewModel.setUseGnss(it) },
-                    )
-                }
+                LabeledSwitchRow(
+                    label = "Raw GNSS",
+                    checked = useGnss,
+                    onCheckedChange = viewModel::setUseGnss,
+                    supportingText = if (useGnss) "GPS chip direct · better outdoors" else "Fused · better indoors / cold-start",
+                    modifier = Modifier.fillMaxWidth(),
+                )
 
                 Spacer(Modifier.height(8.dp))
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
@@ -249,26 +231,13 @@ fun DebugScreen(
                 // Debug diagnostic for #23: keeps buzzing on whichever screen is open (unlike
                 // reading this Debug screen, which was itself suspected of masking the freeze by
                 // forcing a recomposition when you switch to it and back).
-                Row(
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .semantics(mergeDescendants = true) {
-                                // a11y: explains the buzz pattern, which the visible label + switch
-                                // alone don't convey.
-                                contentDescription =
-                                    "Accuracy haptics ${if (accuracyHapticsEnabled) "on" else "off"}: " +
-                                    "every 5 seconds, one buzz if fixes were accepted, three quick " +
-                                    "buzzes if any were discarded"
-                            },
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text("Accuracy haptics", style = MaterialTheme.typography.bodyMedium)
-                    Switch(
-                        checked = accuracyHapticsEnabled,
-                        onCheckedChange = { viewModel.setAccuracyHapticsEnabled(it) },
-                    )
-                }
+                LabeledSwitchRow(
+                    label = "Accuracy haptics",
+                    checked = accuracyHapticsEnabled,
+                    onCheckedChange = viewModel::setAccuracyHapticsEnabled,
+                    supportingText = "Every 5 seconds, one buzz if fixes were accepted, three quick buzzes if any were discarded.",
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
         }
 
@@ -280,16 +249,12 @@ fun DebugScreen(
         // wrong-way detection reads it.
         Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Row(
+                LabeledSwitchRow(
+                    label = "Trail match logging",
+                    checked = shadowMatchEnabled,
+                    onCheckedChange = viewModel::setShadowMatchEnabled,
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text("Trail match logging", style = MaterialTheme.typography.titleSmall)
-                    Switch(
-                        checked = shadowMatchEnabled,
-                        onCheckedChange = { viewModel.setShadowMatchEnabled(it) },
-                    )
-                }
+                )
                 // Stated as visible text rather than a contentDescription so it reaches everyone,
                 // and because the switch's own state is already announced natively.
                 Text(
