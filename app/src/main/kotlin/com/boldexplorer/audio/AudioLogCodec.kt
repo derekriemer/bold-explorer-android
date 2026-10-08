@@ -71,6 +71,21 @@ object AudioLogCodec {
         }.getOrNull()
     }
 
+    /** Restore only the most recent readable entries, newest-first, from an oldest-first log. */
+    fun restoreRecent(
+        lines: Sequence<String>,
+        maxEntries: Int,
+    ): List<AudioLogEntry> {
+        require(maxEntries > 0)
+        val recent = ArrayDeque<AudioLogEntry>()
+        lines.forEach { line ->
+            val entry = parse(line) ?: return@forEach
+            if (recent.size == maxEntries) recent.removeFirst()
+            recent.addLast(entry)
+        }
+        return recent.reversed()
+    }
+
     private fun extrasFrom(json: JSONObject): Map<String, Any?> {
         json.optJSONObject(KEY_EXTRA)?.let { nested ->
             return nested.keys().asSequence().associateWith { normalize(nested.get(it)) }
