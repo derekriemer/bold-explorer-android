@@ -611,25 +611,11 @@ private fun RawFixRow(
         } else {
             "$ageText, DISCARDED (accuracy $accuracyText), ${fix.consecutiveDiscards} in a row"
         }
-    Row(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .padding(vertical = 2.dp)
-                .semantics(mergeDescendants = true) {},
-    ) {
-        Text(
-            "Last GPS fix:",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
-        )
-        Text(
-            statusText,
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (fix.accepted) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
-        )
-    }
+    LabeledValueRow(
+        label = "Last GPS fix",
+        value = statusText,
+        valueColor = if (fix.accepted) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
+    )
 }
 
 @Composable
@@ -637,19 +623,5 @@ private fun DebugRow(
     label: String,
     value: String,
 ) {
-    Row(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .padding(vertical = 2.dp)
-                .semantics(mergeDescendants = true) {},
-    ) {
-        Text(
-            "$label:",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
-        )
-        Text(value, style = MaterialTheme.typography.bodyMedium)
-    }
+    LabeledValueRow(label = label, value = value)
 }

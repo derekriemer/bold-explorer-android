@@ -1111,21 +1111,5 @@ private fun TelemetryRow(
     value: String,
     customActions: List<CustomAccessibilityAction> = emptyList(),
 ) {
-    Row(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .padding(vertical = 2.dp)
-                .semantics(mergeDescendants = true) {
-                    if (customActions.isNotEmpty()) this.customActions = customActions
-                },
-    ) {
-        Text(
-            "$label:",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.width(110.dp),
-        )
-        Text(value, style = MaterialTheme.typography.bodyMedium)
-    }
+    LabeledValueRow(label = label, value = value, customActions = customActions)
 }
